@@ -87,6 +87,7 @@
   <span class="sp"></span>
   <span id="hstatus" style="font-size:12px;color:var(--mute)"></span>
   <button id="runHarness" class="primary">Run harness now</button>
+  <a href="/logout" id="logout" style="font-size:12px;color:var(--mute);display:none">log out</a>
 </header>
 <main>
   <div id="outline"></div>
@@ -114,6 +115,7 @@ async function refresh() {
   TREE = tree; INBOX = inbox;
   if (!MODES.length) { MODES = await api('GET','/api/modes'); const mf = $('#modeFilter'); for (const m of MODES) { const o = el('option'); o.value = m; o.textContent = m; mf.appendChild(o); } }
   if (VIEW === 'batch') BYMODE = await api('GET', '/api/by-mode' + (FILTER === 'human' || FILTER === 'ai' ? `?assignee=${FILTER}` : ''));
+  $('#logout').style.display = hs.auth ? '' : 'none';
   $('#hstatus').textContent = `${hs.live ? 'Claude API' : 'mock LLM'} · last run ${hs.lastRun ? new Date(hs.lastRun).toLocaleTimeString() : 'never'}${hs.running ? ' · running…' : ''}`;
   renderOutline(); renderPanel();
 }

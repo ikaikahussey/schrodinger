@@ -330,3 +330,42 @@ test('calendar: subscribe, sync via harness, events query, agent tool, prep prop
     assert.equal(db.events().length, 2);
   } finally { server.close(); try { ics.close(); } catch {} }
 });
+
+test('auth: password gate blocks UI and API, allows login, logout, feed, and healthz', async () => {
+  const { db, path: dbPath } = tmpDb();
+  const { createAuth } = require('../server/auth');
+  const auth = createAuth({ password: 'open-sesame' });
+  const app = createApp(db, createHarness(db, { dbPath, inProcess: true }), { auth });
+  const server = await new Promise(res => { const s = app.listen(0, () => res(s)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = (m, u, { body, cookie, form } = {}) => new Promise((res, rej) => {
+    const req = http.request(base + u, { method: m, headers: { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json', ...(cookie ? { cookie } : {}) } }, r => {
+      let d = ''; r.on('data', c => d += c); r.on('end', () => res({ status: r.statusCode, headers: r.headers, body: d }));
+    });
+    req.on('error', rej); if (body) req.write(form ? body : JSON.stringify(body)); req.end();
+  });
+  try {
+    assert.equal((await call('GET', '/')).status, 302);
+    assert.equal((await call('GET', '/api/tree')).status, 401);
+    assert.equal((await call('GET', '/healthz')).status, 200);
+    assert.equal((await call('GET', '/logo.svg')).status, 200);
+    assert.equal((await call('POST', '/login', { body: 'password=wrong', form: true })).status, 401);
+    const ok = await call('POST', '/login', { body: 'password=open-sesame', form: true });
+    assert.equal(ok.status, 302);
+    const cookie = ok.headers['set-cookie'][0].split(';')[0];
+    assert.ok(cookie.startsWith('sid=') && ok.headers['set-cookie'][0].includes('HttpOnly'));
+    assert.equal((await call('GET', '/api/tree', { cookie })).status, 200);
+    assert.equal((await call('GET', '/', { cookie })).status, 200);
+    const tampered = cookie.slice(0, -2) + 'xx';
+    assert.equal((await call('GET', '/api/tree', { cookie: tampered })).status, 401);
+    const feedPath = `/calendar/${db.feedToken()}.ics`;
+    assert.equal((await call('GET', feedPath)).status, 200, 'feed reachable without login (token-gated)');
+    const lo = await call('GET', '/logout', { cookie });
+    assert.ok(lo.headers['set-cookie'][0].includes('Max-Age=0'));
+    // disabled auth = open
+    const open2 = createApp(db, createHarness(db, { dbPath, inProcess: true }), { auth: createAuth({ password: undefined }) });
+    const s2 = await new Promise(res => { const s = open2.listen(0, () => res(s)); });
+    const r2 = await new Promise((res, rej) => http.get(`http://127.0.0.1:${s2.address().port}/api/tree`, r => res(r.statusCode)).on('error', rej));
+    assert.equal(r2, 200); s2.close();
+  } finally { server.close(); }
+});

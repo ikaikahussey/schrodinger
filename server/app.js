@@ -2,10 +2,16 @@ const express = require('express');
 const path = require('node:path');
 const cal = require('./calendar');
 
-function createApp(db, harness) {
+const { createAuth } = require('./auth');
+
+function createApp(db, harness, { auth = createAuth() } = {}) {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: false }));
+  app.use(auth.middleware);
   app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.get('/healthz', (req, res) => res.json({ ok: true }));
 
   const wrap = fn => (req, res) => {
     try { const out = fn(req, res); if (out !== undefined) res.json(out); }
@@ -76,7 +82,7 @@ function createApp(db, harness) {
   app.get('/api/events', wrap(req => db.events({ from: req.query.from, to: req.query.to, project_id: req.query.project_id || null })));
 
   // Harness controls
-  app.get('/api/harness/status', wrap(() => ({ ...harness.status(), runs: db.runs() })));
+  app.get('/api/harness/status', wrap(() => ({ ...harness.status(), auth: auth.enabled, runs: db.runs() })));
   app.post('/api/harness/run', (req, res) => {
     harness.runOnce(req.body?.project_id || null)
       .then(r => res.json(r)).catch(e => res.status(500).json({ error: e.message }));

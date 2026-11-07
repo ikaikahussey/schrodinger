@@ -1,0 +1,31 @@
+# fly launch --copy-config --no-deploy && fly volumes create data --size 1 && fly secrets set APP_PASSWORD=... ANTHROPIC_API_KEY=... && fly deploy
+app = "schrodinger"
+primary_region = "lax"
+
+[build]
+
+[env]
+  PORT = "3000"
+  DB_PATH = "/data/schrodinger.db"
+  WORKSPACE_DIR = "/data/workspace"
+
+[[mounts]]
+  source = "data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false   # harness must keep running on schedule
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  method = "GET"
+  path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

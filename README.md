@@ -12,6 +12,17 @@ npm test
 
 Without `ANTHROPIC_API_KEY` the harness uses a deterministic mock LLM. Copy `.env.example` to `.env` (or export the variables) to use the Claude API. Node ≥ 22.13 (uses built-in `node:sqlite`).
 
+## Deploy
+
+Needs a host that runs a persistent Node process with a writable disk (SQLite + sub-agent child processes + scheduler). Serverless (Vercel/Netlify) does not fit. Set `APP_PASSWORD` before exposing it; a login page then gates the UI and API (the iCal feed stays token-gated).
+
+- **Fly.io**: `fly launch --copy-config --no-deploy` → `fly volumes create data --size 1` → `fly secrets set APP_PASSWORD=… ANTHROPIC_API_KEY=…` → `fly deploy`. Config in `fly.toml` (volume at `/data`, machine never auto-stops so the harness keeps its schedule).
+- **Render**: `render.yaml` blueprint (Docker, 1 GB disk at `/data`). Set the two secrets in the dashboard.
+- **Railway**: `railway.json`; add a volume mounted at `/data` and the two variables.
+- **Any Docker host**: `docker build -t schrodinger . && docker run -p 3000:3000 -v schrodinger-data:/data -e APP_PASSWORD=… -e ANTHROPIC_API_KEY=… schrodinger`.
+
+Health check: `GET /healthz`.
+
 ## Model
 
 - `nodes` table: projects (depth 0, with goal / success criteria / constraints / status) and tasks (nested arbitrarily, with assignee, state, due, deps, acceptance note, artifact).
