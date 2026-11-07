@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Schrodinger</title>
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="preconnect" href="https://rsms.me/"><link rel="stylesheet" href="https://rsms.me/inter/inter.css">
 <style>
   :root { --bg:#fafaf9; --fg:#1c1917; --mute:#78716c; --line:#e7e5e4; --ai:#dbeafe; --ai-fg:#1e40af; --me:#dcfce7; --me-fg:#166534; --warn:#fef3c7; --warn-fg:#92400e; --rev:#fae8ff; --rev-fg:#86198f; --card:#fff; }
   * { box-sizing: border-box; }
@@ -12,6 +13,7 @@
   header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:5; }
   header h1 { font-size:15px; margin:0 12px 0 0; font-weight:600; }
   header .sp { flex:1; }
+  body:not([data-theme=console]) #rail { display:none; }
   button { font:inherit; padding:4px 10px; border:1px solid var(--line); background:var(--card); border-radius:6px; cursor:pointer; }
   button:hover { background:#f5f5f4; }
   button.primary { background:var(--fg); color:#fff; border-color:var(--fg); }
@@ -68,6 +70,82 @@
   kbd { font:11px ui-monospace, monospace; background:#f5f5f4; border:1px solid var(--line); border-radius:4px; padding:0 4px; }
   #help { font-size:12px; color:var(--mute); margin-top:24px; }
   .badge { background:#ef4444; color:#fff; border-radius:999px; font-size:10px; padding:0 6px; margin-left:4px; }
+
+  /* ---------- Console theme (dark, warm rail segments, pill controls) ---------- */
+  body[data-theme=console] {
+    --bg:#000; --fg:#f4ede4; --mute:#b8a98f; --line:#2a2320; --card:#0d0b0a;
+    --c1:#f5a56b; --c2:#c9a2e6; --c3:#e8c48a; --c4:#8fb4e8; --c5:#f08a7a; --c6:#9ad0b8;
+    --ai:#1e3356; --ai-fg:#bcd6ff; --me:#1f3d2d; --me-fg:#b6e8c6; --warn:#4a3410; --warn-fg:#f5d08a; --rev:#3b2250; --rev-fg:#e3c4ff;
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; font-size:14.5px; letter-spacing:.005em;
+    background:var(--bg); color:var(--fg);
+  }
+  body[data-theme=console] header {
+    background:var(--bg); border-bottom:0; padding:0 16px 0 16px; gap:10px; height:50px;
+  }
+  body[data-theme=console] header::before {
+    content:''; width:94px; height:50px; background:var(--c1); border-radius:28px 0 0 0; margin-right:14px; flex:none; align-self:stretch;
+  }
+  body[data-theme=console] header::after {
+    content:''; position:absolute; left:110px; top:0; right:0; height:6px; background:var(--c1); border-radius:0 3px 3px 0;
+  }
+  body[data-theme=console] header img { filter: invert(1) hue-rotate(180deg) brightness(1.1); }
+  body[data-theme=console] header h1 { color:var(--c3); font-weight:600; letter-spacing:.06em; text-transform:uppercase; font-size:14px; }
+  body[data-theme=console] header .sp { height:14px; align-self:center; background:var(--c2); border-radius:7px; margin:0 8px; }
+  body[data-theme=console] button, body[data-theme=console] select, body[data-theme=console] input, body[data-theme=console] textarea {
+    background:#15110f; color:var(--fg); border:1px solid #3a302a; border-radius:999px; padding:5px 14px;
+  }
+  body[data-theme=console] textarea, body[data-theme=console] .detail input, body[data-theme=console] .detail select, body[data-theme=console] select[multiple] { border-radius:10px; }
+  body[data-theme=console] button:hover { background:#241d19; }
+  body[data-theme=console] button.primary { background:var(--c1); color:#000; border-color:var(--c1); font-weight:600; }
+  body[data-theme=console] button.primary:hover { background:#ffb987; }
+  body[data-theme=console] main { grid-template-columns: 110px 1fr 400px; }
+  body[data-theme=console] #rail { display:flex; flex-direction:column; gap:4px; padding:0 0 16px 16px; position:sticky; top:50px; height:calc(100vh - 50px); }
+  body[data-theme=console] #rail i { display:block; border-radius:0; min-height:28px; }
+  body[data-theme=console] #rail i:first-child { background:var(--c1); height:70px; border-radius:0 0 0 36px; margin-top:-1px; }
+  body[data-theme=console] #rail i[data-go] { cursor:pointer; }
+  body[data-theme=console] #rail i[data-go]:hover { filter:brightness(1.12); }
+  body[data-theme=console] #rail i:nth-child(2) { background:var(--c3); height:48px; }
+  body[data-theme=console] #rail i:nth-child(3) { background:var(--c2); flex:1; }
+  body[data-theme=console] #rail i:nth-child(4) { background:var(--c4); height:36px; }
+  body[data-theme=console] #rail i:nth-child(5) { background:var(--c5); height:60px; border-radius:36px 0 0 0; }
+  body[data-theme=console] #rail i span { display:block; color:#000; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:6px 6px 0 0; text-align:right; }
+  body[data-theme=console] #outline { padding:16px 24px 16px 16px; }
+  body[data-theme=console] aside { background:var(--bg); border-left:0; padding:16px 16px 16px 8px; }
+  body[data-theme=console] aside h2 { color:var(--c3); letter-spacing:.1em; }
+  body[data-theme=console] .project-block { border-left:6px solid var(--c3); padding-left:12px; border-radius:6px 0 0 6px; }
+  body[data-theme=console] .project-block:nth-child(2n) { border-left-color:var(--c2); }
+  body[data-theme=console] .project-block:nth-child(3n) { border-left-color:var(--c4); }
+  body[data-theme=console] .project > .title { color:var(--c3); text-transform:uppercase; letter-spacing:.06em; font-size:14px; }
+  body[data-theme=console] .row:hover { background:#17120f; }
+  body[data-theme=console] .row.sel { background:#1c1a2b; }
+  body[data-theme=console] .title:focus { background:#15110f; box-shadow:0 0 0 1px var(--c2); }
+  body[data-theme=console] .title.done { color:#6e6257; }
+  body[data-theme=console] .kids { border-left-color:#2a2320; }
+  body[data-theme=console] .bar { background:#1f1a17; }
+  body[data-theme=console] .bar i { background:var(--c1); }
+  body[data-theme=console] .meta .goal { color:#d9cdbc; }
+  body[data-theme=console] .chip { font-weight:600; letter-spacing:.03em; }
+  body[data-theme=console] .chip.mode { background:#3d2a10; color:#f5c98a; border-color:#5c4120; }
+  body[data-theme=console] .chip.unassigned, body[data-theme=console] .chip.st-todo, body[data-theme=console] .chip.st-done { background:#1d1917; color:var(--mute); }
+  body[data-theme=console] .chip.st-in_progress { background:#102a3a; color:#9cd3f5; }
+  body[data-theme=console] .card { background:var(--card); border:1px solid #2a2320; border-radius:14px; border-left:8px solid var(--c2); }
+  body[data-theme=console] .card .t { color:var(--c3); }
+  body[data-theme=console] .card pre, body[data-theme=console] .detail pre { background:#15110f; color:#e6dccd; }
+  body[data-theme=console] .log b { color:var(--c3); }
+  body[data-theme=console] .batch h3 { color:var(--c1); text-transform:uppercase; letter-spacing:.08em; }
+  body[data-theme=console] .batch h3 small { color:var(--mute); }
+  body[data-theme=console] .add { color:var(--mute); }
+  body[data-theme=console] .add:hover { color:var(--c1); }
+  body[data-theme=console] .pstatus { background:var(--warn); color:var(--warn-fg); }
+  body[data-theme=console] kbd { background:#15110f; border-color:#3a302a; color:var(--fg); }
+  body[data-theme=console] .due.over { color:var(--c5); }
+  body[data-theme=console] .drop-before { box-shadow: inset 0 2px 0 var(--c1); } body[data-theme=console] .drop-into { box-shadow: inset 0 0 0 2px var(--c1); }
+  body[data-theme=console] .badge { background:var(--c5); color:#000; }
+  body[data-theme=console] .tw { color:var(--c3); }
+  body[data-theme=console] .drag { color:#3a302a; }
+  body[data-theme=console] input[type=checkbox] { accent-color: var(--c1); }
+  body[data-theme=console] a { color:var(--c4); }
+  @media (max-width: 1100px) { body[data-theme=console] main { grid-template-columns: 1fr 380px; } body[data-theme=console] #rail { display:none; } }
 </style>
 </head>
 <body>
@@ -86,10 +164,12 @@
   <button id="newProject">+ Project</button>
   <span class="sp"></span>
   <span id="hstatus" style="font-size:12px;color:var(--mute)"></span>
+  <button id="theme" title="Toggle theme">Theme</button>
   <button id="runHarness" class="primary">Run harness now</button>
   <a href="/logout" id="logout" style="font-size:12px;color:var(--mute);display:none">log out</a>
 </header>
 <main>
+  <div id="rail"><i data-go="outline"><span>Projects</span></i><i data-go="batch"><span>Tasks</span></i><i></i><i data-go="agents"><span>Agents</span></i><i></i></div>
   <div id="outline"></div>
   <aside>
     <div id="panel"></div>
@@ -447,6 +527,15 @@ function renderBatch(root) {
   }
   root.appendChild(wrap);
 }
+
+// ---------- Theme ----------
+(function(){ let t = 'console'; try { t = localStorage.getItem('theme') || 'console'; } catch {} document.body.dataset.theme = t; })();
+document.querySelectorAll('#rail i[data-go]').forEach(i => i.onclick = () => {
+  const go = i.dataset.go;
+  if (go === 'agents') { PANEL = 'activity'; renderPanel(); return; }
+  if (VIEW !== go) { VIEW = go; $('#viewToggle').textContent = VIEW === 'outline' ? 'Batch by mode' : 'Outline'; refresh(); }
+});
+$('#theme').onclick = () => { const t = document.body.dataset.theme === 'console' ? 'light' : 'console'; document.body.dataset.theme = t; try { localStorage.setItem('theme', t); } catch {} };
 
 // ---------- Header ----------
 $('#modeFilter').onchange = e => { MODE = e.target.value; renderOutline(); };

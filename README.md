@@ -59,6 +59,10 @@ Paused or archived projects are skipped. Every AI action is logged in `activity`
 - Filters: Mine / AI's / Needs review / Blocked / Due this week, plus a mode filter.
 - Modes: `call`, `errand`, `email`, `write`, `research`, `meeting`, `admin`, `other`. Set via `#call` etc. in a title, the mode chip, or the Selected panel. **Batch by mode** flattens open leaf tasks across all active projects into mode groups (sorted by due date) so similar work can be done in one sitting; checkboxes work there too.
 
+## Themes
+
+Default is the dark console theme: black background, warm pastel rail segments with rounded elbows, pill controls, and a readable normal-width sans (Inter, system fallback) rather than condensed caps. A light theme is available via the Theme button; the choice persists in the browser. Rail segments act as shortcuts (Projects → outline, Tasks → batch view, Agents → activity).
+
 ## Layout
 
 ```
