@@ -75,6 +75,21 @@ Each sub-agent runs an agentic loop (`harness/llm.js`, up to `AGENT_MAX_TURNS`) 
 
 There is no tool that sends, posts, commits, or contacts anyone. Without an API key a scripted mock model drives the same loop.
 
+## Calendar hooks
+
+Outbound
+- `GET /calendar/<token>.ics` — subscribe URL (Google / Apple / Outlook). Tasks with due dates appear as all-day events, marked `(AI)` or `✓` as they change. Token shown in the Calendar tab; rotate it there.
+- `GET /api/nodes/:id.ics` — single-task "Add to calendar" file.
+
+Inbound
+- `POST /api/calendars {name, kind:'ics', url, project_id?}` — subscribe to any ICS/webcal feed (Google: calendar settings → *Secret address in iCal format*). Synced before every harness run and via `POST /api/calendars/:id/sync`. Events cached in `events`; a failing fetch keeps the last good cache and records `last_error`.
+- `GET /api/events?from&to&project_id` — merged agenda.
+- Project-linked calendars: upcoming events with no related task produce a `new_task` proposal ("Prepare for: …", mode `meeting`, due on the event date). Global calendars are visible to agents and digests but never spawn tasks.
+- Sub-agent tool `calendar_events(from, to)`.
+- Digest gets a "Today's calendar" section.
+
+Providers live in `server/calendar.js` (`providers.ics` implemented; `google` and `caldav` are stubs with the same `fetchEvents(calendar)` interface for OAuth adapters).
+
 ## Not in this prototype
 
-Auth, multi-user, real-time push (UI polls every 8 s), web search (only fetch), per-project token budgets.
+Auth, multi-user, real-time push (UI polls every 8 s), web search (only fetch), per-project token budgets, OAuth calendar providers (ICS feeds cover Google/Apple/Outlook read-only), recurring-event expansion (RRULE events are flagged but only their first instance is stored).

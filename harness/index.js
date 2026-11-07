@@ -23,10 +23,29 @@ function createHarness(db, { dbPath, intervalMs = Number(process.env.HARNESS_INT
     catch (e) { return { code: 1, out: '', err: e.message }; }
   }
 
+  // Pull external calendars (in-process, before sub-agents run).
+  async function syncCalendar(id) {
+    const cal = require('../server/calendar');
+    const c = db.getCalendar(id); if (!c) throw new Error('calendar not found');
+    try {
+      const evs = await cal.providers[c.kind].fetchEvents(c);
+      db.replaceEvents(c.id, evs);
+      return { id: c.id, synced: evs.length };
+    } catch (e) { db.updateCalendar(c.id, { last_error: e.message }); throw e; }
+  }
+  async function syncAllCalendars() {
+    const out = [];
+    for (const c of db.calendars().filter(c => c.enabled)) {
+      try { out.push(await syncCalendar(c.id)); } catch (e) { out.push({ id: c.id, error: e.message }); }
+    }
+    return out;
+  }
+
   async function runOnce(project_id = null) {
     if (running) return { skipped: true, reason: 'already running' };
     running = true;
     try {
+      const calendars = await syncAllCalendars();
       const projects = db.children(null).filter(p => p.project_status === 'active' && (!project_id || p.id === project_id));
       const results = await Promise.all(projects.map(async p => {
         const runId = db.startRun(p.id);
@@ -35,7 +54,7 @@ function createHarness(db, { dbPath, intervalMs = Number(process.env.HARNESS_INT
         return { project_id: p.id, title: p.title, ...r };
       }));
       lastRun = new Date().toISOString(); lastResults = results;
-      return { ran: results.length, results };
+      return { ran: results.length, results, calendars };
     } finally { running = false; }
   }
 
@@ -43,7 +62,7 @@ function createHarness(db, { dbPath, intervalMs = Number(process.env.HARNESS_INT
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
   function status() { return { scheduled: !!timer, intervalMs, running, lastRun, lastResults, live: require('./llm').live() }; }
 
-  return { runOnce, start, stop, status };
+  return { runOnce, start, stop, status, syncCalendar, syncAllCalendars };
 }
 
 module.exports = { createHarness };

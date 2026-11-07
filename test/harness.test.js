@@ -235,3 +235,98 @@ test('agent loop: scripted model runs tools then finish; turn limit; tool errors
   assert.ok(seenError); assert.ok(r2.artifact.includes('turn limit'));
   delete process.env.AGENT_MAX_TURNS;
 });
+
+const SAMPLE_ICS = (d1, d2) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\nBEGIN:VEVENT\r\nUID:ev1@test\r\nDTSTART:${d1}T180000Z\r\nDTEND:${d1}T190000Z\r\nSUMMARY:Budget hearing\\, room 2\r\nLOCATION:Capitol\r\nDESCRIPTION:Line one\\nLine two with a very long description that will need to be folded across\r\n multiple lines per RFC 5545 line folding rules\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:ev2@test\r\nDTSTART;VALUE=DATE:${d2}\r\nSUMMARY:Site visit\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:ev3@test\r\nDTSTART:20200101T100000Z\r\nDURATION:PT30M\r\nSUMMARY:Old thing\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`;
+const ymd = d => d.toISOString().slice(0, 10);
+const compact = d => ymd(d).replace(/-/g, '');
+
+test('calendar: ICS parse (folding, escapes, all-day, duration, rrule) and task feed generation', () => {
+  const cal = require('../server/calendar');
+  const evs = cal.parseICS(SAMPLE_ICS('20300105', '20300106'));
+  assert.equal(evs.length, 3);
+  const e1 = evs.find(e => e.uid === 'ev1@test');
+  assert.equal(e1.title, 'Budget hearing, room 2');
+  assert.ok(e1.description.includes('Line one\nLine two') && e1.description.includes('folded acrossmultiple'));
+  assert.equal(e1.start, '2030-01-05T18:00:00.000Z'); assert.equal(e1.all_day, false);
+  const e2 = evs.find(e => e.uid === 'ev2@test');
+  assert.equal(e2.start, '2030-01-06'); assert.equal(e2.all_day, true); assert.equal(e2.recurring, true);
+  const e3 = evs.find(e => e.uid === 'ev3@test');
+  assert.equal(e3.end, '2020-01-01T10:30:00.000Z');
+
+  const { db } = tmpDb();
+  const p = db.createNode({ title: 'Proj' });
+  const t = db.createNode({ parent_id: p.id, title: 'File report; by Friday', assignee: 'ai', due: '2030-02-10', mode: 'admin' });
+  db.createNode({ parent_id: p.id, title: 'no due', assignee: 'human' });
+  const v = cal.taskToVevent(db.getNode(t.id), p, 'http://x');
+  assert.ok(v.includes('DTSTART;VALUE=DATE:20300210') && v.includes('DTEND;VALUE=DATE:20300211'));
+  assert.ok(v.includes('SUMMARY:File report\\; by Friday (AI)'));
+  const feed = cal.buildCalendar(db.dueTasks().map(x => cal.taskToVevent(x, x.project)).filter(Boolean));
+  assert.equal((feed.match(/BEGIN:VEVENT/g) || []).length, 1);
+  assert.deepEqual(cal.parseICS(feed).map(e => e.title), ['File report; by Friday (AI)'], 'feed round-trips through the parser');
+});
+
+test('calendar: subscribe, sync via harness, events query, agent tool, prep proposal, outbound feed over HTTP', async () => {
+  const { db, path: dbPath } = tmpDb();
+  const d1 = new Date(Date.now() + 2 * 86400e3), d2 = new Date(Date.now() + 4 * 86400e3);
+  const ics = http.createServer((req, res) => { res.setHeader('content-type', 'text/calendar'); res.end(SAMPLE_ICS(compact(d1), compact(d2))); });
+  await new Promise(r => ics.listen(0, r));
+  const icsUrl = `http://127.0.0.1:${ics.address().port}/cal.ics`;
+
+  const harness = createHarness(db, { dbPath, inProcess: true });
+  const app = createApp(db, harness);
+  const server = await new Promise(res => { const s = app.listen(0, () => res(s)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = (m, u, b) => new Promise((res, rej) => {
+    const req = http.request(base + u, { method: m, headers: { 'content-type': 'application/json' } }, r => {
+      let d = ''; r.on('data', c => d += c); r.on('end', () => res({ status: r.statusCode, headers: r.headers, body: d && r.headers['content-type']?.includes('json') ? JSON.parse(d) : d }));
+    });
+    req.on('error', rej); if (b) req.write(JSON.stringify(b)); req.end();
+  });
+  try {
+    const p = (await call('POST', '/api/nodes', { title: 'Hearings', goal: 'g' })).body;
+    db.createNode({ parent_id: p.id, title: 'Prep site visit notes', assignee: 'human' }); // covers "Site visit"
+    const bad = await call('POST', '/api/calendars', { name: 'x', kind: 'nope', url: icsUrl });
+    assert.equal(bad.status, 400);
+    const c = (await call('POST', '/api/calendars', { name: 'Work', kind: 'ics', url: icsUrl, project_id: p.id })).body;
+    const sync = (await call('POST', `/api/calendars/${c.id}/sync`)).body;
+    assert.equal(sync.synced, 3);
+    const evs = (await call('GET', '/api/events')).body;
+    assert.deepEqual(evs.map(e => e.title).sort(), ['Budget hearing, room 2', 'Site visit'], 'old event outside window');
+    assert.equal(db.calendars()[0].event_count, 3);
+
+    // harness run: syncs calendars, agent sees events, proposes prep only for uncovered event
+    const r = (await call('POST', '/api/harness/run', {})).body;
+    assert.equal(r.calendars[0].synced, 3);
+    const props = db.inbox().filter(i => i.type === 'new_task');
+    assert.equal(props.length, 1);
+    assert.ok(props[0].summary.includes('Budget hearing'));
+    assert.equal(props[0].payload.mode, 'meeting'); assert.equal(props[0].payload.due, ymd(d1));
+    db.acceptProposal(props[0].id);
+    const prep = db.children(p.id).find(t => t.title.startsWith('Prepare for:'));
+    assert.ok(prep && prep.mode === 'meeting' && prep.due === ymd(d1));
+
+    // agent tool
+    const { makeTools } = require('../harness/tools');
+    const tools = makeTools({ db, project: db.getNode(p.id), task: prep });
+    const te = await tools.call('calendar_events', {});
+    assert.equal(te.events.length, 2); assert.equal(te.events[0].calendar, 'Work');
+
+    // outbound feed: token-gated, contains the prep task
+    const fu = (await call('GET', '/api/calendar/feed-url')).body;
+    assert.ok(fu.url.endsWith('.ics') && fu.webcal.startsWith('webcal://'));
+    const feed = await call('GET', new URL(fu.url).pathname);
+    assert.equal(feed.status, 200); assert.ok(feed.headers['content-type'].includes('text/calendar'));
+    assert.ok(feed.body.includes('Prepare for: Budget hearing'));
+    assert.equal((await call('GET', '/calendar/wrongtoken.ics')).status, 404);
+    const one = await call('GET', `/api/nodes/${prep.id}.ics`);
+    assert.ok(one.headers['content-disposition'].includes('attachment'));
+    await call('POST', '/api/calendar/feed-url/rotate');
+    assert.equal((await call('GET', new URL(fu.url).pathname)).status, 404, 'rotated token invalidates old URL');
+
+    // failing source records last_error, does not wipe cached events
+    ics.close();
+    await assert.rejects(harness.syncCalendar(c.id));
+    assert.ok(db.getCalendar(c.id).last_error);
+    assert.equal(db.events().length, 2);
+  } finally { server.close(); try { ics.close(); } catch {} }
+});

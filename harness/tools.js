@@ -22,6 +22,7 @@ function makeTools({ db, project, task }) {
     { name: 'list_files', description: 'List files in this project\'s workspace.', input_schema: { type: 'object', properties: { subdir: { type: 'string' } } } },
     { name: 'read_file', description: 'Read a text file from this project\'s workspace.', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
     { name: 'write_file', description: 'Write a text file into this project\'s workspace (drafts, notes, data). Overwrites.', input_schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
+    { name: 'calendar_events', description: 'List calendar events (from the owner\'s subscribed calendars) between two ISO dates. Defaults: today → +14 days. Read-only.', input_schema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } } } },
     { name: 'finish', description: 'Submit the final draft for human review. Call exactly once when done.', input_schema: { type: 'object', properties: { artifact: { type: 'string', description: 'The deliverable text, markdown.' }, needs_from_human: { type: 'array', items: { type: 'string' } } }, required: ['artifact'] } },
   ];
 
@@ -62,6 +63,9 @@ function makeTools({ db, project, task }) {
       fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.writeFileSync(p, content);
       return { path: rel, bytes: Buffer.byteLength(content) };
+    },
+    calendar_events({ from, to } = {}) {
+      return { events: db.events({ from, to, project_id: project.id }).map(e => ({ title: e.title, start: e.start, end: e.end, all_day: !!e.all_day, location: e.location || undefined, calendar: e.calendar_name })) };
     },
     finish({ artifact, needs_from_human }) {
       return { done: true, artifact: needs_from_human?.length ? `${artifact}\n\n## Needs from you\n${needs_from_human.map(s => `- ${s}`).join('\n')}` : artifact };

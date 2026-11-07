@@ -58,6 +58,21 @@ async function runProject(db, project_id, out = []) {
   for (const p of proposals) db.propose(project_id, p.type, p.summary, p.payload || {}, p.node_id || null);
   say(`proposals: ${proposals.length}`);
 
+  // 4b. Calendar-driven proposals: upcoming events with no matching task → propose a prep task.
+  const horizon = new Date(Date.now() + 7 * 86400e3).toISOString();
+  // Only calendars linked to this project generate prep proposals; global calendars are visible to agents and digests but do not spawn tasks.
+  const upcoming = db.events({ to: horizon, project_id }).filter(e => e.project_id === project_id);
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  for (const e of upcoming) {
+    const key = norm(e.title);
+    const covered = tasks.some(t => norm(t.title).includes(key) || key.includes(norm(t.title)));
+    if (!covered && key) {
+      const due = e.start.slice(0, 10);
+      db.propose(project_id, 'new_task', `Calendar: "${e.title}" on ${due} has no related task — add a prep task?`,
+        { title: `Prepare for: ${e.title}`, assignee: 'ai', due, mode: 'meeting' }, null);
+    }
+  }
+
   // 5. Digest.
   const fresh = db.descendants(project_id);
   const day = new Date().toLocaleDateString('sv'); // local YYYY-MM-DD
@@ -68,7 +83,8 @@ async function runProject(db, project_id, out = []) {
     ...waitingOnHuman.map(t => `- AI waiting on your task before: ${t.title}`),
   ].join('\n') || '- nothing';
   const p2 = db.progress(project_id);
-  const body = `# ${project.title} — ${day}\nProgress: ${p2.done}/${p2.total} (${p2.pct}%)\n\n## Done\n${grp('done')}\n\n## In progress\n${grp('in_progress')}\n\n## Blocked\n${grp('blocked')}\n\n## Needs you\n${needsYou}`;
+  const todayEvents = db.events({ from: day, to: new Date(Date.now() + 86400e3).toLocaleDateString('sv'), project_id }).map(e => `- ${e.all_day ? 'all day' : new Date(e.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: ${e.title}`).join('\n');
+  const body = `# ${project.title} — ${day}\nProgress: ${p2.done}/${p2.total} (${p2.pct}%)\n\n## Done\n${grp('done')}\n\n## In progress\n${grp('in_progress')}\n\n## Blocked\n${grp('blocked')}\n\n## Needs you\n${needsYou}${todayEvents ? `\n\n## Today's calendar\n${todayEvents}` : ''}`;
   db.saveDigest(project_id, day, body);
   say(`digest written`);
   return out;

@@ -284,9 +284,10 @@ function renderPanel() {
   mk('review', `Review${reviewCount ? `<span class="badge">${reviewCount}</span>` : ''}`);
   mk('detail', 'Selected');
   mk('digest', 'Digest');
+  mk('calendar', 'Calendar');
   mk('activity', 'Activity');
   p.appendChild(tabs);
-  ({ inbox: renderInbox, review: renderReview, detail: renderDetail, digest: renderDigest, activity: renderActivity })[PANEL](p);
+  ({ inbox: renderInbox, review: renderReview, detail: renderDetail, digest: renderDigest, activity: renderActivity, calendar: renderCalendar })[PANEL](p);
 }
 function countReview() { let c = 0; (function walk(l){ for (const n of l) { if (n.state === 'review') c++; walk(n.children); } })(TREE); return c; }
 
@@ -346,6 +347,7 @@ function renderDetail(p) {
     for (const t of all) { const op = el('option'); op.value = t.id; op.textContent = t.title || '(untitled)'; op.selected = n.deps.includes(t.id); sel.appendChild(op); }
     sel.onchange = () => api('PATCH', `/api/nodes/${n.id}`, { deps: [...sel.selectedOptions].map(o => o.value) }).then(refresh);
     d.appendChild(sel);
+    if (n.due) { const l3 = el('label'); l3.textContent = 'Calendar'; d.appendChild(l3); const a = el('a'); a.href = `/api/nodes/${n.id}.ics`; a.textContent = 'Add to calendar (.ics)'; a.style.fontSize = '13px'; d.appendChild(a); }
     if (n.artifact) { const l2 = el('label'); l2.textContent = 'Artifact'; d.appendChild(l2); const pre = el('pre'); pre.textContent = n.artifact; pre.style.cssText = 'white-space:pre-wrap;font:12px ui-monospace,monospace;background:#f5f5f4;padding:8px;border-radius:6px;max-height:240px;overflow:auto'; d.appendChild(pre); }
   } else {
     const l = el('label'); l.textContent = 'Run sub-agent for this project only'; d.appendChild(l);
@@ -372,6 +374,54 @@ async function renderActivity(p) {
   const list = await api('GET', '/api/activity');
   for (const a of list) p.appendChild(logLine(a, true));
 }
+async function renderCalendar(p) {
+  p.appendChild(h2('Next 14 days'));
+  const n = SEL && findNode(SEL); const pid = n ? projectOf(n).id : null;
+  const [evs, cals, feed] = await Promise.all([api('GET', '/api/events' + (pid ? `?project_id=${pid}` : '')), api('GET', '/api/calendars'), api('GET', '/api/calendar/feed-url')]);
+  const dueSoon = []; (function walk(l, proj){ for (const x of l) { if (x.kind === 'task' && x.due && x.state !== 'done' && x.due <= new Date(Date.now() + 14*86400e3).toLocaleDateString('sv')) dueSoon.push({ ...x, proj }); walk(x.children, proj || x); } })(TREE, null);
+  const items = [
+    ...evs.map(e => ({ when: e.all_day ? e.start : e.start, label: e.all_day ? 'all day' : new Date(e.start).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }), title: e.title, sub: e.calendar_name + (e.location ? ' · ' + e.location : ''), kind: 'event' })),
+    ...dueSoon.map(t => ({ when: t.due, label: 'due', title: t.title, sub: t.proj?.title || '', kind: 'task', id: t.id })),
+  ].sort((a, b) => a.when.localeCompare(b.when));
+  if (!items.length) p.appendChild(em('No events or due tasks in the next two weeks.'));
+  let lastDay = '';
+  for (const it of items) {
+    const day = it.when.slice(0, 10);
+    if (day !== lastDay) { const dh = el('div'); dh.style.cssText = 'font-size:12px;font-weight:600;margin:10px 0 2px'; dh.textContent = new Date(day + 'T12:00:00').toLocaleDateString([], { weekday:'short', month:'short', day:'numeric' }); p.appendChild(dh); lastDay = day; }
+    const r = el('div','log'); r.innerHTML = `<b>${esc(it.label)}</b> ${esc(it.title)} <span style="color:var(--mute)">${esc(it.sub)}</span>`;
+    if (it.kind === 'task') { r.style.cursor = 'pointer'; r.onclick = () => select(it.id, 'detail'); }
+    p.appendChild(r);
+  }
+
+  p.appendChild(h2('Subscribed calendars (inbound)'));
+  for (const c of cals) {
+    const card = el('div','card');
+    card.innerHTML = `<div><b>${esc(c.name)}</b> <span style="color:var(--mute);font-size:12px">${c.kind} · ${c.event_count} events · ${c.last_synced_at ? 'synced ' + new Date(c.last_synced_at).toLocaleString() : 'never synced'}${c.project_id ? ' · project: ' + esc(TREE.find(t => t.id === c.project_id)?.title || '?') : ' · global'}</span></div>${c.last_error ? `<div style="color:#b91c1c;font-size:12px">${esc(c.last_error)}</div>` : ''}`;
+    const a = el('div','actions');
+    const sy = el('button'); sy.textContent = 'Sync'; sy.onclick = () => api('POST', `/api/calendars/${c.id}/sync`).then(renderPanel).catch(e => { alert(e.message); renderPanel(); });
+    const tg = el('button'); tg.textContent = c.enabled ? 'Disable' : 'Enable'; tg.onclick = () => api('PATCH', `/api/calendars/${c.id}`, { enabled: c.enabled ? 0 : 1 }).then(renderPanel);
+    const rm = el('button'); rm.textContent = 'Remove'; rm.onclick = () => confirm(`Remove calendar "${c.name}"?`) && api('DELETE', `/api/calendars/${c.id}`).then(renderPanel);
+    a.append(sy, tg, rm); card.appendChild(a); p.appendChild(card);
+  }
+  const form = el('div','card');
+  form.innerHTML = `<div class="t">Add ICS feed</div>
+    <input id="calName" type="text" placeholder="Name" style="width:100%;margin-top:6px">
+    <input id="calUrl" type="text" placeholder="https://… .ics or webcal://… (Google: calendar settings → Secret address in iCal format)" style="width:100%;margin-top:6px">
+    <select id="calProj" style="width:100%;margin-top:6px"><option value="">Global (visible to all projects; no prep tasks)</option>${TREE.map(t => `<option value="${t.id}">${esc(t.title)} (proposes prep tasks for events)</option>`).join('')}</select>`;
+  const add = el('button','primary'); add.textContent = 'Subscribe'; add.style.marginTop = '8px';
+  add.onclick = async () => { try { const c = await api('POST', '/api/calendars', { name: form.querySelector('#calName').value, url: form.querySelector('#calUrl').value, project_id: form.querySelector('#calProj').value || null, kind: 'ics' }); await api('POST', `/api/calendars/${c.id}/sync`).catch(e => alert('Subscribed, but sync failed: ' + e.message)); renderPanel(); } catch (e) { alert(e.message); } };
+  form.appendChild(add); p.appendChild(form);
+
+  p.appendChild(h2('Publish tasks to your calendar (outbound)'));
+  const out = el('div','card');
+  out.innerHTML = `<div style="font-size:12px;color:var(--mute)">Subscribe to this URL from Google Calendar, Apple Calendar, or Outlook. Tasks with due dates appear as all-day events and update as they change. Anyone with the URL can read it.</div><pre style="margin-top:6px">${esc(feed.url)}</pre>`;
+  const a2 = el('div','actions');
+  const cp = el('button'); cp.textContent = 'Copy URL'; cp.onclick = () => navigator.clipboard.writeText(feed.url);
+  const wc = el('a'); wc.href = feed.webcal; wc.textContent = 'Open in calendar app'; wc.style.cssText = 'font-size:13px;align-self:center';
+  const rot = el('button'); rot.textContent = 'Rotate URL'; rot.onclick = () => confirm('Old URL stops working. Continue?') && api('POST', '/api/calendar/feed-url/rotate').then(renderPanel);
+  a2.append(cp, wc, rot); out.appendChild(a2); p.appendChild(out);
+}
+
 function logLine(a, withTitle) {
   const d = el('div','log');
   d.innerHTML = `${new Date(a.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })} · <b>${a.actor}</b> ${a.action}${withTitle ? ` <b>${esc(a.title)}</b>` : ''} ${esc(a.detail || '')}`;

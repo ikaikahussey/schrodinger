@@ -63,6 +63,39 @@ CREATE TABLE IF NOT EXISTS digests (
   UNIQUE(project_id, day)
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calendars (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'ics',
+  url TEXT NOT NULL DEFAULT '',
+  project_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_synced_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+  uid TEXT NOT NULL,
+  title TEXT NOT NULL,
+  start TEXT NOT NULL,
+  end TEXT NOT NULL,
+  all_day INTEGER NOT NULL DEFAULT 0,
+  description TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  recurring INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (calendar_id, uid)
+);
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start);
+
 CREATE TABLE IF NOT EXISTS harness_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
@@ -262,7 +295,7 @@ function wrap(db) {
     const payload = { ...p.payload, ...edits };
     switch (p.type) {
       case 'new_task':
-        createNode({ parent_id: payload.parent_id || p.project_id, title: payload.title, assignee: payload.assignee || 'ai', due: payload.due }, 'ai');
+        createNode({ parent_id: payload.parent_id || p.project_id, title: payload.title, assignee: payload.assignee || 'ai', due: payload.due, mode: payload.mode || '' }, 'ai');
         break;
       case 'decompose':
         for (const t of payload.subtasks || []) createNode({ parent_id: p.node_id, title: t.title, assignee: t.assignee || 'ai' }, 'ai');
@@ -301,6 +334,48 @@ function wrap(db) {
     return q(`SELECT * FROM digests WHERE project_id=? ORDER BY day DESC LIMIT ?`).all(project_id, limit);
   }
 
+  // Settings
+  function getSetting(key) { const r = q(`SELECT value FROM settings WHERE key=?`).get(key); return r ? r.value : null; }
+  function setSetting(key, value) { q(`INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, value); }
+  function feedToken() { let t = getSetting('feed_token'); if (!t) { t = crypto.randomBytes(16).toString('hex'); setSetting('feed_token', t); } return t; }
+
+  // Calendars
+  function addCalendar({ name, kind = 'ics', url = '', project_id = null }) {
+    const id = uid();
+    q(`INSERT INTO calendars (id,name,kind,url,project_id) VALUES (?,?,?,?,?)`).run(id, name, kind, url, project_id);
+    return getCalendar(id);
+  }
+  function getCalendar(id) { return q(`SELECT * FROM calendars WHERE id=?`).get(id); }
+  function calendars() { return q(`SELECT c.*, (SELECT COUNT(*) FROM events e WHERE e.calendar_id=c.id) AS event_count FROM calendars c ORDER BY created_at`).all(); }
+  function updateCalendar(id, patch) {
+    const keys = Object.keys(patch).filter(k => ['name','kind','url','project_id','enabled','last_synced_at','last_error'].includes(k));
+    if (keys.length) q(`UPDATE calendars SET ${keys.map(k => `${k}=?`).join(',')} WHERE id=?`).run(...keys.map(k => patch[k]), id);
+    return getCalendar(id);
+  }
+  function deleteCalendar(id) { q(`DELETE FROM calendars WHERE id=?`).run(id); }
+  function replaceEvents(calendar_id, evs) {
+    db.exec('BEGIN');
+    try {
+      q(`DELETE FROM events WHERE calendar_id=?`).run(calendar_id);
+      const ins = q(`INSERT OR REPLACE INTO events (calendar_id,uid,title,start,end,all_day,description,location,url,recurring,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const e of evs) ins.run(calendar_id, e.uid, e.title, e.start, e.end, e.all_day ? 1 : 0, e.description || '', e.location || '', e.url || '', e.recurring ? 1 : 0, e.status || '');
+      q(`UPDATE calendars SET last_synced_at=?, last_error=NULL WHERE id=?`).run(now(), calendar_id);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+  }
+  // Events in [from, to) — ISO strings; all-day dates compare lexically with ISO datetimes correctly enough for day granularity.
+  function events({ from, to, project_id = null } = {}) {
+    const f = from || new Date().toISOString().slice(0, 10);
+    const t = to || new Date(Date.now() + 14 * 86400e3).toISOString().slice(0, 10);
+    return q(`SELECT e.*, c.name AS calendar_name, c.project_id FROM events e JOIN calendars c ON c.id=e.calendar_id
+      WHERE c.enabled=1 AND e.end >= ? AND e.start < ? ${project_id ? 'AND (c.project_id IS NULL OR c.project_id=?)' : ''}
+      ORDER BY e.start`).all(f, t, ...(project_id ? [project_id] : []));
+  }
+  // Tasks with due dates (for the outbound feed)
+  function dueTasks() {
+    return q(`SELECT n.* FROM nodes n WHERE n.kind='task' AND n.due IS NOT NULL ORDER BY n.due`).all().map(t => ({ ...t, project: projectOf(t.id) }));
+  }
+
   function startRun(project_id) { return q(`INSERT INTO harness_runs (project_id) VALUES (?)`).run(project_id).lastInsertRowid; }
   function finishRun(id, status, logText) { q(`UPDATE harness_runs SET finished_at=?, status=?, log=? WHERE id=?`).run(now(), status, logText, id); }
   function runs(limit = 20) { return q(`SELECT r.*, n.title FROM harness_runs r LEFT JOIN nodes n ON n.id=r.project_id ORDER BY r.id DESC LIMIT ?`).all(limit); }
@@ -309,6 +384,7 @@ function wrap(db) {
     raw: db, log, getNode, children, projectOf, descendants, createNode, updateNode, moveNode, deleteNode,
     progress, depsSatisfied, tree, byMode, MODES, propose, inbox, getProposal, setProposalStatus, acceptProposal,
     activity, recentActivity, undoActivity, saveDigest, digests, startRun, finishRun, runs,
+    getSetting, setSetting, feedToken, addCalendar, getCalendar, calendars, updateCalendar, deleteCalendar, replaceEvents, events, dueTasks,
     close: () => db.close(),
   };
 }
