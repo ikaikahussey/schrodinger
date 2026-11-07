@@ -16,7 +16,7 @@ Without `ANTHROPIC_API_KEY` the harness uses a deterministic mock LLM. Copy `.en
 
 Storage is Postgres. With `DATABASE_URL` unset the app runs an embedded Postgres (PGlite) — in memory by default, on disk with `PGLITE_DIR`. Set `APP_PASSWORD` before exposing it; a login page then gates the UI and API (the iCal feed stays token-gated).
 
-- **Vercel** (primary): `api/index.js` serves the app as one function; `vercel.json` rewrites all routes to it and schedules `/api/harness/cron` hourly. Env: `DATABASE_URL` (Supabase/Neon pooled URL), `APP_PASSWORD`, `CRON_SECRET`, optional `ANTHROPIC_API_KEY`. Sub-agents run in-process inside the cron invocation (`maxDuration` 300 s). The static `public/` folder is only `logo.svg`; `index.html` is served by Express so the login gate covers it.
+- **Vercel** (primary): `api/index.js` serves the app as one function; `vercel.json` rewrites all routes to it and schedules `/api/harness/cron` daily at 17:00 UTC (Hobby plan allows daily only; Pro allows hourly — edit `vercel.json`). Env: `DATABASE_URL` (Supabase/Neon pooled URL), `APP_PASSWORD`, `CRON_SECRET`, optional `ANTHROPIC_API_KEY`. Sub-agents run in-process inside the cron invocation (`maxDuration` 300 s). The static `public/` folder is only `logo.svg`; `index.html` is served by Express so the login gate covers it.
 
 - **Fly.io**: `fly launch --copy-config --no-deploy` → `fly volumes create data --size 1` → `fly secrets set APP_PASSWORD=… ANTHROPIC_API_KEY=…` → `fly deploy`. Config in `fly.toml` (volume at `/data`, machine never auto-stops so the harness keeps its schedule).
 - **Render**: `render.yaml` blueprint (Docker, 1 GB disk at `/data`). Set the two secrets in the dashboard.
