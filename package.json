@@ -1,0 +1,24 @@
+{
+  "name": "schrodinger",
+  "version": "0.1.0",
+  "description": "Schrodinger — multi-project to-do outline with human/AI task split; a master harness spawns one tool-using sub-agent per project.",
+  "main": "server/index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "SEED=1 node server/index.js",
+    "test": "node --test test/harness.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
+    "express": "^4.22.3"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

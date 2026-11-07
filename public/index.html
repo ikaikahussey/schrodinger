@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schrodinger</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#fafaf9; --fg:#1c1917; --mute:#78716c; --line:#e7e5e4; --ai:#dbeafe; --ai-fg:#1e40af; --me:#dcfce7; --me-fg:#166534; --warn:#fef3c7; --warn-fg:#92400e; --rev:#fae8ff; --rev-fg:#86198f; --card:#fff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; color:var(--fg); background:var(--bg); }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:15px; margin:0 12px 0 0; font-weight:600; }
+  header .sp { flex:1; }
+  button { font:inherit; padding:4px 10px; border:1px solid var(--line); background:var(--card); border-radius:6px; cursor:pointer; }
+  button:hover { background:#f5f5f4; }
+  button.primary { background:var(--fg); color:#fff; border-color:var(--fg); }
+  select, input[type=text], input[type=date], textarea { font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); }
+  main { display:grid; grid-template-columns: 1fr 380px; gap:0; min-height: calc(100vh - 50px); }
+  #outline { padding:16px 24px; }
+  aside { border-left:1px solid var(--line); background:var(--card); padding:16px; overflow:auto; max-height:calc(100vh - 50px); position:sticky; top:50px; }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:16px 0 8px; }
+  aside h2:first-child { margin-top:0; }
+  .row { display:flex; align-items:flex-start; gap:6px; padding:3px 4px; border-radius:6px; position:relative; }
+  .row:hover { background:#f5f5f4; }
+  .row.sel { background:#eef2ff; }
+  .row.hidden-filter { display:none; }
+  .tw { width:16px; height:22px; display:flex; align-items:center; justify-content:center; color:var(--mute); cursor:pointer; font-size:10px; flex:none; }
+  .tw.leaf { visibility:hidden; }
+  .drag { width:10px; height:22px; cursor:grab; color:#d6d3d1; flex:none; display:flex; align-items:center; }
+  .drag::before { content:'⋮'; }
+  .chk { margin-top:4px; flex:none; }
+  .title { flex:1; min-width:0; outline:none; padding:1px 4px; border-radius:4px; white-space:pre-wrap; word-break:break-word; }
+  .title:focus { background:#fff; box-shadow:0 0 0 1px #c7d2fe; }
+  .title.done { text-decoration:line-through; color:var(--mute); }
+  .project > .title { font-weight:600; font-size:15px; }
+  .chip { font-size:11px; padding:1px 7px; border-radius:999px; white-space:nowrap; cursor:pointer; margin-top:3px; }
+  .chip.ai { background:var(--ai); color:var(--ai-fg); } .chip.human { background:var(--me); color:var(--me-fg); } .chip.unassigned { background:#f5f5f4; color:var(--mute); }
+  .chip.st-review { background:var(--rev); color:var(--rev-fg); } .chip.st-blocked { background:var(--warn); color:var(--warn-fg); } .chip.st-in_progress { background:#e0f2fe; color:#075985; } .chip.st-todo { background:#f5f5f4; color:var(--mute); } .chip.st-done { background:#f5f5f4; color:var(--mute); }
+  .chip.mode { background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; }
+  .batch h3 { font-size:13px; margin:18px 0 6px; text-transform:capitalize; display:flex; align-items:center; gap:8px; }
+  .batch h3 small { color:var(--mute); font-weight:400; }
+  .batch .proj { font-size:11px; color:var(--mute); margin-top:4px; white-space:nowrap; }
+  .due { font-size:11px; color:var(--mute); margin-top:4px; white-space:nowrap; } .due.over { color:#b91c1c; font-weight:600; }
+  .last { font-size:11px; color:var(--mute); margin-top:4px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .kids { margin-left:22px; border-left:1px solid var(--line); padding-left:4px; }
+  .kids.collapsed { display:none; }
+  .meta { margin:2px 0 6px 46px; color:var(--mute); font-size:12px; }
+  .meta .goal { color:var(--fg); }
+  .bar { height:4px; background:var(--line); border-radius:2px; margin:4px 0 10px 46px; max-width:320px; }
+  .bar i { display:block; height:100%; background:var(--fg); border-radius:2px; }
+  .pstatus { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--warn); color:var(--warn-fg); }
+  .project-block { margin-bottom:22px; }
+  .add { color:var(--mute); cursor:pointer; padding:3px 4px 3px 46px; font-size:13px; }
+  .add:hover { color:var(--fg); }
+  .card { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px; background:var(--card); }
+  .card .t { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:.04em; }
+  .card .actions { display:flex; gap:6px; margin-top:8px; }
+  .card pre { white-space:pre-wrap; font:12px/1.4 ui-monospace, monospace; background:#f5f5f4; padding:8px; border-radius:6px; max-height:280px; overflow:auto; margin:8px 0 0; }
+  .detail label { display:block; font-size:11px; color:var(--mute); margin:8px 0 2px; }
+  .detail input, .detail textarea, .detail select { width:100%; }
+  .detail textarea { min-height:60px; }
+  .log { font-size:12px; color:var(--mute); margin:3px 0; }
+  .log b { color:var(--fg); font-weight:500; }
+  .log button { font-size:10px; padding:0 5px; margin-left:4px; }
+  .empty { color:var(--mute); font-size:13px; }
+  .drop-before { box-shadow: inset 0 2px 0 #6366f1; } .drop-into { box-shadow: inset 0 0 0 2px #6366f1; }
+  kbd { font:11px ui-monospace, monospace; background:#f5f5f4; border:1px solid var(--line); border-radius:4px; padding:0 4px; }
+  #help { font-size:12px; color:var(--mute); margin-top:24px; }
+  .badge { background:#ef4444; color:#fff; border-radius:999px; font-size:10px; padding:0 6px; margin-left:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Schrodinger</h1>
+  <select id="filter">
+    <option value="all">All</option>
+    <option value="human">Mine</option>
+    <option value="ai">AI's</option>
+    <option value="review">Needs review</option>
+    <option value="blocked">Blocked</option>
+    <option value="week">Due this week</option>
+  </select>
+  <select id="modeFilter"><option value="">Any mode</option></select>
+  <button id="viewToggle">Batch by mode</button>
+  <button id="newProject">+ Project</button>
+  <span class="sp"></span>
+  <span id="hstatus" style="font-size:12px;color:var(--mute)"></span>
+  <button id="runHarness" class="primary">Run harness now</button>
+</header>
+<main>
+  <div id="outline"></div>
+  <aside>
+    <div id="panel"></div>
+    <div id="help">
+      <b>Keys</b> (while editing a title): <kbd>Enter</kbd> new sibling · <kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> nest/unnest · <kbd>⌫</kbd> on empty deletes · <kbd>↑</kbd>/<kbd>↓</kbd> move · type <kbd>@ai</kbd> or <kbd>@me</kbd> to assign, <kbd>#call</kbd> <kbd>#errand</kbd> <kbd>#email</kbd> … to set mode. Drag ⋮ to reorder.
+    </div>
+  </aside>
+</main>
+<script>
+const api = (m, u, b) => fetch(u, { method:m, headers:{'content-type':'application/json'}, body: b ? JSON.stringify(b) : undefined })
+  .then(async r => { const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+
+let TREE = [], INBOX = [], SEL = null, FILTER = 'all', PANEL = 'inbox', MODES = [], MODE = '', VIEW = 'outline', BYMODE = {};
+const $ = s => document.querySelector(s);
+const today = () => new Date().toLocaleDateString('sv');
+const weekOut = () => new Date(Date.now() + 7*86400e3).toISOString().slice(0,10);
+
+let REFRESH_SEQ = 0;
+async function refresh() {
+  const seq = ++REFRESH_SEQ;
+  const [tree, inbox, hs] = await Promise.all([api('GET','/api/tree'), api('GET','/api/inbox'), api('GET','/api/harness/status')]);
+  if (seq !== REFRESH_SEQ) return; // a newer refresh is in flight; drop this stale result
+  TREE = tree; INBOX = inbox;
+  if (!MODES.length) { MODES = await api('GET','/api/modes'); const mf = $('#modeFilter'); for (const m of MODES) { const o = el('option'); o.value = m; o.textContent = m; mf.appendChild(o); } }
+  if (VIEW === 'batch') BYMODE = await api('GET', '/api/by-mode' + (FILTER === 'human' || FILTER === 'ai' ? `?assignee=${FILTER}` : ''));
+  $('#hstatus').textContent = `${hs.live ? 'Claude API' : 'mock LLM'} · last run ${hs.lastRun ? new Date(hs.lastRun).toLocaleTimeString() : 'never'}${hs.running ? ' · running…' : ''}`;
+  renderOutline(); renderPanel();
+}
+
+// ---------- Outline ----------
+function matches(n) {
+  if (n.kind === 'project') return true;
+  if (MODE && n.mode !== MODE) return false;
+  switch (FILTER) {
+    case 'human': return n.assignee === 'human' && n.state !== 'done';
+    case 'ai': return n.assignee === 'ai' && n.state !== 'done';
+    case 'review': return n.state === 'review';
+    case 'blocked': return n.state === 'blocked';
+    case 'week': return n.due && n.due <= weekOut() && n.state !== 'done';
+    default: return !MODE || n.state !== 'done';
+  }
+}
+function subtreeMatches(n) { return matches(n) || n.children.some(subtreeMatches); }
+
+function renderOutline() {
+  const root = $('#outline'); root.innerHTML = '';
+  if (VIEW === 'batch') return renderBatch(root);
+  if (!TREE.length) root.innerHTML = '<p class="empty">No projects. Click “+ Project”.</p>';
+  for (const p of TREE) {
+    const block = el('div','project-block');
+    block.appendChild(row(p, 0));
+    const meta = el('div','meta');
+    meta.innerHTML = `<span class="goal">${esc(p.goal) || '<i>no goal — click to set</i>'}</span> · ${p.progress.done}/${p.progress.total} done` + (p.project_status !== 'active' ? ` <span class="pstatus">${p.project_status}</span>` : '');
+    meta.onclick = () => select(p.id, 'detail');
+    block.appendChild(meta);
+    const bar = el('div','bar'); bar.innerHTML = `<i style="width:${p.progress.pct}%"></i>`; block.appendChild(bar);
+    const kids = el('div','kids' + (p.collapsed ? ' collapsed' : ''));
+    kids.dataset.parent = p.id;
+    for (const c of p.children) kids.appendChild(renderNode(c, 1));
+    const add = el('div','add'); add.textContent = '+ task'; add.onclick = () => createTask(p.id);
+    kids.appendChild(add);
+    block.appendChild(kids);
+    root.appendChild(block);
+  }
+}
+function renderNode(n, depth) {
+  const wrap = el('div');
+  wrap.dataset.id = n.id;
+  if ((FILTER !== 'all' || MODE) && !subtreeMatches(n)) wrap.style.display = 'none';
+  wrap.appendChild(row(n, depth));
+  if (n.children.length) {
+    const kids = el('div','kids' + (n.collapsed ? ' collapsed' : ''));
+    kids.dataset.parent = n.id;
+    for (const c of n.children) kids.appendChild(renderNode(c, depth+1));
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+function row(n, depth) {
+  const r = el('div', 'row' + (n.kind==='project' ? ' project' : '') + (SEL === n.id ? ' sel' : ''));
+  r.dataset.id = n.id; r.draggable = true;
+  r.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', n.id); e.stopPropagation(); });
+  r.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); r.classList.toggle('drop-into', e.offsetX > 120); r.classList.toggle('drop-before', e.offsetX <= 120); });
+  r.addEventListener('dragleave', () => r.classList.remove('drop-into','drop-before'));
+  r.addEventListener('drop', async e => {
+    e.preventDefault(); e.stopPropagation(); r.classList.remove('drop-into','drop-before');
+    const id = e.dataTransfer.getData('text/plain'); if (!id || id === n.id) return;
+    try {
+      if (e.offsetX > 120) await api('POST', `/api/nodes/${id}/move`, { parent_id: n.id, position: 999 });
+      else await api('POST', `/api/nodes/${id}/move`, { parent_id: n.parent_id, position: n.position });
+    } catch (err) { alert(err.message); }
+    refresh();
+  });
+
+  const d = el('div','drag'); r.appendChild(d);
+  const tw = el('div','tw' + (n.children.length ? '' : ' leaf')); tw.textContent = n.collapsed ? '▶' : '▼';
+  tw.onclick = () => api('PATCH', `/api/nodes/${n.id}`, { collapsed: n.collapsed ? 0 : 1 }).then(refresh);
+  r.appendChild(tw);
+
+  if (n.kind === 'task') {
+    const c = el('input','chk'); c.type = 'checkbox'; c.checked = n.state === 'done';
+    c.onchange = () => api('PATCH', `/api/nodes/${n.id}`, { state: c.checked ? 'done' : 'todo' }).then(refresh);
+    r.appendChild(c);
+  }
+  const t = el('div','title' + (n.state==='done' ? ' done' : '')); t.contentEditable = 'true'; t.textContent = n.title; t.spellcheck = false;
+  t.onfocus = () => { SEL = n.id; };
+  t.onclick = e => { e.stopPropagation(); if (SEL !== n.id || PANEL !== 'detail') select(n.id, 'detail', false); };
+  t.onblur = () => commitTitle(n, t);
+  t.onkeydown = e => keys(e, n, t);
+  r.appendChild(t);
+
+  if (n.kind === 'task') {
+    const a = el('span', 'chip ' + n.assignee); a.textContent = n.assignee === 'human' ? 'me' : n.assignee; a.title = 'click to cycle assignee';
+    a.onclick = e => { e.stopPropagation(); const next = { human:'ai', ai:'unassigned', unassigned:'human' }[n.assignee]; api('PATCH', `/api/nodes/${n.id}`, { assignee: next }).then(refresh); };
+    r.appendChild(a);
+    const mc = el('span', 'chip mode'); mc.textContent = n.mode || '#mode'; mc.title = 'click to cycle mode'; if (!n.mode) mc.style.opacity = '.45';
+    mc.onclick = e => { e.stopPropagation(); const i = MODES.indexOf(n.mode); const next = i < 0 ? MODES[0] : (MODES[i+1] || ''); api('PATCH', `/api/nodes/${n.id}`, { mode: next }).then(refresh); };
+    r.appendChild(mc);
+    const s = el('span', 'chip st-' + n.state); s.textContent = n.state.replace('_',' ');
+    s.onclick = e => { e.stopPropagation(); select(n.id, n.state === 'review' ? 'review' : 'detail'); };
+    r.appendChild(s);
+    if (n.due) { const du = el('span', 'due' + (n.due < today() && n.state !== 'done' ? ' over' : '')); du.textContent = n.due; r.appendChild(du); }
+    if (n.last_activity) { const la = el('span','last'); la.textContent = `${n.last_activity.actor}: ${n.last_activity.detail || n.last_activity.action}`; la.title = la.textContent; r.appendChild(la); }
+  }
+  return r;
+}
+
+async function commitTitle(n, t) {
+  if (!t.isConnected && t.dataset.committed) return;
+  t.dataset.committed = '1';
+  let title = t.textContent.trim();
+  const patch = {};
+  const m = title.match(/\s*@(ai|me|human|none)\b/i);
+  if (m) { patch.assignee = { ai:'ai', me:'human', human:'human', none:'unassigned' }[m[1].toLowerCase()]; title = title.replace(m[0], '').trim(); }
+  const mm = title.match(/\s*#([a-z]+)\b/i);
+  if (mm && MODES.includes(mm[1].toLowerCase())) { patch.mode = mm[1].toLowerCase(); title = title.replace(mm[0], '').trim(); }
+  if (title !== n.title) patch.title = title;
+  if (Object.keys(patch).length) { await api('PATCH', `/api/nodes/${n.id}`, patch); await refresh(); }
+}
+async function keys(e, n, t) {
+  if (e.key === 'Enter') {
+    e.preventDefault(); await commitTitle(n, t);
+    if (n.kind === 'project') { await createTask(n.id, 0); return; }
+    const created = await api('POST', '/api/nodes', { parent_id: n.parent_id, title: '', assignee: n.assignee, position: n.position + 1 });
+    await refresh(); focusTitle(created.id);
+  } else if (e.key === 'Tab') {
+    e.preventDefault(); if (n.kind === 'project') return;
+    await commitTitle(n, t); n = findNode(n.id) || n;
+    const siblings = findSiblings(n); const idx = siblings.findIndex(s => s.id === n.id);
+    if (e.shiftKey) {
+      const parent = findNode(n.parent_id); if (!parent || parent.kind === 'project') return;
+      await api('POST', `/api/nodes/${n.id}/move`, { parent_id: parent.parent_id, position: parent.position + 1 });
+    } else {
+      if (idx === 0) return; const prev = siblings[idx-1];
+      await api('POST', `/api/nodes/${n.id}/move`, { parent_id: prev.id, position: 999 });
+    }
+    await refresh(); focusTitle(n.id);
+  } else if (e.key === 'Backspace' && t.textContent === '' && n.kind === 'task') {
+    e.preventDefault(); const siblings = findSiblings(n); const idx = siblings.findIndex(s => s.id === n.id);
+    await api('DELETE', `/api/nodes/${n.id}`); await refresh();
+    const prev = siblings[idx-1]; if (prev) focusTitle(prev.id, true);
+  } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.altKey) {
+    e.preventDefault(); const dir = e.key === 'ArrowUp' ? -1 : 1;
+    await commitTitle(n, t); n = findNode(n.id) || n;
+    await api('POST', `/api/nodes/${n.id}/move`, { parent_id: n.parent_id, position: Math.max(0, n.position + dir) });
+    await refresh(); focusTitle(n.id);
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    const titles = [...document.querySelectorAll('.title')].filter(x => x.offsetParent !== null);
+    const i = titles.indexOf(t); const nx = titles[i + (e.key === 'ArrowUp' ? -1 : 1)];
+    if (nx) { e.preventDefault(); nx.focus(); }
+  } else if (e.key === 'Escape') { t.blur(); }
+}
+function focusTitle(id, end) {
+  const t = document.querySelector(`.row[data-id="${id}"] .title`); if (!t) return; t.focus();
+  if (end) { const r = document.createRange(); r.selectNodeContents(t); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+}
+async function createTask(parent_id, position) {
+  const created = await api('POST', '/api/nodes', { parent_id, title: '', assignee: 'human', position });
+  await refresh(); focusTitle(created.id);
+}
+function findNode(id, list = TREE) { for (const n of list) { if (n.id === id) return n; const f = findNode(id, n.children); if (f) return f; } return null; }
+function findSiblings(n) { return n.parent_id ? findNode(n.parent_id).children : TREE; }
+
+// ---------- Side panel ----------
+function select(id, panel = 'detail', doRender = true) { SEL = id; PANEL = panel; if (doRender) { renderOutline(); } renderPanel(); }
+
+function renderPanel() {
+  const p = $('#panel'); p.innerHTML = '';
+  const tabs = el('div'); tabs.style.cssText = 'display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap';
+  const mk = (k, label) => { const b = el('button'); b.innerHTML = label; if (PANEL === k) b.classList.add('primary'); b.onclick = () => { PANEL = k; renderPanel(); }; tabs.appendChild(b); };
+  const reviewCount = countReview();
+  mk('inbox', `Inbox${INBOX.length ? `<span class="badge">${INBOX.length}</span>` : ''}`);
+  mk('review', `Review${reviewCount ? `<span class="badge">${reviewCount}</span>` : ''}`);
+  mk('detail', 'Selected');
+  mk('digest', 'Digest');
+  mk('activity', 'Activity');
+  p.appendChild(tabs);
+  ({ inbox: renderInbox, review: renderReview, detail: renderDetail, digest: renderDigest, activity: renderActivity })[PANEL](p);
+}
+function countReview() { let c = 0; (function walk(l){ for (const n of l) { if (n.state === 'review') c++; walk(n.children); } })(TREE); return c; }
+
+function renderInbox(p) {
+  p.appendChild(h2('Proposals from the harness'));
+  if (!INBOX.length) { p.appendChild(em('Nothing pending. The harness proposes structural changes here; nothing is applied until you accept.')); return; }
+  for (const i of INBOX) {
+    const proj = TREE.find(t => t.id === i.project_id);
+    const c = el('div','card');
+    c.innerHTML = `<div class="t">${i.type.replace('_',' ')} · ${esc(proj?.title || '')}</div><div>${esc(i.summary)}</div>`;
+    if (i.type === 'decompose') c.innerHTML += `<pre>${esc(i.payload.subtasks.map(s => `• ${s.title} (${s.assignee})`).join('\n'))}</pre>`;
+    if (i.type === 'new_task') c.innerHTML += `<pre>${esc(`• ${i.payload.title} (${i.payload.assignee})`)}</pre>`;
+    const a = el('div','actions');
+    const ok = el('button','primary'); ok.textContent = ['stale','blocked_chain','no_path'].includes(i.type) ? 'Acknowledge' : 'Accept';
+    ok.onclick = () => api('POST', `/api/inbox/${i.id}/accept`).then(refresh).catch(e => alert(e.message));
+    const no = el('button'); no.textContent = 'Dismiss'; no.onclick = () => api('POST', `/api/inbox/${i.id}/dismiss`).then(refresh);
+    a.append(ok, no);
+    if (i.node_id) { const go = el('button'); go.textContent = 'Show task'; go.onclick = () => select(i.node_id, 'detail'); a.appendChild(go); }
+    c.appendChild(a); p.appendChild(c);
+  }
+}
+function renderReview(p) {
+  p.appendChild(h2('AI drafts awaiting your review'));
+  const items = []; (function walk(l, proj){ for (const n of l) { if (n.state === 'review') items.push({ n, proj }); walk(n.children, proj || n); } })(TREE, null);
+  if (!items.length) { p.appendChild(em('No drafts in review.')); return; }
+  for (const { n, proj } of items) {
+    const c = el('div','card');
+    c.innerHTML = `<div class="t">${esc(proj?.title || '')}</div><div><b>${esc(n.title)}</b></div><pre>${esc(n.artifact || '(no artifact)')}</pre>`;
+    const note = el('textarea'); note.placeholder = 'Rejection note (what to change)'; note.style.cssText = 'width:100%;margin-top:8px;min-height:44px';
+    const a = el('div','actions');
+    const ok = el('button','primary'); ok.textContent = 'Approve → done'; ok.onclick = () => api('POST', `/api/nodes/${n.id}/approve`).then(refresh);
+    const no = el('button'); no.textContent = 'Reject → redo'; no.onclick = () => api('POST', `/api/nodes/${n.id}/reject`, { note: note.value }).then(refresh);
+    const cp = el('button'); cp.textContent = 'Copy draft'; cp.onclick = () => navigator.clipboard.writeText(n.artifact || '');
+    a.append(ok, no, cp); c.append(note, a); p.appendChild(c);
+  }
+}
+function renderDetail(p) {
+  const n = SEL && findNode(SEL);
+  if (!n) { p.appendChild(em('Click a title to select a project or task.')); return; }
+  const d = el('div','detail');
+  const fields = n.kind === 'project'
+    ? [['title','Title','text'],['goal','Goal','textarea'],['success_criteria','Success criteria (checkable)','textarea'],['constraints','Constraints for the AI (e.g. "draft only, no outreach")','textarea'],['project_status','Status',['active','paused','archived']]]
+    : [['title','Title','text'],['assignee','Assignee',['human','ai','unassigned']],['mode','Mode (batch similar work)',['',...MODES]],['state','State',['todo','in_progress','blocked','review','done']],['due','Due','date'],['acceptance_note','Acceptance note / review feedback','textarea']];
+  for (const [k, label, type] of fields) {
+    const l = el('label'); l.textContent = label; d.appendChild(l);
+    let inp;
+    if (Array.isArray(type)) { inp = el('select'); for (const o of type) { const op = el('option'); op.value = o; op.textContent = o; inp.appendChild(op); } inp.value = n[k]; }
+    else if (type === 'textarea') { inp = el('textarea'); inp.value = n[k] || ''; }
+    else { inp = el('input'); inp.type = type; inp.value = n[k] || ''; }
+    inp.onchange = () => api('PATCH', `/api/nodes/${n.id}`, { [k]: inp.value }).then(refresh).catch(e => alert(e.message));
+    d.appendChild(inp);
+  }
+  if (n.kind === 'task') {
+    const l = el('label'); l.textContent = 'Depends on (tasks in same project)'; d.appendChild(l);
+    const proj = projectOf(n); const all = []; (function walk(x){ for (const c of x.children) { if (c.id !== n.id) all.push(c); walk(c); } })(proj);
+    const sel = el('select'); sel.multiple = true; sel.size = Math.min(6, Math.max(2, all.length));
+    for (const t of all) { const op = el('option'); op.value = t.id; op.textContent = t.title || '(untitled)'; op.selected = n.deps.includes(t.id); sel.appendChild(op); }
+    sel.onchange = () => api('PATCH', `/api/nodes/${n.id}`, { deps: [...sel.selectedOptions].map(o => o.value) }).then(refresh);
+    d.appendChild(sel);
+    if (n.artifact) { const l2 = el('label'); l2.textContent = 'Artifact'; d.appendChild(l2); const pre = el('pre'); pre.textContent = n.artifact; pre.style.cssText = 'white-space:pre-wrap;font:12px ui-monospace,monospace;background:#f5f5f4;padding:8px;border-radius:6px;max-height:240px;overflow:auto'; d.appendChild(pre); }
+  } else {
+    const l = el('label'); l.textContent = 'Run sub-agent for this project only'; d.appendChild(l);
+    const b = el('button'); b.textContent = 'Run now'; b.onclick = () => runHarness(n.id); d.appendChild(b);
+  }
+  const del = el('button'); del.textContent = 'Delete'; del.style.cssText = 'margin-top:14px;color:#b91c1c';
+  del.onclick = () => { if (confirm(`Delete "${n.title}" and everything under it?`)) api('DELETE', `/api/nodes/${n.id}`).then(() => { SEL = null; refresh(); }); };
+  d.appendChild(del);
+  p.appendChild(d);
+  p.appendChild(h2('Activity'));
+  api('GET', `/api/nodes/${n.id}/activity`).then(list => { for (const a of list) p.appendChild(logLine(a)); });
+}
+async function renderDigest(p) {
+  p.appendChild(h2('Daily digests'));
+  const n = SEL && findNode(SEL); const projects = n ? [projectOf(n)] : TREE;
+  for (const proj of projects) {
+    const list = await api('GET', `/api/nodes/${proj.id}/digests`);
+    if (!list.length) { p.appendChild(em(`${proj.title}: no digest yet — run the harness.`)); continue; }
+    const c = el('div','card'); c.innerHTML = `<pre>${esc(list[0].body)}</pre>`; p.appendChild(c);
+  }
+}
+async function renderActivity(p) {
+  p.appendChild(h2('Recent activity (all projects)'));
+  const list = await api('GET', '/api/activity');
+  for (const a of list) p.appendChild(logLine(a, true));
+}
+function logLine(a, withTitle) {
+  const d = el('div','log');
+  d.innerHTML = `${new Date(a.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })} · <b>${a.actor}</b> ${a.action}${withTitle ? ` <b>${esc(a.title)}</b>` : ''} ${esc(a.detail || '')}`;
+  if (a.undo) { const b = el('button'); b.textContent = 'undo'; b.onclick = () => api('POST', `/api/activity/${a.id}/undo`).then(refresh).catch(e => alert(e.message)); d.appendChild(b); }
+  return d;
+}
+function projectOf(n) { let x = n; while (x.parent_id) x = findNode(x.parent_id); return x; }
+
+function renderBatch(root) {
+  const wrap = el('div','batch');
+  const order = [...MODES.filter(m => BYMODE[m]), ...(BYMODE.unsorted ? ['unsorted'] : [])].filter(m => !MODE || m === MODE);
+  if (!order.length) { wrap.innerHTML = '<p class="empty">No open tasks match.</p>'; root.appendChild(wrap); return; }
+  for (const m of order) {
+    const h = el('h3'); h.innerHTML = `${esc(m)} <small>${BYMODE[m].length}</small>`; wrap.appendChild(h);
+    for (const t of BYMODE[m]) {
+      const n = { ...t, children: [], deps: [], last_activity: null };
+      const r = row(n, 1); r.draggable = false;
+      const pj = el('span','proj'); pj.textContent = t.project_title; r.insertBefore(pj, r.querySelector('.chip'));
+      wrap.appendChild(r);
+    }
+  }
+  root.appendChild(wrap);
+}
+
+// ---------- Header ----------
+$('#modeFilter').onchange = e => { MODE = e.target.value; renderOutline(); };
+$('#viewToggle').onclick = () => { VIEW = VIEW === 'outline' ? 'batch' : 'outline'; $('#viewToggle').textContent = VIEW === 'outline' ? 'Batch by mode' : 'Outline'; refresh(); };
+$('#filter').onchange = e => { FILTER = e.target.value; VIEW === 'batch' ? refresh() : renderOutline(); };
+$('#newProject').onclick = async () => { const c = await api('POST', '/api/nodes', { title: 'New project' }); await refresh(); select(c.id, 'detail'); focusTitle(c.id, true); };
+async function runHarness(project_id) {
+  const b = $('#runHarness'); b.disabled = true; b.textContent = 'Running…';
+  try { await api('POST', '/api/harness/run', { project_id }); } catch (e) { alert(e.message); }
+  b.disabled = false; b.textContent = 'Run harness now'; refresh();
+}
+$('#runHarness').onclick = () => runHarness(null);
+
+// ---------- utils ----------
+function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+function h2(t) { const e = el('h2'); e.textContent = t; return e; }
+function em(t) { const e = el('p','empty'); e.textContent = t; return e; }
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+refresh();
+setInterval(() => { if (document.activeElement?.classList.contains('title')) return; refresh(); }, 8000);
+</script>
+</body>
+</html>
