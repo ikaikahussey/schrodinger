@@ -1,5 +1,5 @@
-// Data layer: one `nodes` table holds projects (depth 0) and tasks (nested).
-const { DatabaseSync } = require('node:sqlite');
+// Data layer on Postgres. One `nodes` table holds projects (depth 0) and tasks (nested).
+// Driver: `pg` Pool (DATABASE_URL) in production; PGlite (in-process Postgres) for tests/local when no URL.
 const crypto = require('node:crypto');
 
 const SCHEMA = `
@@ -20,9 +20,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   artifact TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   collapsed INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  last_activity_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id, position);
 
@@ -33,13 +33,13 @@ CREATE TABLE IF NOT EXISTS deps (
 );
 
 CREATE TABLE IF NOT EXISTS activity (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
   actor TEXT NOT NULL CHECK (actor IN ('human','ai','harness')),
   action TEXT NOT NULL,
   detail TEXT NOT NULL DEFAULT '',
   undo TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_activity_node ON activity(node_id, id);
 
@@ -51,22 +51,19 @@ CREATE TABLE IF NOT EXISTS inbox (
   summary TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','dismissed')),
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS digests (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
   day TEXT NOT NULL,
   body TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, day)
 );
 
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS calendars (
   id TEXT PRIMARY KEY,
@@ -75,9 +72,9 @@ CREATE TABLE IF NOT EXISTS calendars (
   url TEXT NOT NULL DEFAULT '',
   project_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
-  last_synced_at TEXT,
+  last_synced_at TIMESTAMPTZ,
   last_error TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -85,7 +82,7 @@ CREATE TABLE IF NOT EXISTS events (
   uid TEXT NOT NULL,
   title TEXT NOT NULL,
   start TEXT NOT NULL,
-  end TEXT NOT NULL,
+  "end" TEXT NOT NULL,
   all_day INTEGER NOT NULL DEFAULT 0,
   description TEXT NOT NULL DEFAULT '',
   location TEXT NOT NULL DEFAULT '',
@@ -96,297 +93,292 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start);
 
+CREATE TABLE IF NOT EXISTS files (
+  project_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS harness_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   project_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
-  started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  finished_at TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'running',
   log TEXT NOT NULL DEFAULT ''
 );
 `;
 
-const now = () => new Date().toISOString();
+const MODES = ['call', 'errand', 'email', 'write', 'research', 'meeting', 'admin', 'other'];
 const uid = () => crypto.randomUUID();
 
-function open(path = process.env.DB_PATH || 'schrodinger.db') {
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;');
-  db.exec(SCHEMA);
-  migrate(db);
-  return wrap(db);
+// ---------- drivers ----------
+async function makeDriver(url) {
+  if (url) {
+    const { Pool } = require('pg');
+    const pool = new Pool({ connectionString: url, max: Number(process.env.PG_POOL_MAX || 3), ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } });
+    return {
+      query: (text, params = []) => pool.query(text, params).then(r => r.rows),
+      tx: async fn => { const c = await pool.connect(); try { await c.query('BEGIN'); const out = await fn((t, p = []) => c.query(t, p).then(r => r.rows)); await c.query('COMMIT'); return out; } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); } },
+      close: () => pool.end(),
+    };
+  }
+  const { PGlite } = require('@electric-sql/pglite');
+  const pg = new PGlite(process.env.PGLITE_DIR || undefined);
+  await pg.waitReady;
+  return {
+    query: (text, params = []) => pg.query(text, params).then(r => r.rows),
+    tx: fn => pg.transaction(t => fn((text, params = []) => t.query(text, params).then(r => r.rows))),
+    close: () => pg.close(),
+  };
 }
 
-const MODES = ['call','errand','email','write','research','meeting','admin','other'];
-
-function migrate(db) {
-  const cols = db.prepare(`PRAGMA table_info(nodes)`).all().map(c => c.name);
-  if (!cols.includes('mode')) db.exec(`ALTER TABLE nodes ADD COLUMN mode TEXT NOT NULL DEFAULT ''`);
+async function open(url = process.env.DATABASE_URL) {
+  const d = await makeDriver(url);
+  for (const stmt of SCHEMA.split(';').map(s => s.trim()).filter(Boolean)) await d.query(stmt);
+  return wrap(d);
 }
 
-function wrap(db) {
-  const q = (sql) => db.prepare(sql);
+// Normalize rows: timestamps → ISO strings so callers compare lexically as before.
+const iso = v => v instanceof Date ? v.toISOString() : v;
+function norm(row) { if (!row) return row; for (const k of ['created_at', 'updated_at', 'last_activity_at', 'last_synced_at', 'started_at', 'finished_at']) if (k in row) row[k] = iso(row[k]); return row; }
+const one = rows => norm(rows[0]) || null;
+const all = rows => rows.map(norm);
 
-  function log(node_id, actor, action, detail = '', undo = null) {
-    q(`INSERT INTO activity (node_id, actor, action, detail, undo) VALUES (?,?,?,?,?)`)
-      .run(node_id, actor, action, detail, undo ? JSON.stringify(undo) : null);
-    q(`UPDATE nodes SET last_activity_at=? WHERE id=?`).run(now(), node_id);
+function wrap(d) {
+  const q = (t, p) => d.query(t, p).then(all);
+  const q1 = (t, p) => d.query(t, p).then(one);
+
+  async function log(node_id, actor, action, detail = '', undo = null, qq = q) {
+    await qq(`INSERT INTO activity (node_id, actor, action, detail, undo) VALUES ($1,$2,$3,$4,$5)`, [node_id, actor, action, detail, undo ? JSON.stringify(undo) : null]);
+    await qq(`UPDATE nodes SET last_activity_at=now() WHERE id=$1`, [node_id]);
   }
 
-  function getNode(id) {
-    const n = q(`SELECT * FROM nodes WHERE id=?`).get(id);
+  async function getNode(id) {
+    const n = await q1(`SELECT * FROM nodes WHERE id=$1`, [id]);
     if (!n) return null;
-    n.deps = q(`SELECT depends_on FROM deps WHERE node_id=?`).all(id).map(r => r.depends_on);
+    n.deps = (await q(`SELECT depends_on FROM deps WHERE node_id=$1`, [id])).map(r => r.depends_on);
     return n;
   }
+  const children = parent_id => parent_id
+    ? q(`SELECT * FROM nodes WHERE parent_id=$1 ORDER BY position, created_at`, [parent_id])
+    : q(`SELECT * FROM nodes WHERE parent_id IS NULL ORDER BY position, created_at`);
 
-  function children(parent_id) {
-    return q(`SELECT * FROM nodes WHERE parent_id IS ? ORDER BY position, created_at`).all(parent_id);
-  }
+  async function projectOf(id) { let n = await getNode(id); while (n && n.parent_id) n = await getNode(n.parent_id); return n; }
 
-  function projectOf(id) {
-    let n = getNode(id);
-    while (n && n.parent_id) n = getNode(n.parent_id);
-    return n;
-  }
-
-  function descendants(id) {
-    return q(`WITH RECURSIVE sub(id) AS (
-      SELECT id FROM nodes WHERE parent_id=?
+  const descendants = id => q(`WITH RECURSIVE sub(id) AS (
+      SELECT id FROM nodes WHERE parent_id=$1
       UNION ALL SELECT n.id FROM nodes n JOIN sub ON n.parent_id=sub.id
-    ) SELECT n.* FROM nodes n JOIN sub ON n.id=sub.id`).all(id);
+    ) SELECT n.* FROM nodes n JOIN sub ON n.id=sub.id ORDER BY n.position, n.created_at`, [id]);
+
+  async function nextPosition(parent_id) {
+    const r = parent_id ? await q1(`SELECT COALESCE(MAX(position),-1)+1 AS p FROM nodes WHERE parent_id=$1`, [parent_id])
+      : await q1(`SELECT COALESCE(MAX(position),-1)+1 AS p FROM nodes WHERE parent_id IS NULL`);
+    return Number(r.p);
   }
 
-  function nextPosition(parent_id) {
-    const r = q(`SELECT COALESCE(MAX(position),-1)+1 AS p FROM nodes WHERE parent_id IS ?`).get(parent_id);
-    return r.p;
-  }
-
-  function createNode(fields, actor = 'human') {
+  async function createNode(fields, actor = 'human') {
     const id = fields.id || uid();
     const kind = fields.parent_id ? 'task' : 'project';
-    const position = fields.position ?? nextPosition(fields.parent_id || null);
-    q(`INSERT INTO nodes (id,parent_id,kind,title,goal,success_criteria,constraints,assignee,state,due,position,mode)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    if (fields.mode && !MODES.includes(fields.mode)) throw new Error(`invalid mode; use one of ${MODES.join(', ')} or empty`);
+    const position = fields.position ?? await nextPosition(fields.parent_id || null);
+    await q(`INSERT INTO nodes (id,parent_id,kind,title,goal,success_criteria,constraints,assignee,state,due,position,mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [
       id, fields.parent_id || null, kind, fields.title || '', fields.goal || '', fields.success_criteria || '',
       fields.constraints || '', fields.assignee || (kind === 'project' ? 'unassigned' : 'human'),
-      fields.state || 'todo', fields.due || null, position, fields.mode || '');
-    for (const d of fields.deps || []) q(`INSERT OR IGNORE INTO deps VALUES (?,?)`).run(id, d);
-    log(id, actor, 'create', fields.title || '');
+      fields.state || 'todo', fields.due || null, position, fields.mode || '']);
+    for (const dep of fields.deps || []) await q(`INSERT INTO deps VALUES ($1,$2) ON CONFLICT DO NOTHING`, [id, dep]);
+    await log(id, actor, 'create', fields.title || '');
     return getNode(id);
   }
 
-  const EDITABLE = ['title','goal','success_criteria','constraints','assignee','state','project_status','due','acceptance_note','artifact','collapsed','mode'];
+  const EDITABLE = ['title', 'goal', 'success_criteria', 'constraints', 'assignee', 'state', 'project_status', 'due', 'acceptance_note', 'artifact', 'collapsed', 'mode'];
 
-  function updateNode(id, patch, actor = 'human', detail = '') {
-    const before = getNode(id);
+  async function updateNode(id, patch, actor = 'human', detail = '') {
+    const before = await getNode(id);
     if (!before) throw new Error('not found');
     const keys = Object.keys(patch).filter(k => EDITABLE.includes(k));
     if (patch.mode !== undefined && patch.mode !== '' && !MODES.includes(patch.mode)) throw new Error(`invalid mode; use one of ${MODES.join(', ')} or empty`);
     if (keys.length) {
-      const sets = keys.map(k => `${k}=?`).join(',');
-      q(`UPDATE nodes SET ${sets}, updated_at=? WHERE id=?`).run(...keys.map(k => patch[k]), now(), id);
+      const sets = keys.map((k, i) => `${k}=$${i + 1}`).join(',');
+      await q(`UPDATE nodes SET ${sets}, updated_at=now() WHERE id=$${keys.length + 1}`, [...keys.map(k => patch[k] === undefined ? null : patch[k]), id]);
     }
     if (patch.deps) {
-      q(`DELETE FROM deps WHERE node_id=?`).run(id);
-      for (const d of patch.deps) if (d !== id) q(`INSERT OR IGNORE INTO deps VALUES (?,?)`).run(id, d);
+      await q(`DELETE FROM deps WHERE node_id=$1`, [id]);
+      for (const dep of patch.deps) if (dep !== id) await q(`INSERT INTO deps VALUES ($1,$2) ON CONFLICT DO NOTHING`, [id, dep]);
     }
-    const undo = {};
-    for (const k of keys) undo[k] = before[k];
-    if (patch.deps) undo.deps = before.deps;
-    const changed = keys.filter(k => before[k] !== patch[k]);
-    if (changed.length || patch.deps) log(id, actor, 'update', detail || changed.map(k => `${k}: ${before[k]} → ${patch[k]}`).join('; '), undo);
+    const undo = {}; for (const k of keys) undo[k] = before[k]; if (patch.deps) undo.deps = before.deps;
+    const changed = keys.filter(k => String(before[k] ?? '') !== String(patch[k] ?? ''));
+    if (changed.length || patch.deps) await log(id, actor, 'update', detail || changed.map(k => `${k}: ${before[k]} → ${patch[k]}`).join('; '), undo);
     return getNode(id);
   }
 
-  function moveNode(id, parent_id, position, actor = 'human') {
-    const n = getNode(id);
+  async function moveNode(id, parent_id, position, actor = 'human') {
+    const n = await getNode(id);
     if (!n) throw new Error('not found');
-    if (parent_id === id || descendants(id).some(d => d.id === parent_id)) throw new Error('cannot move into own subtree');
-    const siblings = children(parent_id).filter(s => s.id !== id);
+    if (parent_id === id || (await descendants(id)).some(x => x.id === parent_id)) throw new Error('cannot move into own subtree');
+    const siblings = (await children(parent_id)).filter(s => s.id !== id);
     siblings.splice(Math.max(0, Math.min(position, siblings.length)), 0, n);
     const kind = parent_id ? 'task' : 'project';
-    db.exec('BEGIN');
-    try {
-      siblings.forEach((s, i) => q(`UPDATE nodes SET position=? WHERE id=?`).run(i, s.id));
-      q(`UPDATE nodes SET parent_id=?, kind=?, updated_at=? WHERE id=?`).run(parent_id, kind, now(), id);
-      // re-kind descendants (all tasks)
-      for (const d of descendants(id)) q(`UPDATE nodes SET kind='task' WHERE id=?`).run(d.id);
-      // cascade position fix on old parent
-      children(n.parent_id).forEach((s, i) => q(`UPDATE nodes SET position=? WHERE id=?`).run(i, s.id));
-      db.exec('COMMIT');
-    } catch (e) { db.exec('ROLLBACK'); throw e; }
-    log(id, actor, 'move', `→ ${parent_id || 'root'} @${position}`, { parent_id: n.parent_id, position: n.position });
+    const desc = await descendants(id);
+    const oldSiblings = (await children(n.parent_id)).filter(s => s.id !== id);
+    await d.tx(async t => {
+      for (let i = 0; i < siblings.length; i++) await t(`UPDATE nodes SET position=$1 WHERE id=$2`, [i, siblings[i].id]);
+      await t(`UPDATE nodes SET parent_id=$1, kind=$2, updated_at=now() WHERE id=$3`, [parent_id, kind, id]);
+      for (const x of desc) await t(`UPDATE nodes SET kind='task' WHERE id=$1`, [x.id]);
+      if (n.parent_id !== parent_id) for (let i = 0; i < oldSiblings.length; i++) await t(`UPDATE nodes SET position=$1 WHERE id=$2`, [i, oldSiblings[i].id]);
+    });
+    await log(id, actor, 'move', `→ ${parent_id || 'root'} @${position}`, { parent_id: n.parent_id, position: n.position });
     return getNode(id);
   }
 
-  function deleteNode(id, actor = 'human') {
-    const n = getNode(id);
-    if (!n) return;
-    q(`DELETE FROM nodes WHERE id=?`).run(id);
-    children(n.parent_id).forEach((s, i) => q(`UPDATE nodes SET position=? WHERE id=?`).run(i, s.id));
+  async function deleteNode(id) {
+    const n = await getNode(id); if (!n) return;
+    await q(`DELETE FROM nodes WHERE id=$1`, [id]);
+    const sib = await children(n.parent_id);
+    for (let i = 0; i < sib.length; i++) await q(`UPDATE nodes SET position=$1 WHERE id=$2`, [i, sib[i].id]);
   }
 
-  // Leaf tasks under a node; progress = done leaves / leaves.
-  function progress(id) {
-    const desc = descendants(id).filter(d => d.kind === 'task');
-    const ids = new Set(desc.map(d => d.id));
-    const parents = new Set(desc.filter(d => ids.has(d.parent_id)).map(d => d.parent_id));
-    const leaves = desc.filter(d => !parents.has(d.id));
+  async function progress(id) {
+    const desc = (await descendants(id)).filter(x => x.kind === 'task');
+    const ids = new Set(desc.map(x => x.id));
+    const parents = new Set(desc.filter(x => ids.has(x.parent_id)).map(x => x.parent_id));
+    const leaves = desc.filter(x => !parents.has(x.id));
     const done = leaves.filter(l => l.state === 'done').length;
     return { total: leaves.length, done, pct: leaves.length ? Math.round(100 * done / leaves.length) : 0 };
   }
 
-  function depsSatisfied(id) {
-    const deps = q(`SELECT d.depends_on, n.state FROM deps d JOIN nodes n ON n.id=d.depends_on WHERE d.node_id=?`).all(id);
-    return deps.every(d => d.state === 'done');
+  async function depsSatisfied(id) {
+    const deps = await q(`SELECT n.state FROM deps dd JOIN nodes n ON n.id=dd.depends_on WHERE dd.node_id=$1`, [id]);
+    return deps.every(x => x.state === 'done');
   }
 
-  // Full tree for the UI.
-  function tree() {
-    const all = q(`SELECT * FROM nodes ORDER BY position, created_at`).all();
-    const deps = q(`SELECT * FROM deps`).all();
-    const lastAct = q(`SELECT node_id, action, detail, actor, MAX(id) AS id FROM activity GROUP BY node_id`).all();
+  async function tree() {
+    const nodes = await q(`SELECT * FROM nodes ORDER BY position, created_at`);
+    const deps = await q(`SELECT * FROM deps`);
+    const lastAct = await q(`SELECT DISTINCT ON (node_id) node_id, action, detail, actor, id FROM activity ORDER BY node_id, id DESC`);
     const actMap = Object.fromEntries(lastAct.map(a => [a.node_id, a]));
-    const byId = Object.fromEntries(all.map(n => [n.id, { ...n, deps: [], children: [], last_activity: actMap[n.id] || null }]));
-    for (const d of deps) byId[d.node_id]?.deps.push(d.depends_on);
+    const byId = Object.fromEntries(nodes.map(n => [n.id, { ...n, deps: [], children: [], last_activity: actMap[n.id] || null }]));
+    for (const x of deps) byId[x.node_id]?.deps.push(x.depends_on);
     const roots = [];
-    for (const n of all) {
-      const node = byId[n.id];
-      if (n.parent_id && byId[n.parent_id]) byId[n.parent_id].children.push(node); else roots.push(node);
-    }
-    for (const r of roots) r.progress = progress(r.id);
+    for (const n of nodes) { const node = byId[n.id]; if (n.parent_id && byId[n.parent_id]) byId[n.parent_id].children.push(node); else roots.push(node); }
+    const leafStats = node => { if (!node.children.length) return { t: 1, d: node.state === 'done' ? 1 : 0 }; let t = 0, dn = 0; for (const c of node.children) { const s = leafStats(c); t += s.t; dn += s.d; } return { t, d: dn }; };
+    for (const r of roots) { let t = 0, dn = 0; for (const c of r.children) { const s = leafStats(c); t += s.t; dn += s.d; } r.progress = { total: t, done: dn, pct: t ? Math.round(100 * dn / t) : 0 }; }
     return roots;
   }
 
-  // Open leaf tasks grouped by mode, across projects (for batching work).
-  function byMode(assignee = null) {
-    const rows = q(`SELECT n.*, p.title AS project_title FROM nodes n
-      JOIN nodes p ON p.id = (WITH RECURSIVE up(id,parent_id) AS (SELECT id,parent_id FROM nodes WHERE id=n.id UNION ALL SELECT x.id,x.parent_id FROM nodes x JOIN up ON x.id=up.parent_id) SELECT id FROM up WHERE parent_id IS NULL)
-      WHERE n.kind='task' AND n.state NOT IN ('done') AND p.project_status='active'
+  async function byMode(assignee = null) {
+    const rows = await q(`WITH RECURSIVE up(id, root) AS (
+        SELECT id, id FROM nodes WHERE parent_id IS NULL
+        UNION ALL SELECT n.id, up.root FROM nodes n JOIN up ON n.parent_id=up.id)
+      SELECT n.*, p.title AS project_title FROM nodes n JOIN up ON up.id=n.id JOIN nodes p ON p.id=up.root
+      WHERE n.kind='task' AND n.state <> 'done' AND p.project_status='active'
         AND NOT EXISTS (SELECT 1 FROM nodes c WHERE c.parent_id=n.id)
-        ${assignee ? 'AND n.assignee=?' : ''}
-      ORDER BY n.mode, COALESCE(n.due,'9999'), p.position, n.position`).all(...(assignee ? [assignee] : []));
+        ${assignee ? 'AND n.assignee=$1' : ''}
+      ORDER BY n.mode, COALESCE(n.due,'9999'), p.position, n.position`, assignee ? [assignee] : []);
     const groups = {};
     for (const r of rows) (groups[r.mode || 'unsorted'] ||= []).push(r);
     return groups;
   }
 
   // Inbox
-  function propose(project_id, type, summary, payload = {}, node_id = null) {
-    // dedupe: identical proposal already open, or previously accepted/dismissed by the human → do not re-raise
-    const dup = q(`SELECT id FROM inbox WHERE project_id=? AND type=? AND node_id IS ? AND summary=?`).get(project_id, type, node_id, summary);
+  async function propose(project_id, type, summary, payload = {}, node_id = null) {
+    const dup = node_id
+      ? await q1(`SELECT id FROM inbox WHERE project_id=$1 AND type=$2 AND node_id=$3 AND summary=$4`, [project_id, type, node_id, summary])
+      : await q1(`SELECT id FROM inbox WHERE project_id=$1 AND type=$2 AND node_id IS NULL AND summary=$3`, [project_id, type, summary]);
     if (dup) return dup.id;
     const id = uid();
-    q(`INSERT INTO inbox (id,project_id,node_id,type,summary,payload) VALUES (?,?,?,?,?,?)`)
-      .run(id, project_id, node_id, type, summary, JSON.stringify(payload));
+    await q(`INSERT INTO inbox (id,project_id,node_id,type,summary,payload) VALUES ($1,$2,$3,$4,$5,$6)`, [id, project_id, node_id, type, summary, JSON.stringify(payload)]);
     return id;
   }
-  function inbox(status = 'open') {
-    return q(`SELECT * FROM inbox WHERE status=? ORDER BY created_at DESC`).all(status).map(r => ({ ...r, payload: JSON.parse(r.payload) }));
-  }
-  function getProposal(id) { const r = q(`SELECT * FROM inbox WHERE id=?`).get(id); return r && { ...r, payload: JSON.parse(r.payload) }; }
-  function setProposalStatus(id, status) { q(`UPDATE inbox SET status=? WHERE id=?`).run(status, id); }
+  const inbox = (status = 'open') => q(`SELECT * FROM inbox WHERE status=$1 ORDER BY created_at DESC`, [status]).then(rs => rs.map(r => ({ ...r, payload: JSON.parse(r.payload) })));
+  const getProposal = id => q1(`SELECT * FROM inbox WHERE id=$1`, [id]).then(r => r && { ...r, payload: JSON.parse(r.payload) });
+  const setProposalStatus = (id, status) => q(`UPDATE inbox SET status=$1 WHERE id=$2`, [status, id]);
 
-  // Apply a proposal (human clicked accept). Structural changes happen only here.
-  function acceptProposal(id, edits = {}) {
-    const p = getProposal(id);
+  async function acceptProposal(id, edits = {}) {
+    const p = await getProposal(id);
     if (!p || p.status !== 'open') throw new Error('proposal not open');
     const payload = { ...p.payload, ...edits };
     switch (p.type) {
-      case 'new_task':
-        createNode({ parent_id: payload.parent_id || p.project_id, title: payload.title, assignee: payload.assignee || 'ai', due: payload.due, mode: payload.mode || '' }, 'ai');
-        break;
-      case 'decompose':
-        for (const t of payload.subtasks || []) createNode({ parent_id: p.node_id, title: t.title, assignee: t.assignee || 'ai' }, 'ai');
-        break;
-      case 'reassign':
-        updateNode(p.node_id, { assignee: payload.assignee }, 'ai', `reassigned to ${payload.assignee} (proposal accepted)`);
-        break;
-      case 'stale':
-      case 'blocked_chain':
-      case 'no_path':
-        // informational; accepting just acknowledges
-        break;
+      case 'new_task': await createNode({ parent_id: payload.parent_id || p.project_id, title: payload.title, assignee: payload.assignee || 'ai', due: payload.due, mode: payload.mode || '' }, 'ai'); break;
+      case 'decompose': for (const t of payload.subtasks || []) await createNode({ parent_id: p.node_id, title: t.title, assignee: t.assignee || 'ai' }, 'ai'); break;
+      case 'reassign': await updateNode(p.node_id, { assignee: payload.assignee }, 'ai', `reassigned to ${payload.assignee} (proposal accepted)`); break;
+      case 'stale': case 'blocked_chain': case 'no_path': break;
       default: throw new Error('unknown proposal type');
     }
-    setProposalStatus(id, 'accepted');
+    await setProposalStatus(id, 'accepted');
   }
 
-  function activity(node_id, limit = 50) {
-    return q(`SELECT * FROM activity WHERE node_id=? ORDER BY id DESC LIMIT ?`).all(node_id, limit);
-  }
-  function recentActivity(limit = 100) {
-    return q(`SELECT a.*, n.title FROM activity a JOIN nodes n ON n.id=a.node_id ORDER BY a.id DESC LIMIT ?`).all(limit);
-  }
-  function undoActivity(activity_id) {
-    const a = q(`SELECT * FROM activity WHERE id=?`).get(activity_id);
+  const activity = (node_id, limit = 50) => q(`SELECT * FROM activity WHERE node_id=$1 ORDER BY id DESC LIMIT $2`, [node_id, limit]);
+  const recentActivity = (limit = 100) => q(`SELECT a.*, n.title FROM activity a JOIN nodes n ON n.id=a.node_id ORDER BY a.id DESC LIMIT $1`, [limit]);
+  async function undoActivity(activity_id) {
+    const a = await q1(`SELECT * FROM activity WHERE id=$1`, [activity_id]);
     if (!a || !a.undo) throw new Error('nothing to undo');
     const undo = JSON.parse(a.undo);
     if (a.action === 'move') return moveNode(a.node_id, undo.parent_id, undo.position, 'human');
     return updateNode(a.node_id, undo, 'human', `undo #${activity_id}`);
   }
 
-  function saveDigest(project_id, day, body) {
-    q(`INSERT INTO digests (project_id, day, body) VALUES (?,?,?) ON CONFLICT(project_id, day) DO UPDATE SET body=excluded.body, created_at=excluded.created_at`).run(project_id, day, body);
-  }
-  function digests(project_id, limit = 7) {
-    return q(`SELECT * FROM digests WHERE project_id=? ORDER BY day DESC LIMIT ?`).all(project_id, limit);
-  }
+  const saveDigest = (project_id, day, body) => q(`INSERT INTO digests (project_id, day, body) VALUES ($1,$2,$3) ON CONFLICT (project_id, day) DO UPDATE SET body=excluded.body, created_at=now()`, [project_id, day, body]);
+  const digests = (project_id, limit = 7) => q(`SELECT * FROM digests WHERE project_id=$1 ORDER BY day DESC LIMIT $2`, [project_id, limit]);
 
   // Settings
-  function getSetting(key) { const r = q(`SELECT value FROM settings WHERE key=?`).get(key); return r ? r.value : null; }
-  function setSetting(key, value) { q(`INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, value); }
-  function feedToken() { let t = getSetting('feed_token'); if (!t) { t = crypto.randomBytes(16).toString('hex'); setSetting('feed_token', t); } return t; }
+  const getSetting = key => q1(`SELECT value FROM settings WHERE key=$1`, [key]).then(r => r ? r.value : null);
+  const setSetting = (key, value) => q(`INSERT INTO settings (key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=excluded.value`, [key, value]);
+  async function feedToken() { let t = await getSetting('feed_token'); if (!t) { t = crypto.randomBytes(16).toString('hex'); await setSetting('feed_token', t); } return t; }
 
   // Calendars
-  function addCalendar({ name, kind = 'ics', url = '', project_id = null }) {
+  async function addCalendar({ name, kind = 'ics', url = '', project_id = null }) {
     const id = uid();
-    q(`INSERT INTO calendars (id,name,kind,url,project_id) VALUES (?,?,?,?,?)`).run(id, name, kind, url, project_id);
+    await q(`INSERT INTO calendars (id,name,kind,url,project_id) VALUES ($1,$2,$3,$4,$5)`, [id, name, kind, url, project_id]);
     return getCalendar(id);
   }
-  function getCalendar(id) { return q(`SELECT * FROM calendars WHERE id=?`).get(id); }
-  function calendars() { return q(`SELECT c.*, (SELECT COUNT(*) FROM events e WHERE e.calendar_id=c.id) AS event_count FROM calendars c ORDER BY created_at`).all(); }
-  function updateCalendar(id, patch) {
-    const keys = Object.keys(patch).filter(k => ['name','kind','url','project_id','enabled','last_synced_at','last_error'].includes(k));
-    if (keys.length) q(`UPDATE calendars SET ${keys.map(k => `${k}=?`).join(',')} WHERE id=?`).run(...keys.map(k => patch[k]), id);
+  const getCalendar = id => q1(`SELECT * FROM calendars WHERE id=$1`, [id]);
+  const calendars = () => q(`SELECT c.*, (SELECT COUNT(*)::int FROM events e WHERE e.calendar_id=c.id) AS event_count FROM calendars c ORDER BY created_at`);
+  async function updateCalendar(id, patch) {
+    const keys = Object.keys(patch).filter(k => ['name', 'kind', 'url', 'project_id', 'enabled', 'last_synced_at', 'last_error'].includes(k));
+    if (keys.length) await q(`UPDATE calendars SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')} WHERE id=$${keys.length + 1}`, [...keys.map(k => patch[k]), id]);
     return getCalendar(id);
   }
-  function deleteCalendar(id) { q(`DELETE FROM calendars WHERE id=?`).run(id); }
-  function replaceEvents(calendar_id, evs) {
-    db.exec('BEGIN');
-    try {
-      q(`DELETE FROM events WHERE calendar_id=?`).run(calendar_id);
-      const ins = q(`INSERT OR REPLACE INTO events (calendar_id,uid,title,start,end,all_day,description,location,url,recurring,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-      for (const e of evs) ins.run(calendar_id, e.uid, e.title, e.start, e.end, e.all_day ? 1 : 0, e.description || '', e.location || '', e.url || '', e.recurring ? 1 : 0, e.status || '');
-      q(`UPDATE calendars SET last_synced_at=?, last_error=NULL WHERE id=?`).run(now(), calendar_id);
-      db.exec('COMMIT');
-    } catch (e) { db.exec('ROLLBACK'); throw e; }
-  }
-  // Events in [from, to) — ISO strings; all-day dates compare lexically with ISO datetimes correctly enough for day granularity.
+  const deleteCalendar = id => q(`DELETE FROM calendars WHERE id=$1`, [id]);
+  const replaceEvents = (calendar_id, evs) => d.tx(async t => {
+    await t(`DELETE FROM events WHERE calendar_id=$1`, [calendar_id]);
+    for (const e of evs) await t(`INSERT INTO events (calendar_id,uid,title,start,"end",all_day,description,location,url,recurring,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (calendar_id, uid) DO UPDATE SET title=excluded.title, start=excluded.start, "end"=excluded."end"`,
+      [calendar_id, e.uid, e.title, e.start, e.end, e.all_day ? 1 : 0, e.description || '', e.location || '', e.url || '', e.recurring ? 1 : 0, e.status || '']);
+    await t(`UPDATE calendars SET last_synced_at=now(), last_error=NULL WHERE id=$1`, [calendar_id]);
+  });
   function events({ from, to, project_id = null } = {}) {
     const f = from || new Date().toISOString().slice(0, 10);
     const t = to || new Date(Date.now() + 14 * 86400e3).toISOString().slice(0, 10);
     return q(`SELECT e.*, c.name AS calendar_name, c.project_id FROM events e JOIN calendars c ON c.id=e.calendar_id
-      WHERE c.enabled=1 AND e.end >= ? AND e.start < ? ${project_id ? 'AND (c.project_id IS NULL OR c.project_id=?)' : ''}
-      ORDER BY e.start`).all(f, t, ...(project_id ? [project_id] : []));
+      WHERE c.enabled=1 AND e."end" >= $1 AND e.start < $2 ${project_id ? 'AND (c.project_id IS NULL OR c.project_id=$3)' : ''}
+      ORDER BY e.start`, project_id ? [f, t, project_id] : [f, t]);
   }
-  // Tasks with due dates (for the outbound feed)
-  function dueTasks() {
-    return q(`SELECT n.* FROM nodes n WHERE n.kind='task' AND n.due IS NOT NULL ORDER BY n.due`).all().map(t => ({ ...t, project: projectOf(t.id) }));
+  async function dueTasks() {
+    const rows = await q(`WITH RECURSIVE up(id, root) AS (SELECT id, id FROM nodes WHERE parent_id IS NULL UNION ALL SELECT n.id, up.root FROM nodes n JOIN up ON n.parent_id=up.id)
+      SELECT n.*, row_to_json(p) AS project FROM nodes n JOIN up ON up.id=n.id JOIN nodes p ON p.id=up.root WHERE n.kind='task' AND n.due IS NOT NULL ORDER BY n.due`);
+    return rows.map(r => ({ ...r, project: norm(r.project) }));
   }
 
-  function startRun(project_id) { return q(`INSERT INTO harness_runs (project_id) VALUES (?)`).run(project_id).lastInsertRowid; }
-  function finishRun(id, status, logText) { q(`UPDATE harness_runs SET finished_at=?, status=?, log=? WHERE id=?`).run(now(), status, logText, id); }
-  function runs(limit = 20) { return q(`SELECT r.*, n.title FROM harness_runs r LEFT JOIN nodes n ON n.id=r.project_id ORDER BY r.id DESC LIMIT ?`).all(limit); }
+  // Workspace files (per project)
+  const fileList = project_id => q(`SELECT path, length(content) AS bytes FROM files WHERE project_id=$1 ORDER BY path`, [project_id]).then(rs => rs.map(r => ({ path: r.path, bytes: Number(r.bytes) })));
+  const fileRead = (project_id, path) => q1(`SELECT content FROM files WHERE project_id=$1 AND path=$2`, [project_id, path]).then(r => r ? r.content : null);
+  const fileWrite = (project_id, path, content) => q(`INSERT INTO files (project_id, path, content) VALUES ($1,$2,$3) ON CONFLICT (project_id, path) DO UPDATE SET content=excluded.content, updated_at=now()`, [project_id, path, content]);
+
+  const startRun = project_id => q1(`INSERT INTO harness_runs (project_id) VALUES ($1) RETURNING id`, [project_id]).then(r => r.id);
+  const finishRun = (id, status, logText) => q(`UPDATE harness_runs SET finished_at=now(), status=$1, log=$2 WHERE id=$3`, [status, logText, id]);
+  const runs = (limit = 20) => q(`SELECT r.*, n.title FROM harness_runs r LEFT JOIN nodes n ON n.id=r.project_id ORDER BY r.id DESC LIMIT $1`, [limit]);
 
   return {
-    raw: db, log, getNode, children, projectOf, descendants, createNode, updateNode, moveNode, deleteNode,
+    raw: d, log, getNode, children, projectOf, descendants, createNode, updateNode, moveNode, deleteNode,
     progress, depsSatisfied, tree, byMode, MODES, propose, inbox, getProposal, setProposalStatus, acceptProposal,
     activity, recentActivity, undoActivity, saveDigest, digests, startRun, finishRun, runs,
     getSetting, setSetting, feedToken, addCalendar, getCalendar, calendars, updateCalendar, deleteCalendar, replaceEvents, events, dueTasks,
-    close: () => db.close(),
+    fileList, fileRead, fileWrite,
+    close: () => d.close(),
   };
 }
 
-module.exports = { open };
+module.exports = { open, MODES };

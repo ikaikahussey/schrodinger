@@ -13,7 +13,5 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: DB_PATH
-        value: /data/schrodinger.db
-      - key: WORKSPACE_DIR
-        value: /data/workspace
+      - key: PGLITE_DIR
+        value: /data/pglite

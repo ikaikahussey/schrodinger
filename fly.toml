@@ -6,8 +6,7 @@ primary_region = "lax"
 
 [env]
   PORT = "3000"
-  DB_PATH = "/data/schrodinger.db"
-  WORKSPACE_DIR = "/data/workspace"
+  PGLITE_DIR = "/data/pglite"
 
 [[mounts]]
   source = "data"

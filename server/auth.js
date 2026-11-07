@@ -36,7 +36,7 @@ function createAuth({ password = process.env.APP_PASSWORD, secret, maxAgeDays = 
       return res.type('html').send(loginPage());
     }
     if (p === '/logout') { res.set('set-cookie', 'sid=; Path=/; Max-Age=0'); return res.redirect('/login'); }
-    if (PUBLIC.has(p) || p.startsWith('/calendar/')) return next(); // ICS feed is token-gated on its own
+    if (PUBLIC.has(p) || p.startsWith('/calendar/') || p === '/api/harness/cron') return next(); // ICS feed is token-gated on its own
     if (valid(cookies(req).sid)) return next();
     if (p.startsWith('/api/')) return res.status(401).json({ error: 'unauthorized' });
     return res.redirect('/login');

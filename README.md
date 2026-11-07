@@ -10,16 +10,18 @@ npm run dev        # seeds sample projects on first run, serves http://localhost
 npm test
 ```
 
-Without `ANTHROPIC_API_KEY` the harness uses a deterministic mock LLM. Copy `.env.example` to `.env` (or export the variables) to use the Claude API. Node ≥ 22.13 (uses built-in `node:sqlite`).
+Without `ANTHROPIC_API_KEY` the harness uses a deterministic mock LLM. Copy `.env.example` to `.env` (or export the variables) to use the Claude API. Node ≥ 22.
 
 ## Deploy
 
-Needs a host that runs a persistent Node process with a writable disk (SQLite + sub-agent child processes + scheduler). Serverless (Vercel/Netlify) does not fit. Set `APP_PASSWORD` before exposing it; a login page then gates the UI and API (the iCal feed stays token-gated).
+Storage is Postgres. With `DATABASE_URL` unset the app runs an embedded Postgres (PGlite) — in memory by default, on disk with `PGLITE_DIR`. Set `APP_PASSWORD` before exposing it; a login page then gates the UI and API (the iCal feed stays token-gated).
+
+- **Vercel** (primary): `api/index.js` serves the app as one function; `vercel.json` rewrites all routes to it and schedules `/api/harness/cron` hourly. Env: `DATABASE_URL` (Supabase/Neon pooled URL), `APP_PASSWORD`, `CRON_SECRET`, optional `ANTHROPIC_API_KEY`. Sub-agents run in-process inside the cron invocation (`maxDuration` 300 s). The static `public/` folder is only `logo.svg`; `index.html` is served by Express so the login gate covers it.
 
 - **Fly.io**: `fly launch --copy-config --no-deploy` → `fly volumes create data --size 1` → `fly secrets set APP_PASSWORD=… ANTHROPIC_API_KEY=…` → `fly deploy`. Config in `fly.toml` (volume at `/data`, machine never auto-stops so the harness keeps its schedule).
 - **Render**: `render.yaml` blueprint (Docker, 1 GB disk at `/data`). Set the two secrets in the dashboard.
 - **Railway**: `railway.json`; add a volume mounted at `/data` and the two variables.
-- **Any Docker host**: `docker build -t schrodinger . && docker run -p 3000:3000 -v schrodinger-data:/data -e APP_PASSWORD=… -e ANTHROPIC_API_KEY=… schrodinger`.
+- **Any Docker host**: `docker build -t schrodinger . && docker run -p 3000:3000 -v schrodinger-data:/data -e APP_PASSWORD=… -e ANTHROPIC_API_KEY=… schrodinger` (embedded Postgres persisted under `/data`; or set `DATABASE_URL`).
 
 Health check: `GET /healthz`.
 
@@ -42,7 +44,7 @@ Rejecting a draft returns it to `todo` with your note appended; the next run red
 
 ## Harness
 
-`harness/index.js` runs every `HARNESS_INTERVAL_MS` and on demand (`Run harness now`, or per-project `Run now`). For each active project it spawns `harness/agent.js <project_id>` as a child process. Each agent:
+`harness/index.js` runs every `HARNESS_INTERVAL_MS` (long-running mode) or on each cron hit (Vercel), and on demand (`Run harness now`, or per-project `Run now`). For each active project it runs `harness/agent.js` — as a child process when a shared Postgres is configured, in-process otherwise. Each agent:
 
 1. Executes up to `MAX_TASKS_PER_RUN` ready AI tasks → `review`.
 2. Flags blocked chains and AI tasks waiting on human tasks.
@@ -66,7 +68,8 @@ Default is the dark console theme: black background, warm pastel rail segments w
 ## Layout
 
 ```
-server/db.js      data layer (node:sqlite)
+server/db.js      data layer (Postgres via pg, or embedded PGlite)
+api/index.js      Vercel function entry
 server/app.js     REST API
 server/index.js   entry
 server/seed.js    sample data
@@ -85,7 +88,7 @@ Each sub-agent runs an agentic loop (`harness/llm.js`, up to `AGENT_MAX_TURNS`) 
 |---|---|
 | `project_context` | goal, criteria, constraints, all tasks, existing artifacts |
 | `web_fetch` | public http(s) URL → text, read-only |
-| `list_files` / `read_file` / `write_file` | jailed to `workspace/<project_id>/` |
+| `list_files` / `read_file` / `write_file` | per-project workspace stored in the `files` table |
 | `finish` | submits the draft (+ questions for the human) |
 
 There is no tool that sends, posts, commits, or contacts anyone. Without an API key a scripted mock model drives the same loop.

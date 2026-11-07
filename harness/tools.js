@@ -1,18 +1,17 @@
 // Tools available to a project sub-agent. Draft-only by construction: there is no tool that sends,
-// posts, commits, or contacts anyone. File tools are jailed to workspace/<project_id>/.
-const fs = require('node:fs');
+// posts, commits, or contacts anyone. File tools are jailed to the project's own workspace (stored in the `files` table).
 const path = require('node:path');
 
-const workspaceRoot = () => process.env.WORKSPACE_DIR || path.join(__dirname, '..', 'workspace');
 const MAX_FETCH_BYTES = 200_000;
 const MAX_FILE_BYTES = 500_000;
 
 function makeTools({ db, project, task }) {
-  const dir = path.join(workspaceRoot(), project.id);
-  fs.mkdirSync(dir, { recursive: true });
+  // Normalize a workspace-relative path; reject escapes and absolute paths.
   const safe = rel => {
-    const p = path.resolve(dir, rel || '');
-    if (p !== dir && !p.startsWith(dir + path.sep)) throw new Error('path escapes project workspace');
+    const raw = String(rel || '').replace(/\\/g, '/');
+    if (!raw || raw.startsWith('/') || /^[a-zA-Z]:/.test(raw) || raw.split('/').includes('..')) throw new Error('path escapes project workspace');
+    const p = path.posix.normalize(raw);
+    if (!p || p === '.' || p.startsWith('../')) throw new Error('path escapes project workspace');
     return p;
   };
 
@@ -27,8 +26,8 @@ function makeTools({ db, project, task }) {
   ];
 
   const handlers = {
-    project_context() {
-      const tasks = db.descendants(project.id).map(t => ({ id: t.id, title: t.title, assignee: t.assignee, state: t.state, mode: t.mode, due: t.due, acceptance_note: t.acceptance_note || undefined, artifact: t.artifact ? t.artifact.slice(0, 2000) : undefined, parent_id: t.parent_id === project.id ? undefined : t.parent_id }));
+    async project_context() {
+      const tasks = (await db.descendants(project.id)).map(t => ({ id: t.id, title: t.title, assignee: t.assignee, state: t.state, mode: t.mode, due: t.due, acceptance_note: t.acceptance_note || undefined, artifact: t.artifact ? t.artifact.slice(0, 2000) : undefined, parent_id: t.parent_id === project.id ? undefined : t.parent_id }));
       return { project: { title: project.title, goal: project.goal, success_criteria: project.success_criteria, constraints: project.constraints }, current_task_id: task.id, tasks };
     },
     async web_fetch({ url }) {
@@ -44,28 +43,25 @@ function makeTools({ db, project, task }) {
         return { status: r.status, content_type: ct, text };
       } finally { clearTimeout(to); }
     },
-    list_files({ subdir } = {}) {
-      const base = safe(subdir);
-      if (!fs.existsSync(base)) return { files: [] };
-      const out = [];
-      (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out.push({ path: path.relative(dir, p), bytes: fs.statSync(p).size }); } })(base);
-      return { files: out };
+    async list_files({ subdir } = {}) {
+      const files = await db.fileList(project.id);
+      const pre = subdir ? safe(subdir).replace(/\/?$/, '/') : '';
+      return { files: files.filter(f => f.path.startsWith(pre)) };
     },
-    read_file({ path: rel }) {
+    async read_file({ path: rel }) {
       const p = safe(rel);
-      const st = fs.statSync(p);
-      if (st.size > MAX_FILE_BYTES) throw new Error('file too large');
-      return { path: rel, content: fs.readFileSync(p, 'utf8') };
+      const content = await db.fileRead(project.id, p);
+      if (content === null) throw new Error('no such file');
+      return { path: p, content };
     },
-    write_file({ path: rel, content }) {
+    async write_file({ path: rel, content }) {
       const p = safe(rel);
       if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('content too large');
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, content);
-      return { path: rel, bytes: Buffer.byteLength(content) };
+      await db.fileWrite(project.id, p, content);
+      return { path: p, bytes: Buffer.byteLength(content) };
     },
-    calendar_events({ from, to } = {}) {
-      return { events: db.events({ from, to, project_id: project.id }).map(e => ({ title: e.title, start: e.start, end: e.end, all_day: !!e.all_day, location: e.location || undefined, calendar: e.calendar_name })) };
+    async calendar_events({ from, to } = {}) {
+      return { events: (await db.events({ from, to, project_id: project.id })).map(e => ({ title: e.title, start: e.start, end: e.end, all_day: !!e.all_day, location: e.location || undefined, calendar: e.calendar_name })) };
     },
     finish({ artifact, needs_from_human }) {
       return { done: true, artifact: needs_from_human?.length ? `${artifact}\n\n## Needs from you\n${needs_from_human.map(s => `- ${s}`).join('\n')}` : artifact };
@@ -77,7 +73,7 @@ function makeTools({ db, project, task }) {
     return handlers[name](input || {});
   }
 
-  return { defs, call, dir };
+  return { defs, call };
 }
 
-module.exports = { makeTools, workspaceRoot };
+module.exports = { makeTools };

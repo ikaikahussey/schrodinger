@@ -1,4 +1,5 @@
 node_modules/
 schrodinger.db*
 .env
-workspace/
+data/
+.vercel

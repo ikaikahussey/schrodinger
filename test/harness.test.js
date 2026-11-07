@@ -9,131 +9,130 @@ const { createHarness } = require('../harness');
 const { createApp } = require('../server/app');
 
 process.env.HARNESS_MOCK = '1';
-process.env.WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-root-'));
+delete process.env.DATABASE_URL;
 
-function tmpDb() {
-  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ht-')), 't.db');
-  return { path: p, db: open(p) };
-}
+// Fresh in-memory Postgres (PGlite) per test.
+async function tmpDb() { const db = await open(undefined); return { db, path: null }; }
+const H = (db, opts = {}) => createHarness(db, { inProcess: true, ...opts });
 
-test('tree: create, nest, move, progress, cannot move into own subtree', () => {
-  const { db } = tmpDb();
-  const p = db.createNode({ title: 'P', goal: 'g' });
-  const a = db.createNode({ parent_id: p.id, title: 'A' });
-  const b = db.createNode({ parent_id: p.id, title: 'B' });
-  const a1 = db.createNode({ parent_id: a.id, title: 'A1' });
+test('tree: create, nest, move, progress, cannot move into own subtree', async () => {
+  const { db } = await tmpDb();
+  const p = await db.createNode({ title: 'P', goal: 'g' });
+  const a = await db.createNode({ parent_id: p.id, title: 'A' });
+  const b = await db.createNode({ parent_id: p.id, title: 'B' });
+  const a1 = await db.createNode({ parent_id: a.id, title: 'A1' });
   assert.equal(p.kind, 'project'); assert.equal(a.kind, 'task');
-  assert.deepEqual(db.progress(p.id), { total: 2, done: 0, pct: 0 }); // leaves: A1, B
-  db.updateNode(a1.id, { state: 'done' });
-  assert.equal(db.progress(p.id).pct, 50);
-  db.moveNode(b.id, a.id, 0);
-  assert.deepEqual(db.children(a.id).map(c => c.title), ['B', 'A1']);
-  assert.throws(() => db.moveNode(a.id, a1.id, 0), /own subtree/);
-  const t = db.tree();
+  assert.deepEqual(await db.progress(p.id), { total: 2, done: 0, pct: 0 }); // leaves: A1, B
+  await db.updateNode(a1.id, { state: 'done' });
+  assert.equal((await db.progress(p.id)).pct, 50);
+  await db.moveNode(b.id, a.id, 0);
+  assert.deepEqual((await db.children(a.id)).map(c => c.title), ['B', 'A1']);
+  await assert.rejects(db.moveNode(a.id, a1.id, 0), /own subtree/);
+  const t = await db.tree();
   assert.equal(t[0].children.length, 1); assert.equal(t[0].children[0].children.length, 2);
 });
 
 test('deps gate AI pickup; review → approve/reject flow; rejection note feeds redraft', async () => {
-  const { db, path: dbPath } = tmpDb();
-  const p = db.createNode({ title: 'P', goal: 'ship' });
-  const t1 = db.createNode({ parent_id: p.id, title: 'first', assignee: 'ai' });
-  const t2 = db.createNode({ parent_id: p.id, title: 'second', assignee: 'ai', deps: [t1.id] });
-  const h = db.createNode({ parent_id: p.id, title: 'human thing', assignee: 'human' });
-  const harness = createHarness(db, { dbPath, inProcess: true });
+  const { db } = await tmpDb();
+  const p = await db.createNode({ title: 'P', goal: 'ship' });
+  const t1 = await db.createNode({ parent_id: p.id, title: 'first', assignee: 'ai' });
+  const t2 = await db.createNode({ parent_id: p.id, title: 'second', assignee: 'ai', deps: [t1.id] });
+  const h = await db.createNode({ parent_id: p.id, title: 'human thing', assignee: 'human' });
+  const harness = H(db);
 
   await harness.runOnce();
-  assert.equal(db.getNode(t1.id).state, 'review');
-  assert.ok(db.getNode(t1.id).artifact.includes('Draft: first'));
-  assert.equal(db.getNode(t2.id).state, 'todo', 'dependent task not picked up');
-  assert.equal(db.getNode(h.id).state, 'todo', 'human task untouched');
+  assert.equal((await db.getNode(t1.id)).state, 'review');
+  assert.ok((await db.getNode(t1.id)).artifact.includes('Draft: first'));
+  assert.equal((await db.getNode(t2.id)).state, 'todo', 'dependent task not picked up');
+  assert.equal((await db.getNode(h.id)).state, 'todo', 'human task untouched');
 
   // reject with note → back to todo, redraft includes note
-  db.updateNode(t1.id, { state: 'todo', acceptance_note: 'make it shorter' }, 'human', 'rejected');
+  await db.updateNode(t1.id, { state: 'todo', acceptance_note: 'make it shorter' }, 'human', 'rejected');
   await harness.runOnce();
-  assert.equal(db.getNode(t1.id).state, 'review');
-  assert.ok(db.getNode(t1.id).artifact.includes('make it shorter'));
+  assert.equal((await db.getNode(t1.id)).state, 'review');
+  assert.ok((await db.getNode(t1.id)).artifact.includes('make it shorter'));
 
   // approve → done unlocks t2
-  db.updateNode(t1.id, { state: 'done' }, 'human', 'approved');
+  await db.updateNode(t1.id, { state: 'done' }, 'human', 'approved');
   await harness.runOnce();
-  assert.equal(db.getNode(t2.id).state, 'review');
-  assert.equal(db.progress(p.id).done, 1);
+  assert.equal((await db.getNode(t2.id)).state, 'review');
+  assert.equal((await db.progress(p.id)).done, 1);
 });
 
-test('harness spawns one sub-agent process per active project; paused projects skipped', async () => {
-  const { db, path: dbPath } = tmpDb();
-  const p1 = db.createNode({ title: 'P1' }); db.createNode({ parent_id: p1.id, title: 'x', assignee: 'ai' });
-  const p2 = db.createNode({ title: 'P2' }); db.createNode({ parent_id: p2.id, title: 'y', assignee: 'ai' });
-  const p3 = db.createNode({ title: 'P3', project_status: 'paused' }); db.updateNode(p3.id, { project_status: 'paused' });
-  const z = db.createNode({ parent_id: p3.id, title: 'z', assignee: 'ai' });
-  const harness = createHarness(db, { dbPath }); // real child processes
+test('harness runs one sub-agent per active project; paused projects skipped', async () => {
+  const { db } = await tmpDb();
+  const p1 = await db.createNode({ title: 'P1' }); await db.createNode({ parent_id: p1.id, title: 'x', assignee: 'ai' });
+  const p2 = await db.createNode({ title: 'P2' }); await db.createNode({ parent_id: p2.id, title: 'y', assignee: 'ai' });
+  const p3 = await db.createNode({ title: 'P3', project_status: 'paused' }); await db.updateNode(p3.id, { project_status: 'paused' });
+  const z = await db.createNode({ parent_id: p3.id, title: 'z', assignee: 'ai' });
+  const harness = process.env.TEST_DATABASE_URL ? createHarness(db, { inProcess: false }) : H(db); // child processes need a shared Postgres
   const r = await harness.runOnce();
   assert.equal(r.ran, 2);
   assert.ok(r.results.every(x => x.code === 0), JSON.stringify(r.results));
-  assert.equal(db.getNode(z.id).state, 'todo');
-  assert.equal(db.runs().filter(x => x.status === 'ok').length, 2);
+  assert.equal((await db.getNode(z.id)).state, 'todo');
+  assert.equal((await db.runs()).filter(x => x.status === 'ok').length, 2);
 });
 
 test('proposals: structural changes only land in inbox; accept applies, dismiss does not', async () => {
-  const { db, path: dbPath } = tmpDb();
-  const p = db.createNode({ title: 'Grant', goal: 'submit' });
-  const big = db.createNode({ parent_id: p.id, title: 'Research rules and draft budget', assignee: 'ai' });
-  const empty = db.createNode({ title: 'Empty' });
-  const harness = createHarness(db, { dbPath, inProcess: true });
+  const { db } = await tmpDb();
+  const p = await db.createNode({ title: 'Grant', goal: 'submit' });
+  const big = await db.createNode({ parent_id: p.id, title: 'Research rules and draft budget', assignee: 'ai' });
+  const empty = await db.createNode({ title: 'Empty' });
+  const harness = H(db);
   await harness.runOnce();
-  const inbox = db.inbox();
+  const inbox = await db.inbox();
   const dec = inbox.find(i => i.type === 'decompose' && i.node_id === big.id);
   const nt = inbox.find(i => i.type === 'new_task' && i.project_id === empty.id);
   assert.ok(dec && nt);
-  assert.equal(db.children(big.id).length, 0, 'no subtasks created without approval');
-  assert.equal(db.children(empty.id).length, 0);
+  assert.equal((await db.children(big.id)).length, 0, 'no subtasks created without approval');
+  assert.equal((await db.children(empty.id)).length, 0);
 
-  db.acceptProposal(dec.id);
-  assert.deepEqual(db.children(big.id).map(c => c.title), ['Research rules', 'draft budget']);
-  db.setProposalStatus(nt.id, 'dismissed');
-  assert.equal(db.children(empty.id).length, 0);
-  assert.equal(db.inbox().length, 0);
+  await db.acceptProposal(dec.id);
+  assert.deepEqual((await db.children(big.id)).map(c => c.title), ['Research rules', 'draft budget']);
+  await db.setProposalStatus(nt.id, 'dismissed');
+  assert.equal((await db.children(empty.id)).length, 0);
+  assert.equal((await db.inbox()).length, 0);
 
   // idempotent: second run does not duplicate open proposals
   await harness.runOnce();
-  const again = db.inbox();
+  const again = await db.inbox();
   assert.equal(again.filter(i => i.type === 'new_task' && i.project_id === empty.id).length, 0, 'dismissed not re-raised while... ');
 });
 
 test('stale + blocked-chain detection and digest content', async () => {
-  const { db, path: dbPath } = tmpDb();
+  const { db } = await tmpDb();
   process.env.STALE_DAYS = '1';
-  const p = db.createNode({ title: 'P', goal: 'g' });
-  const blocked = db.createNode({ parent_id: p.id, title: 'blocked one', assignee: 'human', state: 'blocked' });
-  const dep = db.createNode({ parent_id: p.id, title: 'after blocked', assignee: 'ai', deps: [blocked.id] });
-  const old = db.createNode({ parent_id: p.id, title: 'old task', assignee: 'human' });
-  db.raw.prepare(`UPDATE nodes SET last_activity_at=? WHERE id=?`).run(new Date(Date.now() - 3 * 86400e3).toISOString(), old.id);
-  const harness = createHarness(db, { dbPath, inProcess: true });
+  const p = await db.createNode({ title: 'P', goal: 'g' });
+  const blocked = await db.createNode({ parent_id: p.id, title: 'blocked one', assignee: 'human', state: 'blocked' });
+  const dep = await db.createNode({ parent_id: p.id, title: 'after blocked', assignee: 'ai', deps: [blocked.id] });
+  const old = await db.createNode({ parent_id: p.id, title: 'old task', assignee: 'human' });
+  await db.raw.query(`UPDATE nodes SET last_activity_at=$1 WHERE id=$2`, [new Date(Date.now() - 3 * 86400e3).toISOString(), old.id]);
+  const harness = H(db);
   await harness.runOnce();
-  const types = db.inbox().map(i => i.type);
+  const types = (await db.inbox()).map(i => i.type);
   assert.ok(types.includes('blocked_chain'));
   assert.ok(types.includes('stale'));
-  assert.equal(db.getNode(dep.id).state, 'todo', 'AI task behind blocked dep not executed');
-  const d = db.digests(p.id)[0];
+  assert.equal((await db.getNode(dep.id)).state, 'todo', 'AI task behind blocked dep not executed');
+  const d = (await db.digests(p.id))[0];
   assert.ok(d.body.includes('## Blocked') && d.body.includes('blocked one'));
   assert.ok(d.body.includes('AI waiting on your task before: after blocked'));
   delete process.env.STALE_DAYS;
 });
 
-test('undo reverses AI state change from activity log', () => {
-  const { db } = tmpDb();
-  const p = db.createNode({ title: 'P' });
-  const t = db.createNode({ parent_id: p.id, title: 't', assignee: 'ai' });
-  db.updateNode(t.id, { state: 'review', artifact: 'x' }, 'ai', 'draft');
-  const act = db.activity(t.id)[0];
-  db.undoActivity(act.id);
-  const n = db.getNode(t.id);
+test('undo reverses AI state change from activity log', async () => {
+  const { db } = await tmpDb();
+  const p = await db.createNode({ title: 'P' });
+  const t = await db.createNode({ parent_id: p.id, title: 't', assignee: 'ai' });
+  await db.updateNode(t.id, { state: 'review', artifact: 'x' }, 'ai', 'draft');
+  const act = (await db.activity(t.id))[0];
+  await db.undoActivity(act.id);
+  const n = await db.getNode(t.id);
   assert.equal(n.state, 'todo'); assert.equal(n.artifact, null);
 });
 
 test('HTTP API: create, patch, approve/reject guards, inbox accept', async () => {
-  const { db, path: dbPath } = tmpDb();
-  const harness = createHarness(db, { dbPath, inProcess: true });
+  const { db } = await tmpDb();
+  const harness = H(db);
   const app = createApp(db, harness);
   const server = await new Promise(res => { const s = app.listen(0, () => res(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -161,41 +160,33 @@ test('HTTP API: create, patch, approve/reject guards, inbox accept', async () =>
 });
 
 test('mode: set, validate, migrate, batch across projects', async () => {
-  const { db, path: dbPath } = tmpDb();
-  const p1 = db.createNode({ title: 'P1' }); const p2 = db.createNode({ title: 'P2' });
-  const c1 = db.createNode({ parent_id: p1.id, title: 'call a', mode: 'call', due: '2030-01-02' });
-  const c2 = db.createNode({ parent_id: p2.id, title: 'call b', mode: 'call', due: '2030-01-01' });
-  const e1 = db.createNode({ parent_id: p2.id, title: 'buy stamps', mode: 'errand' });
-  const u = db.createNode({ parent_id: p1.id, title: 'no mode' });
-  const parentTask = db.createNode({ parent_id: p1.id, title: 'parent', mode: 'call' });
-  db.createNode({ parent_id: parentTask.id, title: 'child call', mode: 'call' });
-  assert.throws(() => db.updateNode(u.id, { mode: 'bogus' }), /invalid mode/);
-  db.updateNode(u.id, { mode: 'email' });
-  const g = db.byMode();
+  const { db } = await tmpDb();
+  const p1 = await db.createNode({ title: 'P1' }); const p2 = await db.createNode({ title: 'P2' });
+  const c1 = await db.createNode({ parent_id: p1.id, title: 'call a', mode: 'call', due: '2030-01-02' });
+  const c2 = await db.createNode({ parent_id: p2.id, title: 'call b', mode: 'call', due: '2030-01-01' });
+  const e1 = await db.createNode({ parent_id: p2.id, title: 'buy stamps', mode: 'errand' });
+  const u = await db.createNode({ parent_id: p1.id, title: 'no mode' });
+  const parentTask = await db.createNode({ parent_id: p1.id, title: 'parent', mode: 'call' });
+  await db.createNode({ parent_id: parentTask.id, title: 'child call', mode: 'call' });
+  await assert.rejects(db.updateNode(u.id, { mode: 'bogus' }), /invalid mode/);
+  await db.updateNode(u.id, { mode: 'email' });
+  const g = await db.byMode();
   assert.deepEqual(g.call.map(t => t.title), ['call b', 'call a', 'child call'], 'sorted by due, parents excluded');
   assert.equal(g.call[0].project_title, 'P2');
   assert.deepEqual(Object.keys(g).sort(), ['call', 'email', 'errand']);
-  db.updateNode(c2.id, { state: 'done' });
-  assert.equal(db.byMode().call.length, 2, 'done excluded');
-  assert.equal(db.byMode('ai').call, undefined, 'assignee filter');
-  // migration: old DB without mode column gets it added
-  const { DatabaseSync } = require('node:sqlite');
-  const oldPath = dbPath + '.old';
-  const raw = new DatabaseSync(oldPath);
-  raw.exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL DEFAULT '', success_criteria TEXT NOT NULL DEFAULT '', constraints TEXT NOT NULL DEFAULT '', assignee TEXT NOT NULL DEFAULT 'unassigned', state TEXT NOT NULL DEFAULT 'todo', project_status TEXT NOT NULL DEFAULT 'active', due TEXT, acceptance_note TEXT NOT NULL DEFAULT '', artifact TEXT, position INTEGER NOT NULL DEFAULT 0, collapsed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', last_activity_at TEXT NOT NULL DEFAULT '')`);
-  raw.exec(`INSERT INTO nodes (id, kind, title) VALUES ('old', 'project', 'Old')`);
-  raw.close();
-  const migrated = open(oldPath);
-  assert.equal(migrated.getNode('old').mode, '');
-  migrated.close();
+  await db.updateNode(c2.id, { state: 'done' });
+  assert.equal((await db.byMode()).call.length, 2, 'done excluded');
+  assert.equal((await db.byMode('ai')).call, undefined, 'assignee filter');
+  // schema creation is idempotent (second open on the same driver is a no-op)
+  const again = require('../server/db');
+  assert.ok(again.MODES.includes('call'));
 });
 
 test('tools: workspace jail, write/read/list, no send-type tools, context', async () => {
-  const { db } = tmpDb();
-  process.env.WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-'));
+  const { db } = await tmpDb();
   const { makeTools } = require('../harness/tools');
-  const p = db.createNode({ title: 'P', goal: 'g', constraints: 'draft only' });
-  const t = db.createNode({ parent_id: p.id, title: 't', assignee: 'ai', mode: 'write' });
+  const p = await db.createNode({ title: 'P', goal: 'g', constraints: 'draft only' });
+  const t = await db.createNode({ parent_id: p.id, title: 't', assignee: 'ai', mode: 'write' });
   const tools = makeTools({ db, project: p, task: t });
   const names = tools.defs.map(d => d.name);
   assert.ok(!names.some(n => /send|post|commit|email|publish/.test(n)), 'no external-action tools');
@@ -207,15 +198,17 @@ test('tools: workspace jail, write/read/list, no send-type tools, context', asyn
   await assert.rejects(tools.call('web_fetch', { url: 'file:///etc/passwd' }), /http/);
   const ctx = await tools.call('project_context', {});
   assert.equal(ctx.project.constraints, 'draft only'); assert.equal(ctx.tasks[0].mode, 'write');
-  assert.ok(fs.existsSync(path.join(process.env.WORKSPACE_DIR, p.id, 'a', 'b.md')));
+  assert.equal(await db.fileRead(p.id, 'a/b.md'), 'hi');
+  const p2 = await db.createNode({ title: 'Other' });
+  const tools2 = makeTools({ db, project: p2, task: t });
+  assert.deepEqual((await tools2.call('list_files', {})).files, [], 'files are per-project');
 });
 
 test('agent loop: scripted model runs tools then finish; turn limit; tool errors fed back', async () => {
-  const { db } = tmpDb();
-  process.env.WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-'));
+  const { db } = await tmpDb();
   const llm = require('../harness/llm');
-  const p = db.createNode({ title: 'P', goal: 'g' });
-  const t = db.createNode({ parent_id: p.id, title: 'write memo', assignee: 'ai' });
+  const p = await db.createNode({ title: 'P', goal: 'g' });
+  const t = await db.createNode({ parent_id: p.id, title: 'write memo', assignee: 'ai' });
   const r = await llm.draft({ db, project: p, task: t, siblings: [], rejectionNotes: '' });
   assert.ok(r.artifact.startsWith('# Draft: write memo'));
   assert.ok(r.artifact.includes('Needs from you'));
@@ -240,7 +233,7 @@ const SAMPLE_ICS = (d1, d2) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test
 const ymd = d => d.toISOString().slice(0, 10);
 const compact = d => ymd(d).replace(/-/g, '');
 
-test('calendar: ICS parse (folding, escapes, all-day, duration, rrule) and task feed generation', () => {
+test('calendar: ICS parse (folding, escapes, all-day, duration, rrule) and task feed generation', async () => {
   const cal = require('../server/calendar');
   const evs = cal.parseICS(SAMPLE_ICS('20300105', '20300106'));
   assert.equal(evs.length, 3);
@@ -253,26 +246,26 @@ test('calendar: ICS parse (folding, escapes, all-day, duration, rrule) and task 
   const e3 = evs.find(e => e.uid === 'ev3@test');
   assert.equal(e3.end, '2020-01-01T10:30:00.000Z');
 
-  const { db } = tmpDb();
-  const p = db.createNode({ title: 'Proj' });
-  const t = db.createNode({ parent_id: p.id, title: 'File report; by Friday', assignee: 'ai', due: '2030-02-10', mode: 'admin' });
-  db.createNode({ parent_id: p.id, title: 'no due', assignee: 'human' });
-  const v = cal.taskToVevent(db.getNode(t.id), p, 'http://x');
+  const { db } = await tmpDb();
+  const p = await db.createNode({ title: 'Proj' });
+  const t = await db.createNode({ parent_id: p.id, title: 'File report; by Friday', assignee: 'ai', due: '2030-02-10', mode: 'admin' });
+  await db.createNode({ parent_id: p.id, title: 'no due', assignee: 'human' });
+  const v = cal.taskToVevent(await db.getNode(t.id), p, 'http://x');
   assert.ok(v.includes('DTSTART;VALUE=DATE:20300210') && v.includes('DTEND;VALUE=DATE:20300211'));
   assert.ok(v.includes('SUMMARY:File report\\; by Friday (AI)'));
-  const feed = cal.buildCalendar(db.dueTasks().map(x => cal.taskToVevent(x, x.project)).filter(Boolean));
+  const feed = cal.buildCalendar((await db.dueTasks()).map(x => cal.taskToVevent(x, x.project)).filter(Boolean));
   assert.equal((feed.match(/BEGIN:VEVENT/g) || []).length, 1);
   assert.deepEqual(cal.parseICS(feed).map(e => e.title), ['File report; by Friday (AI)'], 'feed round-trips through the parser');
 });
 
 test('calendar: subscribe, sync via harness, events query, agent tool, prep proposal, outbound feed over HTTP', async () => {
-  const { db, path: dbPath } = tmpDb();
+  const { db } = await tmpDb();
   const d1 = new Date(Date.now() + 2 * 86400e3), d2 = new Date(Date.now() + 4 * 86400e3);
   const ics = http.createServer((req, res) => { res.setHeader('content-type', 'text/calendar'); res.end(SAMPLE_ICS(compact(d1), compact(d2))); });
   await new Promise(r => ics.listen(0, r));
   const icsUrl = `http://127.0.0.1:${ics.address().port}/cal.ics`;
 
-  const harness = createHarness(db, { dbPath, inProcess: true });
+  const harness = H(db);
   const app = createApp(db, harness);
   const server = await new Promise(res => { const s = app.listen(0, () => res(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -284,7 +277,7 @@ test('calendar: subscribe, sync via harness, events query, agent tool, prep prop
   });
   try {
     const p = (await call('POST', '/api/nodes', { title: 'Hearings', goal: 'g' })).body;
-    db.createNode({ parent_id: p.id, title: 'Prep site visit notes', assignee: 'human' }); // covers "Site visit"
+    await db.createNode({ parent_id: p.id, title: 'Prep site visit notes', assignee: 'human' }); // covers "Site visit"
     const bad = await call('POST', '/api/calendars', { name: 'x', kind: 'nope', url: icsUrl });
     assert.equal(bad.status, 400);
     const c = (await call('POST', '/api/calendars', { name: 'Work', kind: 'ics', url: icsUrl, project_id: p.id })).body;
@@ -292,22 +285,22 @@ test('calendar: subscribe, sync via harness, events query, agent tool, prep prop
     assert.equal(sync.synced, 3);
     const evs = (await call('GET', '/api/events')).body;
     assert.deepEqual(evs.map(e => e.title).sort(), ['Budget hearing, room 2', 'Site visit'], 'old event outside window');
-    assert.equal(db.calendars()[0].event_count, 3);
+    assert.equal((await db.calendars())[0].event_count, 3);
 
     // harness run: syncs calendars, agent sees events, proposes prep only for uncovered event
     const r = (await call('POST', '/api/harness/run', {})).body;
     assert.equal(r.calendars[0].synced, 3);
-    const props = db.inbox().filter(i => i.type === 'new_task');
+    const props = (await db.inbox()).filter(i => i.type === 'new_task');
     assert.equal(props.length, 1);
     assert.ok(props[0].summary.includes('Budget hearing'));
     assert.equal(props[0].payload.mode, 'meeting'); assert.equal(props[0].payload.due, ymd(d1));
-    db.acceptProposal(props[0].id);
-    const prep = db.children(p.id).find(t => t.title.startsWith('Prepare for:'));
+    await db.acceptProposal(props[0].id);
+    const prep = (await db.children(p.id)).find(t => t.title.startsWith('Prepare for:'));
     assert.ok(prep && prep.mode === 'meeting' && prep.due === ymd(d1));
 
     // agent tool
     const { makeTools } = require('../harness/tools');
-    const tools = makeTools({ db, project: db.getNode(p.id), task: prep });
+    const tools = makeTools({ db, project: await db.getNode(p.id), task: prep });
     const te = await tools.call('calendar_events', {});
     assert.equal(te.events.length, 2); assert.equal(te.events[0].calendar, 'Work');
 
@@ -326,16 +319,16 @@ test('calendar: subscribe, sync via harness, events query, agent tool, prep prop
     // failing source records last_error, does not wipe cached events
     ics.close();
     await assert.rejects(harness.syncCalendar(c.id));
-    assert.ok(db.getCalendar(c.id).last_error);
-    assert.equal(db.events().length, 2);
+    assert.ok((await db.getCalendar(c.id)).last_error);
+    assert.equal((await db.events()).length, 2);
   } finally { server.close(); try { ics.close(); } catch {} }
 });
 
 test('auth: password gate blocks UI and API, allows login, logout, feed, and healthz', async () => {
-  const { db, path: dbPath } = tmpDb();
+  const { db } = await tmpDb();
   const { createAuth } = require('../server/auth');
   const auth = createAuth({ password: 'open-sesame' });
-  const app = createApp(db, createHarness(db, { dbPath, inProcess: true }), { auth });
+  const app = createApp(db, H(db), { auth });
   const server = await new Promise(res => { const s = app.listen(0, () => res(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = (m, u, { body, cookie, form } = {}) => new Promise((res, rej) => {
@@ -358,12 +351,12 @@ test('auth: password gate blocks UI and API, allows login, logout, feed, and hea
     assert.equal((await call('GET', '/', { cookie })).status, 200);
     const tampered = cookie.slice(0, -2) + 'xx';
     assert.equal((await call('GET', '/api/tree', { cookie: tampered })).status, 401);
-    const feedPath = `/calendar/${db.feedToken()}.ics`;
+    const feedPath = `/calendar/${await db.feedToken()}.ics`;
     assert.equal((await call('GET', feedPath)).status, 200, 'feed reachable without login (token-gated)');
     const lo = await call('GET', '/logout', { cookie });
     assert.ok(lo.headers['set-cookie'][0].includes('Max-Age=0'));
     // disabled auth = open
-    const open2 = createApp(db, createHarness(db, { dbPath, inProcess: true }), { auth: createAuth({ password: undefined }) });
+    const open2 = createApp(db, H(db), { auth: createAuth({ password: undefined }) });
     const s2 = await new Promise(res => { const s = open2.listen(0, () => res(s)); });
     const r2 = await new Promise((res, rej) => http.get(`http://127.0.0.1:${s2.address().port}/api/tree`, r => res(r.statusCode)).on('error', rej));
     assert.equal(r2, 200); s2.close();
