@@ -19,6 +19,7 @@ actor CalendarService {
     private let store = EKEventStore()
 
     func requestAccess() async -> Bool {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return false }   // never prompt under the test runner
         if EKEventStore.authorizationStatus(for: .event) == .fullAccess { return true }
         return (try? await store.requestFullAccessToEvents()) ?? false
     }

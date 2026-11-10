@@ -89,6 +89,8 @@ struct ProjectAgent {
 
         let tasks = s.descendants(of: projectID)
         let leaves = s.leaves(under: projectID)
+        // Snapshot of states before this run; structural heuristics judge the task as the human left it, not as the agent changed it.
+        let stateBefore = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.state) })
 
         // 1. Execute ready AI work.
         func aiTurn(_ t: Node) -> Bool {
@@ -142,7 +144,7 @@ struct ProjectAgent {
             s.propose(projectID: projectID, nodeID: nil, type: .no_path, summary: "No open tasks but goal not complete — add tasks toward: \(project.goal.isEmpty ? project.title : project.goal)")
         }
         let parents = Set(tasks.compactMap(\.parentID))
-        for t in open where !parents.contains(t.id) && t.assignee == .ai && t.state == .todo && (t.title.count > 70 || t.title.range(of: "\\band\\b", options: [.regularExpression, .caseInsensitive]) != nil) {
+        for t in open where !parents.contains(t.id) && t.assignee == .ai && stateBefore[t.id] == .todo && (t.title.count > 70 || t.title.range(of: "\\band\\b", options: [.regularExpression, .caseInsensitive]) != nil) {
             let parts = t.title.components(separatedBy: " and ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let subs = (parts.count > 1 ? parts : [t.title + " — part 1", t.title + " — part 2"]).map { ["title": $0, "assignee": "ai"] }
             s.propose(projectID: projectID, nodeID: t.id, type: .decompose, summary: "\"\(t.title)\" looks like more than one step — split it?", payload: ["subtasks": subs])
