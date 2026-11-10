@@ -12,6 +12,10 @@ npm test
 
 Without `ANTHROPIC_API_KEY` the harness uses a deterministic mock LLM. Copy `.env.example` to `.env` (or export the variables) to use the Claude API. Node ≥ 22.
 
+## Native app
+
+`apple/` holds the SwiftUI iOS/macOS app: all data on device (SwiftData, optional iCloud sync), AI calls from the device (Apple Intelligence on-device or Claude with a Keychain-stored key), EventKit calendar hooks. See `apple/README.md`.
+
 ## Deploy
 
 Storage is Postgres. With `DATABASE_URL` unset the app runs an embedded Postgres (PGlite) — in memory by default, on disk with `PGLITE_DIR`. Set `APP_PASSWORD` before exposing it; a login page then gates the UI and API (the iCal feed stays token-gated).

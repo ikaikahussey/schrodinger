@@ -1,0 +1,51 @@
+# Generate with: brew install xcodegen && cd apple && xcodegen generate && open Schrodinger.xcodeproj
+name: Schrodinger
+options:
+  bundleIdPrefix: org.schrodinger
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+  xcodeVersion: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""   # set your Apple team ID
+targets:
+  Schrodinger:
+    type: application
+    platform: [iOS, macOS]
+    sources:
+      - path: Schrodinger
+    info:
+      path: Schrodinger/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Schrodinger
+        NSCalendarsFullAccessUsageDescription: "Schrodinger reads your calendar to show upcoming events alongside tasks and lets you add tasks to your calendar."
+        BGTaskSchedulerPermittedIdentifiers: ["org.schrodinger.harness"]
+        UIBackgroundModes: ["fetch", "processing"]
+        LSApplicationCategoryType: public.app-category.productivity
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+    entitlements:
+      path: Schrodinger/Resources/Schrodinger.entitlements
+      properties:
+        com.apple.developer.icloud-services: [CloudKit]
+        com.apple.developer.icloud-container-identifiers: [iCloud.org.schrodinger.app]
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.personal-information.calendars: true
+        com.apple.security.files.user-selected.read-write: true
+        keychain-access-groups: ["$(AppIdentifierPrefix)org.schrodinger.app"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.schrodinger.app
+        ENABLE_PREVIEWS: YES
+  SchrodingerTests:
+    type: bundle.unit-test
+    platform: [iOS, macOS]
+    sources: [SchrodingerTests]
+    dependencies:
+      - target: Schrodinger_${platform}
