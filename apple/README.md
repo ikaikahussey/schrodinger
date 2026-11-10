@@ -19,6 +19,10 @@ Set your team under Signing & Capabilities (or `DEVELOPMENT_TEAM` in `project.ym
 
 ## TestFlight
 
+Automated: `.github/workflows/testflight.yml` runs on a self-hosted macOS runner (the Mac mini already runs one for Tact). Register that runner for this repo (or at the account level), add secrets `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`, `APPLE_TEAM_ID`, then push to `main` or run the workflow manually. `ExportOptions.plist` uploads straight to App Store Connect.
+
+Manual:
+
 ```
 xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_iOS -configuration Release \
   -archivePath build/Schrodinger.xcarchive archive -allowProvisioningUpdates

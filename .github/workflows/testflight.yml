@@ -1,0 +1,73 @@
+# Builds the native app on a self-hosted macOS runner (Xcode 26 installed) and uploads to TestFlight.
+# Required repository secrets:
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (App Store Connect API key contents), APPLE_TEAM_ID
+# The runner's Mac must have the signing certificate in its Keychain (Xcode → Settings → Accounts → Manage Certificates)
+# or Xcode cloud-managed signing enabled via -allowProvisioningUpdates with the API key.
+name: TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["apple/**", ".github/workflows/testflight.yml"]
+
+jobs:
+  build-upload:
+    runs-on: [self-hosted, macOS]
+    defaults: { run: { working-directory: apple } }
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: which xcodegen || brew install xcodegen
+
+      - name: Generate project
+        run: |
+          sed -i '' "s/DEVELOPMENT_TEAM: \"\"/DEVELOPMENT_TEAM: \"$APPLE_TEAM_ID\"/" project.yml
+          xcodegen generate
+
+      - name: Write App Store Connect API key
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "${{ secrets.ASC_KEY_P8 }}" > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+
+      - name: Build number
+        run: echo "BUILD_NUMBER=${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Unit tests (macOS)
+        run: xcodebuild test -project Schrodinger.xcodeproj -scheme Schrodinger_macOS -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO | tail -50
+
+      - name: Archive iOS
+        run: |
+          xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_iOS -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/ios.xcarchive archive \
+            CURRENT_PROJECT_VERSION=$BUILD_NUMBER \
+            -allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8 | tail -30
+
+      - name: Export and upload iOS
+        run: |
+          xcodebuild -exportArchive -archivePath build/ios.xcarchive -exportPath build/ios-export \
+            -exportOptionsPlist ExportOptions.plist -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8 | tail -30
+
+      - name: Archive macOS
+        run: |
+          xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_macOS -configuration Release \
+            -destination 'generic/platform=macOS' -archivePath build/mac.xcarchive archive \
+            CURRENT_PROJECT_VERSION=$BUILD_NUMBER \
+            -allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8 | tail -30
+
+      - name: Export and upload macOS
+        run: |
+          xcodebuild -exportArchive -archivePath build/mac.xcarchive -exportPath build/mac-export \
+            -exportOptionsPlist ExportOptions.plist -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8 | tail -30
