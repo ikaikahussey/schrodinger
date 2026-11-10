@@ -35,7 +35,8 @@ Health check: `GET /healthz`.
 
 | | Human | AI |
 |---|---|---|
-| Executes task | yes | only its own `ai` + `todo` leaf tasks whose deps are `done` |
+| Executes task | yes | its own `ai` + `todo` leaf tasks whose deps are `done`; the AI part of `shared` tasks |
+| Shared task (`@both`) | finishes it and marks done; can send it back with a note | does the prep (research, draft, materials) → task returns as "your turn" |
 | Output | — | draft artifact attached to task; task moves to `review` |
 | Structural change (new/split/reassign tasks) | direct | proposal to Inbox; applied only on Accept |
 | External action (send, post, commit) | yes | never — draft only |
@@ -56,6 +57,7 @@ Paused or archived projects are skipped. Every AI action is logged in `activity`
 
 ## UI
 
+- One continuous numbered outline: top-level items are projects (goal + progress inline); children numbered within each parent at any depth; items with children act as categories (no checkbox, leaf count instead).
 - Outline: `Enter` sibling, `Tab`/`Shift+Tab` nest/unnest, `Alt+↑/↓` reorder, `Backspace` on empty deletes, `@ai` / `@me` in a title assigns, drag ⋮ to reparent.
 - Side panel: Inbox (proposals), Review (drafts), Selected (fields, deps, artifact, activity + undo), Digest, Activity.
 - Filters: Mine / AI's / Needs review / Blocked / Due this week, plus a mode filter.

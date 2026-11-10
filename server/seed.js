@@ -10,6 +10,7 @@ async function seed(db) {
   await db.createNode({ parent_id: p2.id, title: 'Research eligibility requirements and summarize budget rules', assignee: 'ai' });
   await db.createNode({ parent_id: p2.id, title: 'Draft narrative section', assignee: 'ai' });
   await db.createNode({ parent_id: p2.id, title: 'Gather financial statements', assignee: 'human', mode: 'errand' });
+  await db.createNode({ parent_id: p2.id, title: 'Meet program officer (AI preps questions, you attend)', assignee: 'shared', mode: 'meeting' });
 
   await db.createNode({ parent_id: p2.id, title: 'Call program officer re: deadline', assignee: 'human', mode: 'call' });
   await db.createNode({ parent_id: p1.id, title: 'Call designer about masthead', assignee: 'human', mode: 'call' });

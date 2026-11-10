@@ -362,3 +362,37 @@ test('auth: password gate blocks UI and API, allows login, logout, feed, and hea
     assert.equal(r2, 200); s2.close();
   } finally { server.close(); }
 });
+
+test('shared task: AI preps then hands back; human finishes or sends back; filters and digest', async () => {
+  const { db } = await tmpDb();
+  const p = await db.createNode({ title: 'P', goal: 'g' });
+  const sh = await db.createNode({ parent_id: p.id, title: 'Meet funder', assignee: 'shared', mode: 'meeting' });
+  await assert.rejects(db.updateNode(sh.id, { assignee: 'robot' }), /invalid assignee/);
+  const harness = H(db);
+  await harness.runOnce();
+  let n = await db.getNode(sh.id);
+  assert.equal(n.state, 'in_progress', 'not sent to review'); assert.equal(n.ai_status, 'done'); assert.ok(n.artifact.includes('Draft: Meet funder'));
+  assert.ok((await db.byMode('human')).meeting?.some(t => t.id === sh.id), 'appears in Mine once AI part done');
+  assert.ok(!(await db.byMode('ai')).meeting, 'no longer in AI\'s');
+  assert.ok((await db.digests(p.id))[0].body.includes('your part: Meet funder'));
+  // second run does not redo the AI part
+  await harness.runOnce();
+  assert.equal((await db.activity(sh.id)).filter(a => a.detail.startsWith('AI part done')).length, 1);
+  // send back with note → AI redoes with note in context
+  await db.updateNode(sh.id, { ai_status: 'pending', acceptance_note: 'add parking info' }, 'human', 'sent back');
+  assert.ok((await db.byMode('ai')).meeting?.some(t => t.id === sh.id));
+  await harness.runOnce();
+  n = await db.getNode(sh.id);
+  assert.equal(n.ai_status, 'done'); assert.ok(n.artifact.includes('add parking info'));
+  // human finishes
+  await db.updateNode(sh.id, { state: 'done' });
+  assert.equal((await db.progress(p.id)).pct, 100);
+  // API: redo-ai guard
+  const app = createApp(db, harness);
+  const server = await new Promise(res => { const s = app.listen(0, () => res(s)); });
+  try {
+    const hum = await db.createNode({ parent_id: p.id, title: 'solo', assignee: 'human' });
+    const r = await new Promise((res, rej) => { const req = http.request(`http://127.0.0.1:${server.address().port}/api/nodes/${hum.id}/redo-ai`, { method: 'POST', headers: { 'content-type': 'application/json' } }, x => { let d = ''; x.on('data', c => d += c); x.on('end', () => res({ status: x.statusCode, body: d })); }); req.on('error', rej); req.end('{}'); });
+    assert.equal(r.status, 400);
+  } finally { server.close(); }
+});

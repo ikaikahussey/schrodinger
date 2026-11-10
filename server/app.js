@@ -51,6 +51,15 @@ function createApp(db, harness, { auth = createAuth() } = {}) {
     return db.updateNode(n.id, { state: 'todo', acceptance_note: combined }, 'human', `rejected: ${note}`);
   }));
 
+  // Shared tasks: send back to the AI for another pass
+  app.post('/api/nodes/:id/redo-ai', wrap(async req => {
+    const n = await db.getNode(req.params.id);
+    if (n.assignee !== 'shared') throw new Error('task is not shared');
+    const note = (req.body.note || '').trim();
+    const combined = [n.acceptance_note, note && `[sent back ${new Date().toISOString().slice(0, 10)}] ${note}`].filter(Boolean).join('\n');
+    return db.updateNode(n.id, { ai_status: 'pending', acceptance_note: combined }, 'human', `sent back to AI: ${note}`);
+  }));
+
   // Inbox
   app.get('/api/inbox', wrap(req => db.inbox(req.query.status || 'open')));
   app.post('/api/inbox/:id/accept', wrap(async req => { await db.acceptProposal(req.params.id, req.body || {}); return { ok: true }; }));

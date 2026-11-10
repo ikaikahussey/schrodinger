@@ -11,12 +11,13 @@ CREATE TABLE IF NOT EXISTS nodes (
   goal TEXT NOT NULL DEFAULT '',
   success_criteria TEXT NOT NULL DEFAULT '',
   constraints TEXT NOT NULL DEFAULT '',
-  assignee TEXT NOT NULL DEFAULT 'unassigned' CHECK (assignee IN ('human','ai','unassigned')),
+  assignee TEXT NOT NULL DEFAULT 'unassigned',
   state TEXT NOT NULL DEFAULT 'todo' CHECK (state IN ('todo','in_progress','blocked','review','done')),
   project_status TEXT NOT NULL DEFAULT 'active' CHECK (project_status IN ('active','paused','archived')),
   due TEXT,
   acceptance_note TEXT NOT NULL DEFAULT '',
   mode TEXT NOT NULL DEFAULT '',
+  ai_status TEXT NOT NULL DEFAULT 'pending',
   artifact TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   collapsed INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +112,14 @@ CREATE TABLE IF NOT EXISTS harness_runs (
 );
 `;
 
+// Idempotent migrations for databases created by earlier versions.
+const MIGRATIONS = `
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS ai_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE nodes DROP CONSTRAINT IF EXISTS nodes_assignee_check;
+ALTER TABLE nodes ADD CONSTRAINT nodes_assignee_check CHECK (assignee IN ('human','ai','shared','unassigned'));
+`;
+
+const ASSIGNEES = ['human', 'ai', 'shared', 'unassigned'];
 const MODES = ['call', 'errand', 'email', 'write', 'research', 'meeting', 'admin', 'other'];
 const uid = () => crypto.randomUUID();
 
@@ -137,7 +146,7 @@ async function makeDriver(url) {
 
 async function open(url = process.env.DATABASE_URL) {
   const d = await makeDriver(url);
-  for (const stmt of SCHEMA.split(';').map(s => s.trim()).filter(Boolean)) await d.query(stmt);
+  for (const stmt of (SCHEMA + MIGRATIONS).split(';').map(s => s.trim()).filter(Boolean)) await d.query(stmt);
   return wrap(d);
 }
 
@@ -194,13 +203,15 @@ function wrap(d) {
     return getNode(id);
   }
 
-  const EDITABLE = ['title', 'goal', 'success_criteria', 'constraints', 'assignee', 'state', 'project_status', 'due', 'acceptance_note', 'artifact', 'collapsed', 'mode'];
+  const EDITABLE = ['title', 'goal', 'success_criteria', 'constraints', 'assignee', 'state', 'project_status', 'due', 'acceptance_note', 'artifact', 'collapsed', 'mode', 'ai_status'];
 
   async function updateNode(id, patch, actor = 'human', detail = '') {
     const before = await getNode(id);
     if (!before) throw new Error('not found');
     const keys = Object.keys(patch).filter(k => EDITABLE.includes(k));
     if (patch.mode !== undefined && patch.mode !== '' && !MODES.includes(patch.mode)) throw new Error(`invalid mode; use one of ${MODES.join(', ')} or empty`);
+    if (patch.assignee !== undefined && !ASSIGNEES.includes(patch.assignee)) throw new Error(`invalid assignee; use one of ${ASSIGNEES.join(', ')}`);
+    if (patch.ai_status !== undefined && !['pending', 'done'].includes(patch.ai_status)) throw new Error('invalid ai_status');
     if (keys.length) {
       const sets = keys.map((k, i) => `${k}=$${i + 1}`).join(',');
       await q(`UPDATE nodes SET ${sets}, updated_at=now() WHERE id=$${keys.length + 1}`, [...keys.map(k => patch[k] === undefined ? null : patch[k]), id]);
@@ -276,8 +287,8 @@ function wrap(d) {
       SELECT n.*, p.title AS project_title FROM nodes n JOIN up ON up.id=n.id JOIN nodes p ON p.id=up.root
       WHERE n.kind='task' AND n.state <> 'done' AND p.project_status='active'
         AND NOT EXISTS (SELECT 1 FROM nodes c WHERE c.parent_id=n.id)
-        ${assignee ? 'AND n.assignee=$1' : ''}
-      ORDER BY n.mode, COALESCE(n.due,'9999'), p.position, n.position`, assignee ? [assignee] : []);
+        ${assignee === 'human' ? "AND (n.assignee='human' OR (n.assignee='shared' AND n.ai_status='done'))" : assignee === 'ai' ? "AND (n.assignee='ai' OR (n.assignee='shared' AND n.ai_status='pending'))" : assignee ? 'AND n.assignee=$1' : ''}
+      ORDER BY n.mode, COALESCE(n.due,'9999'), p.position, n.position`, assignee && assignee !== 'human' && assignee !== 'ai' ? [assignee] : []);
     const groups = {};
     for (const r of rows) (groups[r.mode || 'unsorted'] ||= []).push(r);
     return groups;
@@ -373,7 +384,7 @@ function wrap(d) {
 
   return {
     raw: d, log, getNode, children, projectOf, descendants, createNode, updateNode, moveNode, deleteNode,
-    progress, depsSatisfied, tree, byMode, MODES, propose, inbox, getProposal, setProposalStatus, acceptProposal,
+    progress, depsSatisfied, tree, byMode, MODES, ASSIGNEES, propose, inbox, getProposal, setProposalStatus, acceptProposal,
     activity, recentActivity, undoActivity, saveDigest, digests, startRun, finishRun, runs,
     getSetting, setSetting, feedToken, addCalendar, getCalendar, calendars, updateCalendar, deleteCalendar, replaceEvents, events, dueTasks,
     fileList, fileRead, fileWrite,
@@ -381,4 +392,4 @@ function wrap(d) {
   };
 }
 
-module.exports = { open, MODES };
+module.exports = { open, MODES, ASSIGNEES };

@@ -32,7 +32,7 @@ const MAX_TURNS = Number(process.env.AGENT_MAX_TURNS || 12);
 
 // `model` is a function(messages, toolDefs) → { stop_reason, content } mirroring the Messages API shape.
 // Live mode uses Claude; mock mode uses a scripted model so the loop is exercised offline.
-async function draft({ db, project, task, siblings, rejectionNotes, model }) {
+async function draft({ db, project, task, siblings, rejectionNotes, model, shared = false }) {
   const { makeTools } = require('./tools');
   const tools = makeTools({ db, project, task });
   const run = model || (live() ? claudeModel(systemPrompt(project)) : mockModel({ project, task, rejectionNotes }));
@@ -41,6 +41,7 @@ async function draft({ db, project, task, siblings, rejectionNotes, model }) {
     task.mode ? `Mode: ${task.mode}` : '',
     task.due ? `Due: ${task.due}` : '',
     rejectionNotes ? `Prior review notes from the owner (address these):\n${rejectionNotes}` : '',
+    shared ? `This task is SHARED: you do the preparatory part (research, drafting, checklists, materials) and the owner finishes it in person. Produce everything the owner needs to complete their part, and state clearly what remains for them.` : '',
     `Use project_context first. Use web_fetch for anything factual you are not sure of. Save working notes with write_file. When the deliverable is ready, call finish with the full draft. If the task needs information only the owner has, draft what you can and list the questions in needs_from_human.`,
   ].filter(Boolean).join('\n\n');
   const messages = [{ role: 'user', content: user }];

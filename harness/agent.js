@@ -22,18 +22,24 @@ async function runProject(db, project_id, out = []) {
 
   // 1. Execute ready AI tasks.
   const readyAll = [];
-  for (const t of leaves) if (t.assignee === 'ai' && t.state === 'todo' && await db.depsSatisfied(t.id)) readyAll.push(t);
+  const aiTurn = t => (t.assignee === 'ai' && t.state === 'todo') || (t.assignee === 'shared' && t.ai_status === 'pending' && ['todo', 'in_progress'].includes(t.state));
+  for (const t of leaves) if (aiTurn(t) && await db.depsSatisfied(t.id)) readyAll.push(t);
   const ready = readyAll
     .sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'))
     .slice(0, MAX_TASKS_PER_RUN);
   for (const t of ready) {
     await db.updateNode(t.id, { state: 'in_progress' }, 'ai', 'picked up by sub-agent');
     try {
-      const { artifact, log } = await llm.draft({ db, project, task: t, siblings: tasks.filter(s => s.id !== t.id), rejectionNotes: t.acceptance_note });
-      await db.updateNode(t.id, { state: 'review', artifact }, 'ai', `draft ready for review (${log.length} tool calls)`);
+      const { artifact, log } = await llm.draft({ db, project, task: t, siblings: tasks.filter(s => s.id !== t.id), rejectionNotes: t.acceptance_note, shared: t.assignee === 'shared' });
+      if (t.assignee === 'shared') {
+        // AI part done; task goes back to the human, who finishes it.
+        await db.updateNode(t.id, { state: 'in_progress', ai_status: 'done', artifact }, 'ai', `AI part done — your turn (${log.length} tool calls)`);
+      } else {
+        await db.updateNode(t.id, { state: 'review', artifact }, 'ai', `draft ready for review (${log.length} tool calls)`);
+      }
       say(`drafted: ${t.title}`);
     } catch (e) {
-      await db.updateNode(t.id, { state: 'todo' }, 'ai', `draft failed: ${e.message}`);
+      await db.updateNode(t.id, { state: t.assignee === 'shared' ? t.state : 'todo' }, 'ai', `draft failed: ${e.message}`);
       say(`failed: ${t.title}: ${e.message}`);
     }
   }
@@ -46,7 +52,7 @@ async function runProject(db, project_id, out = []) {
     if (deps.some(d => d.state === 'blocked')) {
       await db.propose(project_id, 'blocked_chain', `"${t.title}" is blocked by a blocked dependency`, { deps: deps.map(d => d.title) }, t.id);
     }
-    if (t.assignee === 'ai' && deps.some(d => d.assignee === 'human' && d.state !== 'done')) waitingOnHuman.push(t);
+    if ((t.assignee === 'ai' || (t.assignee === 'shared' && t.ai_status === 'pending')) && deps.some(d => d.assignee === 'human' && d.state !== 'done')) waitingOnHuman.push(t);
   }
 
   // 3. Stale tasks.
@@ -81,6 +87,7 @@ async function runProject(db, project_id, out = []) {
   const grp = s => fresh.filter(t => t.state === s).map(t => `- ${t.title}`).join('\n') || '- none';
   const needsYou = [
     ...fresh.filter(t => t.state === 'review').map(t => `- review: ${t.title}`),
+    ...fresh.filter(t => t.assignee === 'shared' && t.ai_status === 'done' && t.state !== 'done').map(t => `- your part: ${t.title}`),
     ...fresh.filter(t => t.assignee === 'human' && t.state === 'todo' && t.due && t.due <= day).map(t => `- overdue: ${t.title} (${t.due})`),
     ...waitingOnHuman.map(t => `- AI waiting on your task before: ${t.title}`),
   ].join('\n') || '- nothing';

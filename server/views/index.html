@@ -43,17 +43,31 @@
   .batch h3 { font-size:13px; margin:18px 0 6px; text-transform:capitalize; display:flex; align-items:center; gap:8px; }
   .batch h3 small { color:var(--mute); font-weight:400; }
   .batch .proj { font-size:11px; color:var(--mute); margin-top:4px; white-space:nowrap; }
+  .chip.shared { background:#ede9fe; color:#5b21b6; }
+  .chip.ai-done { outline:1px dashed #5b21b6; }
+  .pop { position:absolute; z-index:20; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.15); padding:4px; min-width:140px; }
+  .pop div { padding:5px 10px; border-radius:6px; cursor:pointer; font-size:13px; white-space:nowrap; }
+  .pop div:hover, .pop div.cur { background:#eef2ff; }
+  .pop div.cur::after { content:' ✓'; color:var(--mute); }
+  body[data-theme=console] .pop { background:#15110f; border-color:#3a302a; }
+  body[data-theme=console] .pop div:hover, body[data-theme=console] .pop div.cur { background:#2a2320; }
+  body[data-theme=console] .chip.shared { background:#2a1f45; color:#d9c8ff; }
   .due { font-size:11px; color:var(--mute); margin-top:4px; white-space:nowrap; } .due.over { color:#b91c1c; font-weight:600; }
   .last { font-size:11px; color:var(--mute); margin-top:4px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .kids { margin-left:22px; border-left:1px solid var(--line); padding-left:4px; }
+  .num { min-width:26px; text-align:right; color:var(--mute); font-size:12px; margin-top:4px; padding-right:4px; flex:none; font-variant-numeric: tabular-nums; }
+  .depth0 > .row > .num { color:var(--fg); font-weight:600; }
+  .kids { margin-left:30px; border-left:1px solid var(--line); padding-left:4px; }
+  .pmeta { margin:0 0 4px 74px; color:var(--mute); font-size:12px; display:flex; gap:10px; align-items:center; }
+  .pmeta .goal { color:var(--fg); cursor:pointer; }
+  .pmeta .goal:empty::before { content:'set a goal'; color:var(--mute); font-style:italic; }
+  .pmeta .bar { margin:0; width:120px; flex:none; }
+  .count { font-size:11px; color:var(--mute); margin-top:4px; white-space:nowrap; }
+  .depth0 { margin-bottom:10px; }
   .kids.collapsed { display:none; }
-  .meta { margin:2px 0 6px 46px; color:var(--mute); font-size:12px; }
-  .meta .goal { color:var(--fg); }
-  .bar { height:4px; background:var(--line); border-radius:2px; margin:4px 0 10px 46px; max-width:320px; }
+  .bar { height:4px; background:var(--line); border-radius:2px; max-width:320px; }
   .bar i { display:block; height:100%; background:var(--fg); border-radius:2px; }
   .pstatus { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--warn); color:var(--warn-fg); }
-  .project-block { margin-bottom:22px; }
-  .add { color:var(--mute); cursor:pointer; padding:3px 4px 3px 46px; font-size:13px; }
+  .add { color:var(--mute); cursor:pointer; padding:3px 4px 3px 40px; font-size:13px; }
   .add:hover { color:var(--fg); }
   .card { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px; background:var(--card); }
   .card .t { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:.04em; }
@@ -112,9 +126,8 @@
   body[data-theme=console] #outline { padding:16px 24px 16px 16px; }
   body[data-theme=console] aside { background:var(--bg); border-left:0; padding:16px 16px 16px 8px; }
   body[data-theme=console] aside h2 { color:var(--c3); letter-spacing:.1em; }
-  body[data-theme=console] .project-block { border-left:6px solid var(--c3); padding-left:12px; border-radius:6px 0 0 6px; }
-  body[data-theme=console] .project-block:nth-child(2n) { border-left-color:var(--c2); }
-  body[data-theme=console] .project-block:nth-child(3n) { border-left-color:var(--c4); }
+  body[data-theme=console] .depth0 > .row > .num { color:var(--c1); }
+  body[data-theme=console] .pmeta .goal { color:#d9cdbc; }
   body[data-theme=console] .project > .title { color:var(--c3); text-transform:uppercase; letter-spacing:.06em; font-size:14px; }
   body[data-theme=console] .row:hover { background:#17120f; }
   body[data-theme=console] .row.sel { background:#1c1a2b; }
@@ -123,7 +136,6 @@
   body[data-theme=console] .kids { border-left-color:#2a2320; }
   body[data-theme=console] .bar { background:#1f1a17; }
   body[data-theme=console] .bar i { background:var(--c1); }
-  body[data-theme=console] .meta .goal { color:#d9cdbc; }
   body[data-theme=console] .chip { font-weight:600; letter-spacing:.03em; }
   body[data-theme=console] .chip.mode { background:#3d2a10; color:#f5c98a; border-color:#5c4120; }
   body[data-theme=console] .chip.unassigned, body[data-theme=console] .chip.st-todo, body[data-theme=console] .chip.st-done { background:#1d1917; color:var(--mute); }
@@ -161,7 +173,7 @@
   </select>
   <select id="modeFilter"><option value="">Any mode</option></select>
   <button id="viewToggle">Batch by mode</button>
-  <button id="newProject">+ Project</button>
+  <button id="newProject">+ Top-level item</button>
   <span class="sp"></span>
   <span id="hstatus" style="font-size:12px;color:var(--mute)"></span>
   <button id="theme" title="Toggle theme">Theme</button>
@@ -174,7 +186,7 @@
   <aside>
     <div id="panel"></div>
     <div id="help">
-      <b>Keys</b> (while editing a title): <kbd>Enter</kbd> new sibling · <kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> nest/unnest · <kbd>⌫</kbd> on empty deletes · <kbd>↑</kbd>/<kbd>↓</kbd> move · type <kbd>@ai</kbd> or <kbd>@me</kbd> to assign, <kbd>#call</kbd> <kbd>#errand</kbd> <kbd>#email</kbd> … to set mode. Drag ⋮ to reorder.
+      <b>Keys</b> (while editing a title): <kbd>Enter</kbd> new sibling · <kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> nest/unnest · <kbd>⌫</kbd> on empty deletes · <kbd>↑</kbd>/<kbd>↓</kbd> move · type <kbd>@ai</kbd>, <kbd>@me</kbd> or <kbd>@both</kbd> to assign, <kbd>#call</kbd> <kbd>#errand</kbd> <kbd>#email</kbd> … to set mode. Click any chip to change it in place. Drag ⋮ to reorder.
     </div>
   </aside>
 </main>
@@ -200,13 +212,36 @@ async function refresh() {
   renderOutline(); renderPanel();
 }
 
+// ---------- Inline pickers ----------
+let POP = null;
+function closePop() { if (POP) { POP.remove(); POP = null; } }
+document.addEventListener('click', e => { if (POP && !POP.contains(e.target)) closePop(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePop(); });
+// options: [{value,label}], current value, onPick(value)
+function openPicker(anchor, options, current, onPick) {
+  closePop();
+  const pop = el('div','pop');
+  for (const o of options) {
+    const d = el('div'); d.textContent = o.label; if (o.value === current) d.classList.add('cur');
+    d.onclick = e => { e.stopPropagation(); closePop(); if (o.value !== current) onPick(o.value); };
+    pop.appendChild(d);
+  }
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = `${r.left + window.scrollX}px`; pop.style.top = `${r.bottom + window.scrollY + 4}px`;
+  document.body.appendChild(pop); POP = pop;
+  // keep on screen
+  const pr = pop.getBoundingClientRect(); if (pr.right > innerWidth - 8) pop.style.left = `${innerWidth - pr.width - 8 + window.scrollX}px`;
+}
+const ASSIGNEE_LABEL = { human: 'me', ai: 'ai', shared: 'both', unassigned: 'unassigned' };
+const ASSIGNEES = ['human', 'ai', 'shared', 'unassigned'];
+
 // ---------- Outline ----------
 function matches(n) {
   if (n.kind === 'project') return true;
   if (MODE && n.mode !== MODE) return false;
   switch (FILTER) {
-    case 'human': return n.assignee === 'human' && n.state !== 'done';
-    case 'ai': return n.assignee === 'ai' && n.state !== 'done';
+    case 'human': return (n.assignee === 'human' || (n.assignee === 'shared' && n.ai_status === 'done')) && n.state !== 'done';
+    case 'ai': return (n.assignee === 'ai' || (n.assignee === 'shared' && n.ai_status === 'pending')) && n.state !== 'done';
     case 'review': return n.state === 'review';
     case 'blocked': return n.state === 'blocked';
     case 'week': return n.due && n.due <= weekOut() && n.state !== 'done';
@@ -218,38 +253,34 @@ function subtreeMatches(n) { return matches(n) || n.children.some(subtreeMatches
 function renderOutline() {
   const root = $('#outline'); root.innerHTML = '';
   if (VIEW === 'batch') return renderBatch(root);
-  if (!TREE.length) root.innerHTML = '<p class="empty">No projects. Click “+ Project”.</p>';
-  for (const p of TREE) {
-    const block = el('div','project-block');
-    block.appendChild(row(p, 0));
-    const meta = el('div','meta');
-    meta.innerHTML = `<span class="goal">${esc(p.goal) || '<i>no goal — click to set</i>'}</span> · ${p.progress.done}/${p.progress.total} done` + (p.project_status !== 'active' ? ` <span class="pstatus">${p.project_status}</span>` : '');
-    meta.onclick = () => select(p.id, 'detail');
-    block.appendChild(meta);
-    const bar = el('div','bar'); bar.innerHTML = `<i style="width:${p.progress.pct}%"></i>`; block.appendChild(bar);
-    const kids = el('div','kids' + (p.collapsed ? ' collapsed' : ''));
-    kids.dataset.parent = p.id;
-    for (const c of p.children) kids.appendChild(renderNode(c, 1));
-    const add = el('div','add'); add.textContent = '+ task'; add.onclick = () => createTask(p.id);
-    kids.appendChild(add);
-    block.appendChild(kids);
-    root.appendChild(block);
-  }
+  if (!TREE.length) { root.innerHTML = '<p class="empty">Empty outline. Click “+ Project” or press Enter.</p>'; return; }
+  TREE.forEach((p, i) => root.appendChild(renderNode(p, 0, i)));
+  const add = el('div','add'); add.textContent = '+ top-level item'; add.style.paddingLeft = '8px';
+  add.onclick = async () => { const c = await api('POST', '/api/nodes', { title: '' }); await refresh(); focusTitle(c.id); };
+  root.appendChild(add);
 }
-function renderNode(n, depth) {
-  const wrap = el('div');
+function renderNode(n, depth, index) {
+  const wrap = el('div', 'depth' + depth);
   wrap.dataset.id = n.id;
-  if ((FILTER !== 'all' || MODE) && !subtreeMatches(n)) wrap.style.display = 'none';
-  wrap.appendChild(row(n, depth));
-  if (n.children.length) {
-    const kids = el('div','kids' + (n.collapsed ? ' collapsed' : ''));
-    kids.dataset.parent = n.id;
-    for (const c of n.children) kids.appendChild(renderNode(c, depth+1));
-    wrap.appendChild(kids);
+  if ((FILTER !== 'all' || MODE) && depth > 0 && !subtreeMatches(n)) wrap.style.display = 'none';
+  wrap.appendChild(row(n, depth, index));
+  if (n.kind === 'project') {
+    const meta = el('div','pmeta');
+    const g = el('span','goal'); g.textContent = n.goal || ''; g.title = 'click to edit goal'; g.onclick = () => select(n.id, 'detail');
+    const bar = el('div','bar'); bar.innerHTML = `<i style="width:${n.progress.pct}%"></i>`;
+    const pct = el('span'); pct.textContent = `${n.progress.done}/${n.progress.total}`;
+    meta.append(g, bar, pct);
+    if (n.project_status !== 'active') { const ps = el('span','pstatus'); ps.textContent = n.project_status; meta.appendChild(ps); }
+    wrap.appendChild(meta);
   }
+  const kids = el('div','kids' + (n.collapsed ? ' collapsed' : ''));
+  kids.dataset.parent = n.id;
+  n.children.forEach((c, i) => kids.appendChild(renderNode(c, depth + 1, i)));
+  if (depth === 0) { const add = el('div','add'); add.textContent = '+ item'; add.onclick = () => createTask(n.id); kids.appendChild(add); }
+  if (n.children.length || depth === 0) wrap.appendChild(kids);
   return wrap;
 }
-function row(n, depth) {
+function row(n, depth, index = 0) {
   const r = el('div', 'row' + (n.kind==='project' ? ' project' : '') + (SEL === n.id ? ' sel' : ''));
   r.dataset.id = n.id; r.draggable = true;
   r.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', n.id); e.stopPropagation(); });
@@ -266,11 +297,12 @@ function row(n, depth) {
   });
 
   const d = el('div','drag'); r.appendChild(d);
+  const num = el('span','num'); num.textContent = `${index + 1}.`; r.appendChild(num);
   const tw = el('div','tw' + (n.children.length ? '' : ' leaf')); tw.textContent = n.collapsed ? '▶' : '▼';
   tw.onclick = () => api('PATCH', `/api/nodes/${n.id}`, { collapsed: n.collapsed ? 0 : 1 }).then(refresh);
   r.appendChild(tw);
 
-  if (n.kind === 'task') {
+  if (n.kind === 'task' && !n.children.length) {
     const c = el('input','chk'); c.type = 'checkbox'; c.checked = n.state === 'done';
     c.onchange = () => api('PATCH', `/api/nodes/${n.id}`, { state: c.checked ? 'done' : 'todo' }).then(refresh);
     r.appendChild(c);
@@ -282,15 +314,18 @@ function row(n, depth) {
   t.onkeydown = e => keys(e, n, t);
   r.appendChild(t);
 
-  if (n.kind === 'task') {
-    const a = el('span', 'chip ' + n.assignee); a.textContent = n.assignee === 'human' ? 'me' : n.assignee; a.title = 'click to cycle assignee';
-    a.onclick = e => { e.stopPropagation(); const next = { human:'ai', ai:'unassigned', unassigned:'human' }[n.assignee]; api('PATCH', `/api/nodes/${n.id}`, { assignee: next }).then(refresh); };
+  if (n.kind === 'task' && n.children.length) {
+    const leaves = countLeaves(n); const ct = el('span','count'); ct.textContent = `${leaves.done}/${leaves.total}`; r.appendChild(ct);
+  } else if (n.kind === 'task') {
+    const a = el('span', 'chip ' + n.assignee + (n.assignee === 'shared' && n.ai_status === 'done' ? ' ai-done' : '')); a.textContent = ASSIGNEE_LABEL[n.assignee] || n.assignee;
+    a.title = n.assignee === 'shared' ? (n.ai_status === 'done' ? 'shared — AI part done, your turn' : 'shared — AI part pending') : 'click to change assignee';
+    a.onclick = e => { e.stopPropagation(); openPicker(a, ASSIGNEES.map(v => ({ value: v, label: ASSIGNEE_LABEL[v] })), n.assignee, v => api('PATCH', `/api/nodes/${n.id}`, { assignee: v }).then(refresh)); };
     r.appendChild(a);
-    const mc = el('span', 'chip mode'); mc.textContent = n.mode || '#mode'; mc.title = 'click to cycle mode'; if (!n.mode) mc.style.opacity = '.45';
-    mc.onclick = e => { e.stopPropagation(); const i = MODES.indexOf(n.mode); const next = i < 0 ? MODES[0] : (MODES[i+1] || ''); api('PATCH', `/api/nodes/${n.id}`, { mode: next }).then(refresh); };
+    const mc = el('span', 'chip mode'); mc.textContent = n.mode || '#mode'; mc.title = 'click to set mode'; if (!n.mode) mc.style.opacity = '.45';
+    mc.onclick = e => { e.stopPropagation(); openPicker(mc, [{ value: '', label: 'none' }, ...MODES.map(m => ({ value: m, label: m }))], n.mode || '', v => api('PATCH', `/api/nodes/${n.id}`, { mode: v }).then(refresh)); };
     r.appendChild(mc);
     const s = el('span', 'chip st-' + n.state); s.textContent = n.state.replace('_',' ');
-    s.onclick = e => { e.stopPropagation(); select(n.id, n.state === 'review' ? 'review' : 'detail'); };
+    s.onclick = e => { e.stopPropagation(); select(n.id, (n.state === 'review' || (n.assignee === 'shared' && n.ai_status === 'done' && n.state !== 'done')) ? 'review' : 'detail'); };
     r.appendChild(s);
     if (n.due) { const du = el('span', 'due' + (n.due < today() && n.state !== 'done' ? ' over' : '')); du.textContent = n.due; r.appendChild(du); }
     if (n.last_activity) { const la = el('span','last'); la.textContent = `${n.last_activity.actor}: ${n.last_activity.detail || n.last_activity.action}`; la.title = la.textContent; r.appendChild(la); }
@@ -303,8 +338,8 @@ async function commitTitle(n, t) {
   t.dataset.committed = '1';
   let title = t.textContent.trim();
   const patch = {};
-  const m = title.match(/\s*@(ai|me|human|none)\b/i);
-  if (m) { patch.assignee = { ai:'ai', me:'human', human:'human', none:'unassigned' }[m[1].toLowerCase()]; title = title.replace(m[0], '').trim(); }
+  const m = title.match(/\s*@(ai|me|human|both|shared|none)\b/i);
+  if (m) { patch.assignee = { ai:'ai', me:'human', human:'human', both:'shared', shared:'shared', none:'unassigned' }[m[1].toLowerCase()]; title = title.replace(m[0], '').trim(); }
   const mm = title.match(/\s*#([a-z]+)\b/i);
   if (mm && MODES.includes(mm[1].toLowerCase())) { patch.mode = mm[1].toLowerCase(); title = title.replace(mm[0], '').trim(); }
   if (title !== n.title) patch.title = title;
@@ -313,22 +348,24 @@ async function commitTitle(n, t) {
 async function keys(e, n, t) {
   if (e.key === 'Enter') {
     e.preventDefault(); await commitTitle(n, t);
-    if (n.kind === 'project') { await createTask(n.id, 0); return; }
-    const created = await api('POST', '/api/nodes', { parent_id: n.parent_id, title: '', assignee: n.assignee, position: n.position + 1 });
+    const created = n.kind === 'project'
+      ? (n.children.length && !n.collapsed ? await api('POST', '/api/nodes', { parent_id: n.id, title: '', position: 0 }) : await api('POST', '/api/nodes', { title: '', position: n.position + 1 }))
+      : await api('POST', '/api/nodes', { parent_id: n.parent_id, title: '', assignee: n.assignee, position: n.position + 1 });
     await refresh(); focusTitle(created.id);
   } else if (e.key === 'Tab') {
-    e.preventDefault(); if (n.kind === 'project') return;
+    e.preventDefault();
     await commitTitle(n, t); n = findNode(n.id) || n;
     const siblings = findSiblings(n); const idx = siblings.findIndex(s => s.id === n.id);
     if (e.shiftKey) {
-      const parent = findNode(n.parent_id); if (!parent || parent.kind === 'project') return;
-      await api('POST', `/api/nodes/${n.id}/move`, { parent_id: parent.parent_id, position: parent.position + 1 });
+      if (!n.parent_id) return;
+      const parent = findNode(n.parent_id);
+      await api('POST', `/api/nodes/${n.id}/move`, { parent_id: parent.parent_id || null, position: parent.position + 1 });
     } else {
       if (idx === 0) return; const prev = siblings[idx-1];
       await api('POST', `/api/nodes/${n.id}/move`, { parent_id: prev.id, position: 999 });
     }
     await refresh(); focusTitle(n.id);
-  } else if (e.key === 'Backspace' && t.textContent === '' && n.kind === 'task') {
+  } else if (e.key === 'Backspace' && t.textContent === '' && !n.children.length) {
     e.preventDefault(); const siblings = findSiblings(n); const idx = siblings.findIndex(s => s.id === n.id);
     await api('DELETE', `/api/nodes/${n.id}`); await refresh();
     const prev = siblings[idx-1]; if (prev) focusTitle(prev.id, true);
@@ -351,6 +388,7 @@ async function createTask(parent_id, position) {
   const created = await api('POST', '/api/nodes', { parent_id, title: '', assignee: 'human', position });
   await refresh(); focusTitle(created.id);
 }
+function countLeaves(n) { if (!n.children.length) return { total: 1, done: n.state === 'done' ? 1 : 0 }; let total = 0, done = 0; for (const c of n.children) { const x = countLeaves(c); total += x.total; done += x.done; } return { total, done }; }
 function findNode(id, list = TREE) { for (const n of list) { if (n.id === id) return n; const f = findNode(id, n.children); if (f) return f; } return null; }
 function findSiblings(n) { return n.parent_id ? findNode(n.parent_id).children : TREE; }
 
@@ -371,7 +409,8 @@ function renderPanel() {
   p.appendChild(tabs);
   ({ inbox: renderInbox, review: renderReview, detail: renderDetail, digest: renderDigest, activity: renderActivity, calendar: renderCalendar })[PANEL](p);
 }
-function countReview() { let c = 0; (function walk(l){ for (const n of l) { if (n.state === 'review') c++; walk(n.children); } })(TREE); return c; }
+const yourTurn = n => n.assignee === 'shared' && n.ai_status === 'done' && n.state !== 'done';
+function countReview() { let c = 0; (function walk(l){ for (const n of l) { if (n.state === 'review' || yourTurn(n)) c++; walk(n.children); } })(TREE); return c; }
 
 function renderInbox(p) {
   p.appendChild(h2('Proposals from the harness'));
@@ -392,6 +431,20 @@ function renderInbox(p) {
   }
 }
 function renderReview(p) {
+  const shared = []; (function walk(l, proj){ for (const n of l) { if (yourTurn(n)) shared.push({ n, proj }); walk(n.children, proj || n); } })(TREE, null);
+  if (shared.length) {
+    p.appendChild(h2('Shared tasks — AI part done, your turn'));
+    for (const { n, proj } of shared) {
+      const c = el('div','card');
+      c.innerHTML = `<div class="t">${esc(proj?.title || '')} · shared</div><div><b>${esc(n.title)}</b></div><pre>${esc(n.artifact || '(no artifact)')}</pre>`;
+      const note = el('textarea'); note.placeholder = 'Note for the AI (what to change or add)'; note.style.cssText = 'width:100%;margin-top:8px;min-height:44px';
+      const a = el('div','actions');
+      const ok = el('button','primary'); ok.textContent = 'My part done → done'; ok.onclick = () => api('PATCH', `/api/nodes/${n.id}`, { state: 'done' }).then(refresh);
+      const back = el('button'); back.textContent = 'Send back to AI'; back.onclick = () => api('POST', `/api/nodes/${n.id}/redo-ai`, { note: note.value }).then(refresh);
+      const cp = el('button'); cp.textContent = 'Copy'; cp.onclick = () => navigator.clipboard.writeText(n.artifact || '');
+      a.append(ok, back, cp); c.append(note, a); p.appendChild(c);
+    }
+  }
   p.appendChild(h2('AI drafts awaiting your review'));
   const items = []; (function walk(l, proj){ for (const n of l) { if (n.state === 'review') items.push({ n, proj }); walk(n.children, proj || n); } })(TREE, null);
   if (!items.length) { p.appendChild(em('No drafts in review.')); return; }
@@ -412,7 +465,7 @@ function renderDetail(p) {
   const d = el('div','detail');
   const fields = n.kind === 'project'
     ? [['title','Title','text'],['goal','Goal','textarea'],['success_criteria','Success criteria (checkable)','textarea'],['constraints','Constraints for the AI (e.g. "draft only, no outreach")','textarea'],['project_status','Status',['active','paused','archived']]]
-    : [['title','Title','text'],['assignee','Assignee',['human','ai','unassigned']],['mode','Mode (batch similar work)',['',...MODES]],['state','State',['todo','in_progress','blocked','review','done']],['due','Due','date'],['acceptance_note','Acceptance note / review feedback','textarea']];
+    : [['title','Title','text'],['assignee','Assignee (shared = AI preps, you finish)',ASSIGNEES],['mode','Mode (batch similar work)',['',...MODES]],['state','State',['todo','in_progress','blocked','review','done']],['due','Due','date'],['acceptance_note','Acceptance note / review feedback','textarea']];
   for (const [k, label, type] of fields) {
     const l = el('label'); l.textContent = label; d.appendChild(l);
     let inp;
@@ -421,6 +474,11 @@ function renderDetail(p) {
     else { inp = el('input'); inp.type = type; inp.value = n[k] || ''; }
     inp.onchange = () => api('PATCH', `/api/nodes/${n.id}`, { [k]: inp.value }).then(refresh).catch(e => alert(e.message));
     d.appendChild(inp);
+  }
+  if (n.kind === 'task' && n.assignee === 'shared') {
+    const l0 = el('label'); l0.textContent = `AI part: ${n.ai_status}`; d.appendChild(l0);
+    const b0 = el('button'); b0.textContent = n.ai_status === 'done' ? 'Send back to AI' : 'Waiting for next harness run'; b0.disabled = n.ai_status !== 'done';
+    b0.onclick = () => api('POST', `/api/nodes/${n.id}/redo-ai`, { note: prompt('Note for the AI (optional)') || '' }).then(refresh); d.appendChild(b0);
   }
   if (n.kind === 'task') {
     const l = el('label'); l.textContent = 'Depends on (tasks in same project)'; d.appendChild(l);
@@ -541,7 +599,7 @@ $('#theme').onclick = () => { const t = document.body.dataset.theme === 'console
 $('#modeFilter').onchange = e => { MODE = e.target.value; renderOutline(); };
 $('#viewToggle').onclick = () => { VIEW = VIEW === 'outline' ? 'batch' : 'outline'; $('#viewToggle').textContent = VIEW === 'outline' ? 'Batch by mode' : 'Outline'; refresh(); };
 $('#filter').onchange = e => { FILTER = e.target.value; VIEW === 'batch' ? refresh() : renderOutline(); };
-$('#newProject').onclick = async () => { const c = await api('POST', '/api/nodes', { title: 'New project' }); await refresh(); select(c.id, 'detail'); focusTitle(c.id, true); };
+$('#newProject').onclick = async () => { const c = await api('POST', '/api/nodes', { title: '' }); await refresh(); focusTitle(c.id); };
 async function runHarness(project_id) {
   const b = $('#runHarness'); b.disabled = true; b.textContent = 'Running…';
   try { await api('POST', '/api/harness/run', { project_id }); } catch (e) { alert(e.message); }
