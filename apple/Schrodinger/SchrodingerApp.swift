@@ -34,15 +34,14 @@ struct SchrodingerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environment(harness)
-                .task { harness.start() }
-        }
-        .modelContainer(container)
         #if os(macOS)
-        .defaultSize(width: 1280, height: 820)
+        WindowGroup { ContentView().environment(harness).task { harness.start() } }
+            .modelContainer(container)
+            .defaultSize(width: 1280, height: 820)
         Settings { SettingsView().modelContainer(container).environment(harness) }
+        #else
+        WindowGroup { ContentView().environment(harness).task { harness.start() } }
+            .modelContainer(container)
         #endif
     }
 }

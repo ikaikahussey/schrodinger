@@ -3,3 +3,6 @@ schrodinger.db*
 .env
 data/
 .vercel
+apple/build/
+apple/build-log.txt
+apple/Schrodinger.xcodeproj/

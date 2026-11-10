@@ -49,3 +49,14 @@ targets:
     sources: [SchrodingerTests]
     dependencies:
       - target: Schrodinger_${platform}
+schemes:
+  Schrodinger_macOS:
+    build: { targets: { Schrodinger_macOS: all, SchrodingerTests_macOS: [test] } }
+    run: { config: Debug }
+    test: { config: Debug, targets: [SchrodingerTests_macOS] }
+    archive: { config: Release }
+  Schrodinger_iOS:
+    build: { targets: { Schrodinger_iOS: all, SchrodingerTests_iOS: [test] } }
+    run: { config: Debug }
+    test: { config: Debug, targets: [SchrodingerTests_iOS] }
+    archive: { config: Release }

@@ -7,6 +7,14 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 REPO=$(pwd)
 LOG="$REPO/apple/build-log.txt"
+mkdir -p "$REPO/apple/build"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# --if-changed (used by the launchd poller): pull and exit unless main moved since the last build.
+if [ "${1:-}" = "--if-changed" ]; then
+  git fetch -q origin main 2>/dev/null
+  NEW=$(git rev-parse origin/main); OLD=$(cat "$REPO/apple/build/.last-sha" 2>/dev/null || echo none)
+  [ "$NEW" = "$OLD" ] && exit 0
+fi
 XC=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -1)
 export DEVELOPER_DIR="$XC/Contents/Developer"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -41,6 +49,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
   echo "=== done $(date) ==="
 } 2>&1 | tee "$LOG"
 cd "$REPO"
+git rev-parse HEAD > "$REPO/apple/build/.last-sha"
 git add apple/build-log.txt && git commit -q -m "build log $(date +%F_%T)" -- apple/build-log.txt && git push -q origin HEAD:build-logs --force 2>&1 | tail -1
 git reset -q --soft HEAD~1 && git reset -q apple/build-log.txt   # keep main clean; log lives on build-logs
-echo; echo "Log pushed to branch build-logs. You can close this window."
+[ "${1:-}" = "--if-changed" ] || { echo; echo "Log pushed to branch build-logs. You can close this window."; }
