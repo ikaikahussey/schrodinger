@@ -17,6 +17,20 @@ final class HarnessEngine {
     init(container: ModelContainer) { self.container = container }
 
     // MARK: Scheduling
+    /// Runs one project's agent and records the run. Static and MainActor-isolated so the task group captures only Sendable values.
+    @MainActor
+    static func runProject(container: ModelContainer, projectID: UUID, title: String, provider: any LanguageModelProvider) async -> String {
+        let store = Store(container.mainContext)
+        let run = store.startRun(projectID: projectID)
+        do {
+            let out = try await ProjectAgent(container: container, projectID: projectID, provider: provider).run()
+            run.status = "ok"; run.log = out.joined(separator: "\n")
+        } catch { run.status = "error"; run.log = error.localizedDescription }
+        run.finishedAt = Date()
+        store.save()
+        return "\(title): \(run.status)\n\(run.log)"
+    }
+
     func start() {
         timer?.invalidate()
         let minutes = max(5, AppSettings.shared.harnessIntervalMinutes)
@@ -44,20 +58,12 @@ final class HarnessEngine {
         let store = Store(container.mainContext)
         let projects = store.projects().filter { $0.projectStatus == .active && (projectID == nil || $0.id == projectID) }
         let provider = AppSettings.shared.makeProvider()
+        let container = self.container
+        let ids = projects.map { ($0.id, $0.title) }
         var results: [String] = []
         await withTaskGroup(of: String.self) { group in
-            for p in projects {
-                let pid = p.id, title = p.title
-                group.addTask { @MainActor in
-                    let run = Store(self.container.mainContext).startRun(projectID: pid)
-                    do {
-                        let out = try await ProjectAgent(container: self.container, projectID: pid, provider: provider).run()
-                        run.status = "ok"; run.log = out.joined(separator: "\n")
-                    } catch { run.status = "error"; run.log = error.localizedDescription }
-                    run.finishedAt = Date()
-                    Store(self.container.mainContext).save()
-                    return "\(title): \(run.status)\n\(run.log)"
-                }
+            for (pid, title) in ids {
+                group.addTask { await HarnessEngine.runProject(container: container, projectID: pid, title: title, provider: provider) }
             }
             for await r in group { results.append(r) }
         }
