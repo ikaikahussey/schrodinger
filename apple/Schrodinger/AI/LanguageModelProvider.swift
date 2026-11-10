@@ -4,8 +4,17 @@ import Foundation
 struct AgentToolSpec: Sendable {
     let name: String
     let description: String
-    let schema: [String: Any]            // JSON Schema for Claude
-    let run: @Sendable ([String: Any]) async throws -> String   // returns text (JSON or markdown)
+    let schemaJSON: String               // JSON Schema (as text) for Claude
+    let run: @Sendable (String) async throws -> String   // input: JSON object text; returns text (JSON or markdown)
+
+    var schema: [String: Any] { (try? JSONSerialization.jsonObject(with: Data(schemaJSON.utf8))) as? [String: Any] ?? ["type": "object", "properties": [:]] }
+    var propertyKeys: [String] { (schema["properties"] as? [String: Any])?.keys.sorted() ?? [] }
+    func call(_ input: [String: Any]) async throws -> String { try await run(JSONText.encode(input)) }
+}
+
+enum JSONText {
+    static func encode(_ v: Any) -> String { (try? String(data: JSONSerialization.data(withJSONObject: v), encoding: .utf8)) ?? "{}" }
+    static func decode(_ s: String) -> [String: Any] { (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] ?? [:] }
 }
 
 struct DraftRequest: Sendable {

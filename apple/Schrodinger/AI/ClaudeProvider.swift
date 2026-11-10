@@ -44,7 +44,7 @@ struct ClaudeProvider: LanguageModelProvider {
                 if name == "finish" { log.append("finish"); return DraftResult(artifact: ToolLoop.finishArtifact(input), log: log) }
                 var out = "", isError = false
                 if let tool = req.tools.first(where: { $0.name == name }) {
-                    do { out = try await tool.run(input) } catch { out = "error: \(error.localizedDescription)"; isError = true }
+                    do { out = try await tool.call(input) } catch { out = "error: \(error.localizedDescription)"; isError = true }
                 } else { out = "error: unknown tool \(name)"; isError = true }
                 log.append("\(name) → \(isError ? "error" : "ok")")
                 results.append(["type": "tool_result", "tool_use_id": id, "content": String(out.prefix(60_000)), "is_error": isError])
@@ -65,8 +65,8 @@ struct MockProvider: LanguageModelProvider {
     func complete(system: String, prompt: String) async throws -> String { "[]" }
     func draft(_ req: DraftRequest) async throws -> DraftResult {
         var log: [String] = []
-        if let ctx = req.tools.first(where: { $0.name == "project_context" }) { _ = try? await ctx.run([:]); log.append("project_context → ok") }
-        if let w = req.tools.first(where: { $0.name == "write_file" }) { _ = try? await w.run(["path": "notes/mock.md", "content": "# Notes\n\(req.prompt.prefix(200))"]); log.append("write_file → ok") }
+        if let ctx = req.tools.first(where: { $0.name == "project_context" }) { _ = try? await ctx.call([:]); log.append("project_context → ok") }
+        if let w = req.tools.first(where: { $0.name == "write_file" }) { _ = try? await w.call(["path": "notes/mock.md", "content": "# Notes\n\(req.prompt.prefix(200))"]); log.append("write_file → ok") }
         log.append("finish")
         let title = req.prompt.split(separator: "\n").first.map(String.init) ?? "task"
         let notes = req.prompt.contains("Prior review notes") ? "\n\n## Revisions addressing review notes\n" + (req.prompt.components(separatedBy: "Prior review notes from the owner (address these):\n").last?.components(separatedBy: "\n\n").first ?? "") : ""

@@ -58,7 +58,7 @@ struct BridgedTool: Tool {
     let log: ToolLog
     var name: String { spec.name }
     var description: String {
-        let keys = (spec.schema["properties"] as? [String: Any])?.keys.sorted().joined(separator: ", ") ?? ""
+        let keys = spec.propertyKeys.joined(separator: ", ")
         return spec.description + (keys.isEmpty ? "" : " Provide `json` as a JSON object with keys: \(keys).")
     }
 
@@ -69,9 +69,8 @@ struct BridgedTool: Tool {
     }
 
     func call(arguments: Arguments) async throws -> String {
-        let input = (try? JSONSerialization.jsonObject(with: Data(arguments.json.utf8))) as? [String: Any] ?? [:]
         do {
-            let out = try await spec.run(input)
+            let out = try await spec.run(arguments.json.isEmpty ? "{}" : arguments.json)
             await log.add("\(spec.name) → ok")
             return String(out.prefix(3000))   // keep within the on-device context window
         } catch {

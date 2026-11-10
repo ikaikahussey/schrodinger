@@ -51,11 +51,11 @@ struct OutlineView: View {
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
 
-    @ViewBuilder
-    private func nodeTree(_ n: Node, depth: Int, index: Int, kids: [UUID?: [Node]]) -> some View {
+    private func nodeTree(_ n: Node, depth: Int, index: Int, kids: [UUID?: [Node]]) -> AnyView {
         let children = kids[n.id] ?? []
         let hidden = (filter != .all || modeFilter != nil) && depth > 0 && !subtreeMatches(n, kids: kids)
-        if !hidden {
+        if hidden { return AnyView(EmptyView()) }
+        return AnyView(VStack(alignment: .leading, spacing: 2) {
             NodeRow(node: n, depth: depth, index: index, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, onKey: { key in handleKey(key, n, kids: kids) })
             if n.isProject { ProjectMeta(node: n, progress: store.progress(of: n.id), sel: sel).padding(.leading, CGFloat(depth) * 24 + 74) }
             if !n.collapsed {
@@ -67,7 +67,7 @@ struct OutlineView: View {
                         .buttonStyle(.plain).foregroundStyle(.secondary).padding(.leading, CGFloat(depth + 1) * 24 + 40)
                 }
             }
-        }
+        })
     }
 
     private func leafCount(_ n: Node, kids: [UUID?: [Node]]) -> (done: Int, total: Int) {
