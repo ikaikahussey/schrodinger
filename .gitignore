@@ -6,3 +6,5 @@ data/
 apple/build/
 apple/build-log.txt
 apple/Schrodinger.xcodeproj/
+*.p8
+.schrodinger-asc.env
