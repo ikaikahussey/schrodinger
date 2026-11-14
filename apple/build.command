@@ -66,11 +66,30 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
     python3 asc_prepare.py 2>&1 | tail -15
     AUTH=(-allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH")
     BN=$(date +%Y%m%d%H%M)
+    source build/profiles.env 2>/dev/null || true
     for P in iOS macOS; do
       echo "--- archive $P"
       xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_$P -configuration Release -destination "generic/platform=$P" -archivePath "build/$P.xcarchive" archive CURRENT_PROJECT_VERSION=$BN "${AUTH[@]}" 2>&1 | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)|\*\* " | sort -u
-      echo "--- upload $P"
-      xcodebuild -exportArchive -archivePath "build/$P.xcarchive" -exportPath "build/$P-export" -exportOptionsPlist ExportOptions.plist "${AUTH[@]}" 2>&1 | grep -E "error:|EXPORT (SUCCEEDED|FAILED)|[Uu]pload|\*\* " | sort -u
+      # Export with manual signing: local Apple Distribution cert + the App Store profile asc_prepare.py installed.
+      if [ "$P" = iOS ]; then PROF="$IOS_PROFILE"; INSTALLER=""; else PROF="$MAC_PROFILE"; INSTALLER="<key>installerSigningCertificate</key><string>3rd Party Mac Developer Installer</string>"; fi
+      cat > "build/export-$P.plist" <<EOP
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>destination</key><string>upload</string>
+  <key>teamID</key><string>$APPLE_TEAM_ID</string>
+  <key>signingStyle</key><string>manual</string>
+  <key>signingCertificate</key><string>Apple Distribution</string>
+  $INSTALLER
+  <key>provisioningProfiles</key><dict><key>org.schrodinger.app</key><string>$PROF</string></dict>
+  <key>uploadSymbols</key><true/>
+  <key>manageAppVersionAndBuildNumber</key><true/>
+</dict></plist>
+EOP
+      echo "--- upload $P (profile: $PROF)"
+      xcodebuild -exportArchive -archivePath "build/$P.xcarchive" -exportPath "build/$P-export" -exportOptionsPlist "build/export-$P.plist" \
+        -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH" 2>&1 | grep -E "error|EXPORT (SUCCEEDED|FAILED)|[Uu]pload|\*\* " | sort -u
     done
   else
     echo "--- skipping archive/upload (mac=$MAC ios=$IOS asc=${ASC_KEY_ID:+set})"

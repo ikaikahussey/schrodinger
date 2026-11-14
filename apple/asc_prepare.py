@@ -7,7 +7,7 @@
 
 Uses only python3 stdlib + the `openssl` and `security` CLIs. Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH.
 """
-import base64, json, os, re, subprocess, sys, tempfile, time, urllib.request, urllib.error
+import base64, json, os, re, subprocess, sys, tempfile, time, urllib.request, urllib.error, urllib.parse
 
 KEY_ID = os.environ["ASC_KEY_ID"]; ISSUER = os.environ["ASC_ISSUER_ID"]; KEY_PATH = os.path.expanduser(os.environ["ASC_KEY_PATH"])
 API = "https://api.appstoreconnect.apple.com/v1"
@@ -98,8 +98,57 @@ def ensure_wwdr():
         print("wwdr: installed intermediate")
     except Exception as e: print(f"wwdr: could not install intermediate: {e}")
 
+# ---------- 3. App Store provisioning profiles (manual signing for export) ----------
+BUNDLE_ID = os.environ.get("BUNDLE_ID", "org.schrodinger.app")
+PROFILE_DIR = os.path.expanduser("~/Library/Developer/Xcode/UserData/Provisioning Profiles")
+
+def local_cert_sha1(name):
+    pem = sh("security", "find-certificate", "-c", name, "-p", check=False).stdout
+    if "BEGIN CERTIFICATE" not in pem: return None
+    import hashlib
+    der = base64.b64decode("".join(l for l in pem.splitlines() if "CERTIFICATE" not in l))
+    return hashlib.sha1(der).hexdigest().upper()
+
+def api_cert_id(ctype, local_sha1):
+    import hashlib
+    for c in api("GET", f"/certificates?filter[certificateType]={ctype}&limit=200")["data"]:
+        der = base64.b64decode(c["attributes"]["certificateContent"])
+        if hashlib.sha1(der).hexdigest().upper() == local_sha1: return c["id"]
+    return None
+
+def ensure_profiles():
+    bid = api("GET", f"/bundleIds?filter[identifier]={BUNDLE_ID}&limit=5")["data"]
+    bid = next((b for b in bid if b["attributes"]["identifier"] == BUNDLE_ID), None)
+    if not bid: print(f"profiles: bundle id {BUNDLE_ID} not found"); return {}
+    sha = local_cert_sha1("Apple Distribution")
+    cert = api_cert_id("DISTRIBUTION", sha) if sha else None
+    if not cert: print("profiles: local Apple Distribution certificate not found in the team; cannot build profiles"); return {}
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    out = {}
+    for ptype, name, ext in (("IOS_APP_STORE", "Schrodinger iOS App Store", "mobileprovision"), ("MAC_APP_STORE", "Schrodinger macOS App Store", "provisionprofile")):
+        existing = [p for p in api("GET", f"/profiles?filter[name]={urllib.parse.quote(name)}&limit=10")["data"] if p["attributes"]["name"] == name]
+        prof = None
+        for p in existing:
+            certs = api("GET", f"/profiles/{p['id']}/certificates")["data"]
+            if p["attributes"]["profileState"] == "ACTIVE" and any(c["id"] == cert for c in certs): prof = p; break
+            api("DELETE", f"/profiles/{p['id']}")
+        if not prof:
+            prof = api("POST", "/profiles", {"data": {"type": "profiles", "attributes": {"name": name, "profileType": ptype},
+                "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bid["id"]}}, "certificates": {"data": [{"type": "certificates", "id": cert}]}}}})["data"]
+            print(f"profiles: created {name}")
+        else: print(f"profiles: reusing {name}")
+        content = base64.b64decode(prof["attributes"]["profileContent"])
+        path = os.path.join(PROFILE_DIR, f"{prof['attributes']['uuid']}.{ext}")
+        open(path, "wb").write(content)
+        out[ptype] = name
+    return out
+
 if __name__ == "__main__":
     ensure_device()
     ensure_wwdr()
     for n, t in WANT.items(): ensure_cert(n, t)
     print("identities:\n" + "\n".join(l for l in local_identities().splitlines() if "Apple" in l or "Mac Developer" in l))
+    profiles = ensure_profiles()
+    os.makedirs("build", exist_ok=True)
+    with open("build/profiles.env", "w") as f:
+        f.write(f"IOS_PROFILE={json.dumps(profiles.get('IOS_APP_STORE', ''))}\nMAC_PROFILE={json.dumps(profiles.get('MAC_APP_STORE', ''))}\n")
