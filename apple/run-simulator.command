@@ -3,6 +3,7 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+mkdir -p build; exec > >(tee build/sim.log) 2>&1
 XC=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -1); export DEVELOPER_DIR="$XC/Contents/Developer"
 git -C .. pull --ff-only -q 2>/dev/null || true
 [ -d Schrodinger.xcodeproj ] || xcodegen generate | tail -1
