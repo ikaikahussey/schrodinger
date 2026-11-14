@@ -241,6 +241,8 @@ struct NodeRow: View {
     var focused: FocusState<UUID?>.Binding
     let onKey: (OutlineView.Key) -> Void
     @State private var title: String = ""
+    @State private var pull: CGFloat = 0
+    private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
@@ -280,20 +282,36 @@ struct NodeRow: View {
         .padding(.vertical, 6)
         .padding(.leading, 6)
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .offset(x: pull)
+        .background(alignment: .leading) { pullArrow("arrow.left", active: pull > pullThreshold, show: pull > 8) }
+        .background(alignment: .trailing) { pullArrow("arrow.right", active: pull < -pullThreshold, show: pull < -8) }
+        .gesture(pullGesture)
         .contextMenu { menu }
-        #if os(iOS)
-        // Pull to move: pull the row right to outdent (←), pull it left to indent (→).
-        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            if !node.isProject {
-                Button { onKey(.shiftTab) } label: { Image(systemName: "arrow.left") }.tint(.black).accessibilityLabel("Outdent")
+    }
+
+    /// Pull to move: drag the row right to outdent (←), left to indent (→). Projects can't outdent.
+    private var pullGesture: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onChanged { v in
+                guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                var x = v.translation.width
+                if node.isProject && x > 0 { x = 0 }
+                pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
             }
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button { onKey(.tab) } label: { Image(systemName: "arrow.right") }.tint(.black).accessibilityLabel("Indent")
-            if isLeafTask { Button(done ? "Undo" : "Done") { store.update(node) { $0.state = done ? .todo : .done }; store.save() }.tint(.gray) }
-            Button("Details") { sel.nodeID = node.id; sel.panel = .review }.tint(.gray)
-        }
-        #endif
+            .onEnded { _ in
+                let p = pull
+                withAnimation(.snappy(duration: 0.22)) { pull = 0 }
+                if p > pullThreshold { commit(); onKey(.shiftTab) }
+                else if p < -pullThreshold { commit(); onKey(.tab) }
+            }
+    }
+
+    private func pullArrow(_ name: String, active: Bool, show: Bool) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 13, weight: active ? .bold : .regular))
+            .foregroundStyle(active ? Color.ink : Color.ink.opacity(0.35))
+            .padding(.horizontal, 10)
+            .opacity(show ? 1 : 0)
     }
 
     private var summary: String {
