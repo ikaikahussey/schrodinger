@@ -19,7 +19,9 @@ fi
 [ -z "$UDID" ] && { echo "No iPhone simulator available. Install one in Xcode → Settings → Components."; exit 1; }
 echo "Simulator: $(xcrun simctl list devices | grep "$UDID" | head -1)"
 xcrun simctl boot "$UDID" 2>/dev/null || true
-open "$DEVELOPER_DIR/Applications/Simulator.app" || open -a Simulator
+SIMAPP=$(find "$XC" -maxdepth 5 -name "Simulator.app" -type d 2>/dev/null | head -1)
+echo "Simulator.app: ${SIMAPP:-not found}"
+open -b com.apple.iphonesimulator 2>/dev/null || { [ -n "$SIMAPP" ] && open "$SIMAPP"; } || open -a Simulator
 echo "--- building (Debug, simulator)"
 xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_iOS -configuration Debug -destination "id=$UDID" -derivedDataPath build/sim build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u
 APP=$(find build/sim/Build/Products -name "Schrodinger.app" -path "*iphonesimulator*" | head -1)
