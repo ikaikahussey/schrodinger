@@ -290,15 +290,16 @@ struct NodeRow: View {
     private var done: Bool { node.state == .done && isLeafTask }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .top, spacing: 10) {
-            Menu { menu } label: {
+            Button { commit(); sel.nodeID = sel.nodeID == node.id ? nil : node.id } label: {
                 DepthBars(node: node, depth: depth, hasChildren: hasChildren)
                     .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
                     .contentShape(Rectangle())
             }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+            .buttonStyle(.plain)
             .padding(.top, -1)
-            .help(summary + " · tap for menu · drag to move")
+            .help(summary + " · tap for actions · drag to move")
             .accessibilityLabel(summary)
             .simultaneousGesture(handleGesture)
 
@@ -351,6 +352,8 @@ struct NodeRow: View {
         }
         .padding(.vertical, 6)
         .padding(.leading, 6)
+        if sel.nodeID == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8) }
+        }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .offset(x: pull, y: lift)
         .background(Color.canvas.opacity(lift == 0 ? 0 : 1), in: RoundedRectangle(cornerRadius: 6))
@@ -434,6 +437,49 @@ struct NodeRow: View {
         }
     }
 
+    /// The item's actions, on screen (shown under the selected row). Same set as the context menu.
+    @ViewBuilder private var actionStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                if !node.isProject {
+                    group {
+                        ForEach(Assignee.allCases) { a in
+                            Pill(a == .unassigned ? "—" : a.label, on: node.assignee == a) { store.update(node) { $0.assignee = a }; store.save() }
+                        }
+                    }
+                    group {
+                        ForEach(TaskState.allCases) { st in
+                            Pill(st == .in_progress ? "doing" : st.label, on: node.state == st) { store.update(node) { $0.state = st }; store.save() }
+                        }
+                    }
+                    group {
+                        ForEach(Mode.allCases) { m in
+                            Pill(m.glyph, on: node.mode == m, mono: true) { store.update(node) { $0.mode = $0.mode == m ? nil : m }; store.save() }
+                                .help(m.rawValue)
+                        }
+                    }
+                }
+                group {
+                    if !node.isProject {
+                        Pill(systemImage: "arrow.left") { onKey(.shiftTab) }.help("Outdent")
+                        Pill(systemImage: "arrow.right") { onKey(.tab) }.help("Indent")
+                    }
+                    Pill(systemImage: "arrow.up") { onKey(.altUp) }.help("Move up")
+                    Pill(systemImage: "arrow.down") { onKey(.altDown) }.help("Move down")
+                    if hasChildren { Pill(systemImage: node.collapsed ? "chevron.down" : "chevron.up") { store.update(node) { $0.collapsed.toggle() }; store.save() }.help(node.collapsed ? "Expand" : "Collapse") }
+                }
+                group {
+                    Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below")
+                    if !node.isProject { Pill(systemImage: "text.alignleft") { openNote() }.help(showNote ? "Edit context" : "Add context") }
+                    Pill(systemImage: "info.circle") { sel.nodeID = node.id; sel.panel = .review }.help("Details")
+                    Pill(systemImage: "trash") { store.delete(node); store.save() }.help("Delete")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+    private func group<V: View>(@ViewBuilder _ content: () -> V) -> some View { HStack(spacing: 4) { content() } }
+
     @ViewBuilder private var menu: some View {
         if !node.isProject {
             Section("Responsible") {
@@ -506,6 +552,30 @@ struct Dot: View {
             Circle().strokeBorder(Color.ink, lineWidth: 1).background(Circle().fill(filled ? Color.ink : .clear)).frame(width: 7, height: 7)
             Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6))
         }
+    }
+}
+
+/// Small on-screen action: text or symbol; `on` = filled.
+struct Pill: View {
+    var text: String? = nil
+    var systemImage: String? = nil
+    var on = false
+    var mono = false
+    let action: () -> Void
+    init(_ text: String, on: Bool = false, mono: Bool = false, action: @escaping () -> Void) { self.text = text; self.on = on; self.mono = mono; self.action = action }
+    init(systemImage: String, action: @escaping () -> Void) { self.systemImage = systemImage; self.action = action }
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if let t = text { Text(t).font(mono ? .system(size: 11, weight: .semibold, design: .monospaced) : .caption2.weight(.medium)) }
+                else if let i = systemImage { Image(systemName: i).font(.system(size: 11, weight: .semibold)) }
+            }
+            .padding(.horizontal, text == nil ? 7 : 8).padding(.vertical, 4)
+            .frame(minWidth: 26)
+            .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
+            .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
+        }
+        .buttonStyle(.plain)
     }
 }
 
