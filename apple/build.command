@@ -57,6 +57,8 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
   echo "--- tests macOS"
   xcodebuild test -project Schrodinger.xcodeproj -scheme Schrodinger_macOS -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "error:|Test Case|Executed|\*\* " | tail -30
   if [ "$MAC" = 0 ] && [ "$IOS" = 0 ] && [ -n "${ASC_KEY_ID:-}" ]; then
+    echo "--- signing prep (device registration + certificates via App Store Connect API)"
+    python3 asc_prepare.py 2>&1 | tail -15
     AUTH=(-allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH")
     BN=$(date +%Y%m%d%H%M)
     for P in iOS macOS; do
