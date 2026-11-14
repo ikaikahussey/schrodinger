@@ -331,6 +331,17 @@ struct NodeRow: View {
             }
             Spacer(minLength: 6)
             marker
+            Button { commit(); sel.nodeID = node.id; sel.panel = .review } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.ink.opacity(0.3))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Details")
+            .accessibilityLabel("Details")
+            .padding(.top, -3)
         }
         .padding(.vertical, 6)
         .padding(.leading, 6)
