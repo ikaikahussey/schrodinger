@@ -11,6 +11,8 @@ if [ "${SCHRODINGER_PULLED:-}" != 1 ]; then
   git pull --ff-only -q 2>/dev/null || true
   SCHRODINGER_PULLED=1 exec bash "$0" "$@"
 fi
+# Commits marked [skip ci] do not build or upload.
+git log -1 --pretty=%B | grep -q '\[skip ci\]' && { echo "[skip ci] — nothing to do"; exit 0; }
 LOG="$REPO/apple/build-log.txt"
 mkdir -p "$REPO/apple/build"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
