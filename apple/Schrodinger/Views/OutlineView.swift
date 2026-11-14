@@ -282,13 +282,16 @@ struct NodeRow: View {
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .contextMenu { menu }
         #if os(iOS)
-        .swipeActions(edge: .trailing) {
-            if isLeafTask { Button(done ? "Undo" : "Done") { store.update(node) { $0.state = done ? .todo : .done }; store.save() }.tint(.black) }
-            Button("Details") { sel.nodeID = node.id; sel.panel = .review }.tint(.gray)
+        // Pull to move: pull the row right to outdent (←), pull it left to indent (→).
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if !node.isProject {
+                Button { onKey(.shiftTab) } label: { Image(systemName: "arrow.left") }.tint(.black).accessibilityLabel("Outdent")
+            }
         }
-        .swipeActions(edge: .leading) {
-            Button("Indent") { onKey(.tab) }.tint(.gray)
-            Button("Outdent") { onKey(.shiftTab) }.tint(.gray).disabled(node.isProject)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button { onKey(.tab) } label: { Image(systemName: "arrow.right") }.tint(.black).accessibilityLabel("Indent")
+            if isLeafTask { Button(done ? "Undo" : "Done") { store.update(node) { $0.state = done ? .todo : .done }; store.save() }.tint(.gray) }
+            Button("Details") { sel.nodeID = node.id; sel.panel = .review }.tint(.gray)
         }
         #endif
     }
@@ -338,8 +341,10 @@ struct NodeRow: View {
         }
         if hasChildren { Button(node.collapsed ? "Expand" : "Collapse") { store.update(node) { $0.collapsed.toggle() }; store.save() } }
         if !node.isProject {
-            Button("Indent") { onKey(.tab) }
-            Button("Outdent") { onKey(.shiftTab) }
+            ControlGroup {
+                Button { onKey(.shiftTab) } label: { Label("Outdent", systemImage: "arrow.left") }
+                Button { onKey(.tab) } label: { Label("Indent", systemImage: "arrow.right") }
+            }
         }
         Button("Move up") { onKey(.altUp) }
         Button("Move down") { onKey(.altDown) }
