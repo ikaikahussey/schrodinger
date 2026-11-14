@@ -1,16 +1,20 @@
 import SwiftUI
 import SwiftData
 
-/// One continuous numbered outline. Top-level items are projects; children are numbered within each parent at any depth.
+/// One continuous outline. Depth is shown by black bars at the left (one per level). The item's own bar carries
+/// its status, who holds it, and its mode; tapping the bars opens the item's menu. Everything else stays out of the
+/// way of the text. Top-level items are projects (the harness runs one agent per top-level item).
 struct OutlineView: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var sel: Selection
     @Query(sort: [SortDescriptor(\Node.position), SortDescriptor(\Node.createdAt)]) private var all: [Node]
     @State private var filter: Filter = .all
     @State private var modeFilter: Mode? = nil
+    @State private var showLegend = false
     @FocusState private var focused: UUID?
 
-    enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue } }
+    enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
+        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
 
     private var store: Store { Store(ctx) }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
@@ -19,20 +23,30 @@ struct OutlineView: View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in
-                    nodeTree(p, depth: 0, index: i, kids: kids)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(roots) { p in nodeTree(p, depth: 0, kids: kids) }
+                Button { let n = store.create(); store.save(); focused = n.id } label: {
+                    HStack(spacing: 10) { Image(systemName: "plus").font(.caption.weight(.semibold)); Text("New item").font(.callout) }
                 }
-                Button { let n = store.create(); store.save(); focused = n.id } label: { Label("top-level item", systemImage: "plus") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(.leading, 8).padding(.top, 6)
+                .buttonStyle(.plain).foregroundStyle(.tertiary).padding(.vertical, 10).padding(.leading, 6)
+                if showLegend { BarLegend().padding(.top, 24) }
             }
-            .padding()
+            .padding(.horizontal, 16).padding(.top, 8)
         }
-        .navigationTitle("Schrodinger")
+        .background(Color.canvas)
+        .navigationTitle("")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                Picker("Filter", selection: $filter) { ForEach(Filter.allCases) { Text($0.rawValue.capitalized).tag($0) } }
-                Picker("Mode", selection: $modeFilter) { Text("Any mode").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.rawValue).tag(Mode?.some($0)) } }
+            ToolbarItem(placement: .principal) { Text("Schrodinger").font(.headline) }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Show", selection: $filter) { ForEach(Filter.allCases) { Text($0.label).tag($0) } }
+                    Picker("Mode", selection: $modeFilter) { Text("Any mode").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.rawValue).tag(Mode?.some($0)) } }
+                    Divider()
+                    Toggle("Show bar legend", isOn: $showLegend)
+                } label: { Image(systemName: filter == .all && modeFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") }
             }
         }
     }
@@ -51,22 +65,17 @@ struct OutlineView: View {
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
 
-    private func nodeTree(_ n: Node, depth: Int, index: Int, kids: [UUID?: [Node]]) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]]) -> AnyView {
         let children = kids[n.id] ?? []
         let hidden = (filter != .all || modeFilter != nil) && depth > 0 && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
-        return AnyView(VStack(alignment: .leading, spacing: 2) {
-            NodeRow(node: n, depth: depth, index: index, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, onKey: { key in handleKey(key, n, kids: kids) })
-            if n.isProject { ProjectMeta(node: n, progress: store.progress(of: n.id), sel: sel).padding(.leading, CGFloat(depth) * 24 + 74) }
+        return AnyView(VStack(alignment: .leading, spacing: 0) {
+            NodeRow(node: n, depth: depth, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, onKey: { key in handleKey(key, n, kids: kids) })
+            if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed {
-                ForEach(Array(children.enumerated()), id: \.element.id) { i, c in
-                    nodeTree(c, depth: depth + 1, index: i, kids: kids)
-                }
-                if depth == 0 {
-                    Button { let c = store.create(parentID: n.id); store.save(); focused = c.id } label: { Label("item", systemImage: "plus").font(.caption) }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).padding(.leading, CGFloat(depth + 1) * 24 + 40)
-                }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids) }
             }
+            if depth == 0 { Spacer().frame(height: 14) }
         })
     }
 
@@ -76,14 +85,13 @@ struct OutlineView: View {
         return c.map { leafCount($0, kids: kids) }.reduce((0, 0)) { ($0.0 + $1.done, $0.1 + $1.total) }
     }
 
-    // Keyboard outlining
     enum Key { case enter, tab, shiftTab, backspaceEmpty, altUp, altDown }
     private func handleKey(_ key: Key, _ n: Node, kids: [UUID?: [Node]]) {
         let s = store
         switch key {
         case .enter:
             let created: Node
-            if n.isProject && !(kids[n.id] ?? []).isEmpty && !n.collapsed { created = s.create(parentID: n.id, position: 0) }
+            if !(kids[n.id] ?? []).isEmpty && !n.collapsed { created = s.create(parentID: n.id, position: 0) }
             else { created = s.create(parentID: n.parentID, assignee: n.isProject ? nil : n.assignee, position: n.position + 1) }
             s.save(); focused = created.id
         case .tab:
@@ -105,28 +113,128 @@ struct OutlineView: View {
     }
 }
 
-struct ProjectMeta: View {
-    @Bindable var node: Node
+/// Hairline progress under a top-level item.
+struct ProjectLine: View {
+    let node: Node
     let progress: Store.Progress
-    var sel: Selection
     var body: some View {
-        HStack(spacing: 10) {
-            Text(node.goal.isEmpty ? "set a goal" : node.goal).font(.caption).foregroundStyle(node.goal.isEmpty ? .tertiary : .primary).italic(node.goal.isEmpty)
-                .onTapGesture { sel.nodeID = node.id; sel.panel = .review }
-            ProgressView(value: Double(progress.pct), total: 100).frame(width: 120)
-            Text("\(progress.done)/\(progress.total)").font(.caption).foregroundStyle(.secondary)
-            if node.projectStatus != .active { Text(node.projectStatusRaw).font(.caption2).padding(.horizontal, 6).background(.yellow.opacity(0.3), in: Capsule()) }
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.ink.opacity(0.08))
+                Rectangle().fill(Color.ink).frame(width: g.size.width * CGFloat(progress.pct) / 100)
+            }
         }
-        .padding(.bottom, 4)
+        .frame(height: 1.5)
+        .padding(.leading, 24).padding(.trailing, 4).padding(.bottom, 4)
+        .opacity(progress.total == 0 ? 0 : 1)
     }
 }
 
-/// A single row: number, disclosure, checkbox (leaf tasks), editable title, chips (inline pickers), due, last activity.
+// MARK: - Bars
+
+/// The item's own bar. Encodes state (fill), assignee (shape) and nothing else.
+///   state:    todo/in progress = solid · review = hollow · blocked = dashed · done = faint
+///   assignee: human = one bar · ai = bar with a gap · shared = two half-height bars side by side · unassigned = thin
+struct StatusBar: View {
+    let state: TaskState
+    let assignee: Assignee
+    let isProject: Bool
+    static let h: CGFloat = 16
+    static let w: CGFloat = 4
+
+    var body: some View {
+        let h = Self.h
+        Group {
+            if isProject {
+                RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: Self.w + 2, height: h)
+            } else {
+                switch assignee {
+                case .ai:
+                    VStack(spacing: 3) { styled.frame(height: (h - 3) * 0.4); styled.frame(height: (h - 3) * 0.6) }.frame(width: Self.w, height: h)
+                case .shared:
+                    HStack(spacing: 2) { styled.frame(width: 2, height: h); styled.frame(width: 2, height: h) }
+                case .human:
+                    styled.frame(width: Self.w, height: h)
+                case .unassigned:
+                    styled.frame(width: 1.5, height: h)
+                }
+            }
+        }
+        .opacity(state == .done ? 0.25 : 1)
+    }
+
+    @ViewBuilder private var styled: some View {
+        let shape = RoundedRectangle(cornerRadius: 1)
+        switch state {
+        case .review:  shape.strokeBorder(Color.ink, lineWidth: 1)
+        case .blocked: shape.strokeBorder(Color.ink, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+        default:       shape.fill(Color.ink)
+        }
+    }
+}
+
+/// One bar per depth level: ancestors faint, the item's own bar styled by StatusBar, mode letter beneath. Tap = menu.
+struct DepthBars: View {
+    let node: Node
+    let depth: Int
+    let hasChildren: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: 3) {
+                ForEach(0..<max(depth, 0), id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 1).fill(Color.ink.opacity(0.18)).frame(width: 3, height: StatusBar.h)
+                }
+                StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject)
+                if hasChildren && node.collapsed {
+                    Text("\u{2026}").font(.caption2).foregroundStyle(Color.ink.opacity(0.45)).offset(y: -4)
+                }
+            }
+            if let m = node.mode, !node.isProject {
+                Text(m.glyph).font(.system(size: 8, weight: .semibold, design: .monospaced)).foregroundStyle(Color.ink.opacity(0.55))
+                    .padding(.leading, CGFloat(depth) * 6)
+            }
+        }
+        .frame(minWidth: 10, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+extension Mode {
+    /// One-letter glyph shown under the bars.
+    var glyph: String {
+        switch self {
+        case .call: "c"; case .errand: "e"; case .email: "m"; case .write: "w"; case .research: "r"; case .meeting: "t"; case .admin: "a"; case .other: "o"
+        }
+    }
+}
+
+struct BarLegend: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Bars").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
+            row(StatusBar(state: .todo, assignee: .human, isProject: false), "me")
+            row(StatusBar(state: .todo, assignee: .ai, isProject: false), "ai")
+            row(StatusBar(state: .todo, assignee: .shared, isProject: false), "both")
+            row(StatusBar(state: .todo, assignee: .unassigned, isProject: false), "unassigned")
+            row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
+            row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
+            row(StatusBar(state: .done, assignee: .human, isProject: false), "done")
+            Text("Letter under the bar is the mode: c call · e errand · m email · w write · r research · t meeting · a admin · o other")
+                .font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
+        }
+        .padding(.leading, 6)
+    }
+    private func row(_ bar: StatusBar, _ label: String) -> some View {
+        HStack(spacing: 10) { bar.frame(width: 10, alignment: .leading); Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6)) }
+    }
+}
+
+// MARK: - Row
+
 struct NodeRow: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var node: Node
     let depth: Int
-    let index: Int
     let hasChildren: Bool
     let leafCount: (done: Int, total: Int)
     var sel: Selection
@@ -135,22 +243,24 @@ struct NodeRow: View {
     @State private var title: String = ""
 
     private var store: Store { Store(ctx) }
+    private var isLeafTask: Bool { !node.isProject && !hasChildren }
+    private var done: Bool { node.state == .done && isLeafTask }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(depth == 0 ? .primary : .secondary).fontWeight(depth == 0 ? .semibold : .regular).frame(width: 26, alignment: .trailing)
-            Button { store.update(node) { $0.collapsed.toggle() }; store.save() } label: { Image(systemName: node.collapsed ? "chevron.right" : "chevron.down").font(.caption2) }
-                .buttonStyle(.plain).foregroundStyle(.secondary).opacity(hasChildren ? 1 : 0).frame(width: 14)
-            if !node.isProject && !hasChildren {
-                Button { store.update(node) { $0.state = $0.state == .done ? .todo : .done }; store.save() } label: {
-                    Image(systemName: node.state == .done ? "checkmark.square.fill" : "square").foregroundStyle(node.state == .done ? Color.accentColor : .secondary)
-                }.buttonStyle(.plain)
+        HStack(alignment: .top, spacing: 10) {
+            Menu { menu } label: {
+                DepthBars(node: node, depth: depth, hasChildren: hasChildren)
             }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+            .padding(.top, 3)
+            .help(summary)
+            .accessibilityLabel(summary)
+
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(node.isProject ? .headline : .body)
-                .strikethrough(node.state == .done && !hasChildren)
-                .foregroundStyle(node.state == .done && !hasChildren ? .secondary : .primary)
+                .font(node.isProject ? .title3.weight(.semibold) : .body)
+                .strikethrough(done)
+                .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
                 .onAppear { title = node.title }
                 .onChange(of: node.title) { _, v in if v != title { title = v } }
@@ -164,43 +274,79 @@ struct NodeRow: View {
                 .onKeyPress(.upArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altUp); return .handled }; return .ignored }
                 .onKeyPress(.downArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altDown); return .handled }; return .ignored }
                 #endif
-            Spacer(minLength: 4)
-            if !node.isProject && hasChildren {
-                Text("\(leafCount.done)/\(leafCount.total)").font(.caption).foregroundStyle(.secondary)
-            } else if !node.isProject {
-                Menu { ForEach(Assignee.allCases) { a in Button(a.label) { store.update(node) { $0.assignee = a }; store.save() } } } label: {
-                    Chip(text: node.assignee.label, color: chipColor(node.assignee), dashed: node.isYourTurn)
-                }.menuStyle(.borderlessButton).fixedSize()
-                Menu {
-                    Button("none") { store.update(node) { $0.mode = nil }; store.save() }
-                    ForEach(Mode.allCases) { m in Button(m.rawValue) { store.update(node) { $0.mode = m }; store.save() } }
-                } label: { Chip(text: node.mode?.rawValue ?? "#mode", color: .orange, faded: node.mode == nil) }.menuStyle(.borderlessButton).fixedSize()
-                Menu { ForEach(TaskState.allCases) { st in Button(st.label) { store.update(node) { $0.state = st }; store.save() } } } label: {
-                    Chip(text: node.state.label, color: stateColor(node.state))
-                }.menuStyle(.borderlessButton).fixedSize()
-                if let due = node.due {
-                    Text(due.dayString).font(.caption).foregroundStyle(due < Date() && node.state != .done ? .red : .secondary)
+            Spacer(minLength: 6)
+            marker
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 6)
+        .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .contextMenu { menu }
+        #if os(iOS)
+        .swipeActions(edge: .trailing) {
+            if isLeafTask { Button(done ? "Undo" : "Done") { store.update(node) { $0.state = done ? .todo : .done }; store.save() }.tint(.black) }
+            Button("Details") { sel.nodeID = node.id; sel.panel = .review }.tint(.gray)
+        }
+        .swipeActions(edge: .leading) {
+            Button("Indent") { onKey(.tab) }.tint(.gray)
+            Button("Outdent") { onKey(.shiftTab) }.tint(.gray).disabled(node.isProject)
+        }
+        #endif
+    }
+
+    private var summary: String {
+        if node.isProject { return "Project" }
+        var parts = [node.state.label, node.assignee.label]
+        if let m = node.mode { parts.append(m.rawValue) }
+        if node.isYourTurn { parts.append("your turn") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Right edge: due date, "your turn", or counts for a parent. The bars carry everything else.
+    @ViewBuilder private var marker: some View {
+        if hasChildren && !node.isProject {
+            Text("\(leafCount.done)/\(leafCount.total)").font(.caption2.monospacedDigit()).foregroundStyle(Color.ink.opacity(0.4)).padding(.top, 3)
+        } else if !node.isProject {
+            HStack(spacing: 8) {
+                if let due = node.due, node.state != .done {
+                    Text(due.formatted(.dateTime.month(.abbreviated).day())).font(.caption2).foregroundStyle(due < Date() ? Color.red : Color.ink.opacity(0.45))
+                }
+                if node.isYourTurn && node.state != .done { Dot(label: "your turn", filled: true) }
+            }
+            .padding(.top, 3)
+        }
+    }
+
+    @ViewBuilder private var menu: some View {
+        if !node.isProject {
+            Section("Responsible") {
+                ForEach(Assignee.allCases) { a in
+                    Button { store.update(node) { $0.assignee = a }; store.save() } label: { if node.assignee == a { Label(a.label, systemImage: "checkmark") } else { Text(a.label) } }
                 }
             }
-            #if os(iOS)
-            Menu {
-                Button("Add item below") { onKey(.enter) }
-                Button("Indent") { onKey(.tab) }.disabled(index == 0)
-                Button("Outdent") { onKey(.shiftTab) }.disabled(node.isProject)
-                Button("Move up") { onKey(.altUp) }
-                Button("Move down") { onKey(.altDown) }
-                Button("Details") { sel.nodeID = node.id; sel.panel = .review }
-                Button("Delete", role: .destructive) { store.delete(node); store.save() }
-            } label: { Image(systemName: "ellipsis").foregroundStyle(.secondary) }.fixedSize()
-            #endif
+            Menu("Mode") {
+                Button { store.update(node) { $0.mode = nil }; store.save() } label: { if node.mode == nil { Label("none", systemImage: "checkmark") } else { Text("none") } }
+                ForEach(Mode.allCases) { m in
+                    Button { store.update(node) { $0.mode = m }; store.save() } label: { if node.mode == m { Label("\(m.glyph) · \(m.rawValue)", systemImage: "checkmark") } else { Text("\(m.glyph) · \(m.rawValue)") } }
+                }
+            }
+            Menu("Status") {
+                ForEach(TaskState.allCases) { st in
+                    Button { store.update(node) { $0.state = st }; store.save() } label: { if node.state == st { Label(st.label, systemImage: "checkmark") } else { Text(st.label) } }
+                }
+            }
+            Divider()
         }
-        .padding(.vertical, 3).padding(.horizontal, 4)
-        .padding(.leading, CGFloat(depth) * 24)
-        .background(sel.nodeID == node.id ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
-        .contextMenu {
-            Button("Details") { sel.nodeID = node.id; sel.panel = .review }
-            Button("Delete", role: .destructive) { store.delete(node); store.save() }
+        if hasChildren { Button(node.collapsed ? "Expand" : "Collapse") { store.update(node) { $0.collapsed.toggle() }; store.save() } }
+        if !node.isProject {
+            Button("Indent") { onKey(.tab) }
+            Button("Outdent") { onKey(.shiftTab) }
         }
+        Button("Move up") { onKey(.altUp) }
+        Button("Move down") { onKey(.altDown) }
+        Button("Add item below") { onKey(.enter) }
+        Divider()
+        Button("Details") { sel.nodeID = node.id; sel.panel = .review }
+        Button("Delete", role: .destructive) { store.delete(node); store.save() }
     }
 
     private func commit() {
@@ -221,10 +367,20 @@ struct NodeRow: View {
             store.save(); title = t
         }
     }
-    private func chipColor(_ a: Assignee) -> Color { switch a { case .human: .green; case .ai: .blue; case .shared: .purple; case .unassigned: .gray } }
-    private func stateColor(_ s: TaskState) -> Color { switch s { case .review: .purple; case .blocked: .yellow; case .in_progress: .cyan; default: .gray } }
 }
 
+struct Dot: View {
+    let label: String
+    let filled: Bool
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().strokeBorder(Color.ink, lineWidth: 1).background(Circle().fill(filled ? Color.ink : .clear)).frame(width: 7, height: 7)
+            Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6))
+        }
+    }
+}
+
+/// Kept for other views that still show a compact chip.
 struct Chip: View {
     let text: String
     let color: Color
@@ -232,9 +388,18 @@ struct Chip: View {
     var dashed = false
     var body: some View {
         Text(text).font(.caption2.weight(.medium)).padding(.horizontal, 7).padding(.vertical, 2)
-            .background(color.opacity(0.18), in: Capsule())
-            .overlay(Capsule().strokeBorder(color.opacity(dashed ? 0.9 : 0), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-            .foregroundStyle(color).opacity(faded ? 0.5 : 1)
+            .background(Color.ink.opacity(0.06), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.ink.opacity(dashed ? 0.6 : 0), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+            .foregroundStyle(Color.ink.opacity(faded ? 0.4 : 0.8))
     }
 }
 
+extension Color {
+    /// Ink and canvas follow the system appearance: black on white in light mode, white on black in dark mode.
+    static var ink: Color { .primary }
+    #if os(macOS)
+    static var canvas: Color { Color(nsColor: .textBackgroundColor) }
+    #else
+    static var canvas: Color { Color(uiColor: .systemBackground) }
+    #endif
+}
