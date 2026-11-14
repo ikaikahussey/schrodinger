@@ -40,6 +40,17 @@ struct OutlineView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .principal) { Text("Schrodinger").font(.headline) }
+            if focused != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Done") { focused = nil }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
+                }
+                #if os(iOS)
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focused = nil }.fontWeight(.semibold)
+                }
+                #endif
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { captureThought(roots: roots) } label: { Image(systemName: "plus") }
                     .help("New thought (goes under “Thoughts”)")
@@ -261,6 +272,8 @@ struct NodeRow: View {
     let onKey: (OutlineView.Key) -> Void
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
+    @State private var lift: CGFloat = 0
+    private let rowHeight: CGFloat = 36
     @State private var note: String = ""
     @State private var showNote = false
     @FocusState private var noteFocused: Bool
@@ -274,11 +287,14 @@ struct NodeRow: View {
         HStack(alignment: .top, spacing: 10) {
             Menu { menu } label: {
                 DepthBars(node: node, depth: depth, hasChildren: hasChildren)
+                    .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
+                    .contentShape(Rectangle())
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            .padding(.top, 3)
-            .help(summary)
+            .padding(.top, -1)
+            .help(summary + " · tap for menu · drag to move")
             .accessibilityLabel(summary)
+            .simultaneousGesture(handleGesture)
 
             VStack(alignment: .leading, spacing: 2) {
             TextField("", text: $title, axis: .vertical)
@@ -319,7 +335,10 @@ struct NodeRow: View {
         .padding(.vertical, 6)
         .padding(.leading, 6)
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
-        .offset(x: pull)
+        .offset(x: pull, y: lift)
+        .background(Color.canvas.opacity(lift == 0 ? 0 : 1), in: RoundedRectangle(cornerRadius: 6))
+        .shadow(color: .black.opacity(lift == 0 ? 0 : 0.18), radius: lift == 0 ? 0 : 8, y: 2)
+        .zIndex(lift == 0 ? 0 : 1)
         // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: -4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
@@ -341,6 +360,27 @@ struct NodeRow: View {
                 withAnimation(.snappy(duration: 0.22)) { pull = 0 }
                 if p < -pullThreshold { commit(); onKey(.shiftTab) }
                 else if p > pullThreshold { commit(); onKey(.tab) }
+            }
+    }
+
+    /// The bars are the handle: drag sideways to indent/outdent, up or down to reorder among siblings. Tap opens the menu.
+    private var handleGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+            .onChanged { v in
+                let dx = v.translation.width, dy = v.translation.height
+                if abs(dx) > abs(dy) * 1.3 {
+                    var x = dx; if node.isProject && x < 0 { x = 0 }
+                    pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6)); lift = 0
+                } else {
+                    lift = dy; pull = 0
+                }
+            }
+            .onEnded { v in
+                let p = pull, steps = Int((lift / rowHeight).rounded())
+                withAnimation(.snappy(duration: 0.22)) { pull = 0; lift = 0 }
+                if p < -pullThreshold { commit(); onKey(.shiftTab) }
+                else if p > pullThreshold { commit(); onKey(.tab) }
+                else if steps != 0 { commit(); for _ in 0..<abs(steps) { onKey(steps < 0 ? .altUp : .altDown) } }
             }
     }
 
