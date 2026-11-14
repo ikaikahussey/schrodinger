@@ -44,6 +44,30 @@ def api(method, path, body=None):
 
 def sh(*cmd, check=True, **kw): return subprocess.run(cmd, capture_output=True, text=True, check=check, **kw)
 
+# ---------- 0. Dedicated build keychain (no GUI prompts: we know its password) ----------
+LOGIN_KC = os.path.expanduser("~/Library/Keychains/login.keychain-db")
+BUILD_KC = os.path.expanduser("~/Library/Keychains/schrodinger-build.keychain-db")
+ENV_FILE = os.path.expanduser("~/.schrodinger-asc.env")
+def keychain_password():
+    pw = os.environ.get("SCHRODINGER_KC_PASS")
+    if pw: return pw
+    import secrets
+    pw = secrets.token_urlsafe(24)
+    with open(ENV_FILE, "a") as f: f.write(f"SCHRODINGER_KC_PASS={pw}\n")
+    os.chmod(ENV_FILE, 0o600)
+    return pw
+KC_PASS = keychain_password()
+def ensure_build_keychain():
+    if not os.path.exists(BUILD_KC):
+        sh("security", "create-keychain", "-p", KC_PASS, BUILD_KC)
+        print("keychain: created schrodinger-build")
+    sh("security", "set-keychain-settings", BUILD_KC, check=False)          # never auto-lock
+    sh("security", "unlock-keychain", "-p", KC_PASS, BUILD_KC, check=False)
+    current = [l.strip().strip('"') for l in sh("security", "list-keychains", "-d", "user").stdout.splitlines()]
+    if BUILD_KC not in current:
+        sh("security", "list-keychains", "-d", "user", "-s", BUILD_KC, *current)
+        print("keychain: added to search list")
+
 # ---------- 1. Device registration (this Mac) ----------
 def provisioning_udid():
     out = sh("system_profiler", "SPHardwareDataType").stdout
@@ -65,12 +89,23 @@ WANT = {  # keychain identity name prefix -> ASC certificateType
     "Apple Distribution": "DISTRIBUTION",
     "3rd Party Mac Developer Installer": "MAC_INSTALLER_DISTRIBUTION",
 }
-def local_identities():
-    out = sh("security", "find-identity", "-v", check=False).stdout
-    return out
+def local_identities(kc=None):
+    return sh("security", "find-identity", "-v", *( [kc] if kc else [] ), check=False).stdout
 
 def ensure_cert(name, ctype):
-    if name in local_identities(): print(f"cert: {name} present"); return
+    # Identities Xcode already installed in the login keychain are usable (Xcode authorized them). Anything we
+    # create goes into the build keychain, where codesign is pre-authorized without a prompt.
+    in_login = name in local_identities(LOGIN_KC)
+    in_build = name in local_identities(BUILD_KC)
+    if in_build: print(f"cert: {name} present (build keychain)"); return
+    if in_login and ctype != "MAC_INSTALLER_DISTRIBUTION": print(f"cert: {name} present (login keychain)"); return
+    if in_login and ctype == "MAC_INSTALLER_DISTRIBUTION":
+        # Our earlier import landed in the login keychain and prompts on use; remove it to avoid ambiguity.
+        for line in local_identities(LOGIN_KC).splitlines():
+            if name in line:
+                sha = line.split()[1]
+                sh("security", "delete-identity", "-Z", sha, LOGIN_KC, check=False)
+        print(f"cert: removed login-keychain copy of {name}")
     key = os.path.join(WORK, f"{ctype}.key.pem"); csr = os.path.join(WORK, f"{ctype}.csr"); cer = os.path.join(WORK, f"{ctype}.cer")
     sh("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", csr, "-subj", "/CN=Schrodinger build/O=Ikaika Hussey/C=US")
     os.chmod(key, 0o600)
@@ -82,19 +117,20 @@ def ensure_cert(name, ctype):
         # Common: certificate limit reached → reuse is impossible without the private key; report clearly.
         print(f"cert: {name} could not be created: {e}"); return
     open(cer, "wb").write(base64.b64decode(data["data"]["attributes"]["certificateContent"]))
-    sh("security", "import", key, "-k", os.path.expanduser("~/Library/Keychains/login.keychain-db"), "-T", "/usr/bin/codesign", "-T", "/usr/bin/security", "-T", "/usr/bin/productbuild", check=False)
-    sh("security", "import", cer, "-k", os.path.expanduser("~/Library/Keychains/login.keychain-db"), "-T", "/usr/bin/codesign", "-T", "/usr/bin/productbuild", check=False)
-    # Allow codesign to use the key without a UI prompt.
-    sh("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", "", os.path.expanduser("~/Library/Keychains/login.keychain-db"), check=False)
-    print(f"cert: {name} created and imported ({data['data']['id']})")
+    sh("security", "import", key, "-k", BUILD_KC, "-A", "-T", "/usr/bin/codesign", "-T", "/usr/bin/security", "-T", "/usr/bin/productbuild", check=False)
+    sh("security", "import", cer, "-k", BUILD_KC, "-A", "-T", "/usr/bin/codesign", "-T", "/usr/bin/productbuild", check=False)
+    # Pre-authorize Apple's signing tools so no UI prompt ever appears.
+    r = sh("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:,productbuild:", "-s", "-k", KC_PASS, BUILD_KC, check=False)
+    print(f"cert: {name} created and imported into build keychain ({data['data']['id']}){'' if r.returncode == 0 else ' [partition-list warning: ' + r.stderr.strip()[:120] + ']'}")
 
 def ensure_wwdr():
-    # Apple Worldwide Developer Relations intermediate (G3) must be present for the chain to validate.
-    if sh("security", "find-certificate", "-c", "Apple Worldwide Developer Relations", check=False).returncode == 0: return
+    # Apple Worldwide Developer Relations intermediates must be present for the chain to validate.
     try:
-        p = os.path.join(WORK, "AppleWWDRCAG3.cer")
-        urllib.request.urlretrieve("https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer", p)
-        sh("security", "add-certificates", "-k", os.path.expanduser("~/Library/Keychains/login.keychain-db"), p, check=False)
+        for n in ("AppleWWDRCAG3", "AppleWWDRCAG6"):
+            if sh("security", "find-certificate", "-c", "Apple Worldwide Developer Relations", "-a", check=False).stdout.count("G") and n == "AppleWWDRCAG3" and sh("security", "find-certificate", "-c", "Apple Worldwide Developer Relations", check=False).returncode == 0: continue
+            p = os.path.join(WORK, f"{n}.cer")
+            urllib.request.urlretrieve(f"https://www.apple.com/certificateauthority/{n}.cer", p)
+            sh("security", "add-certificates", "-k", BUILD_KC, p, check=False)
         print("wwdr: installed intermediate")
     except Exception as e: print(f"wwdr: could not install intermediate: {e}")
 
@@ -144,6 +180,7 @@ def ensure_profiles():
     return out
 
 if __name__ == "__main__":
+    ensure_build_keychain()
     ensure_device()
     ensure_wwdr()
     for n, t in WANT.items(): ensure_cert(n, t)

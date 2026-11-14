@@ -63,7 +63,10 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
   xcodebuild test -project Schrodinger.xcodeproj -scheme Schrodinger_macOS -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "error:|Test Case|Executed|\*\* " | tail -30
   if [ "$MAC" = 0 ] && [ "$IOS" = 0 ] && [ -n "${ASC_KEY_ID:-}" ]; then
     echo "--- signing prep (device registration + certificates via App Store Connect API)"
-    python3 asc_prepare.py 2>&1 | tail -15
+    pkill -f "xcodebuild -exportArchive" 2>/dev/null && echo "killed a stale export from an earlier run"
+    python3 asc_prepare.py 2>&1 | tail -20
+    source ~/.schrodinger-asc.env 2>/dev/null || true
+    [ -n "${SCHRODINGER_KC_PASS:-}" ] && security unlock-keychain -p "$SCHRODINGER_KC_PASS" ~/Library/Keychains/schrodinger-build.keychain-db 2>/dev/null
     AUTH=(-allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH")
     BN=$(date +%Y%m%d%H%M)
     source build/profiles.env 2>/dev/null || true
