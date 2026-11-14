@@ -21,9 +21,8 @@ echo "Simulator: $(xcrun simctl list devices | grep "$UDID" | head -1)"
 xcrun simctl boot "$UDID" 2>/dev/null || true
 SIMAPP=$(mdfind "kMDItemCFBundleIdentifier == 'com.apple.iphonesimulator'" 2>/dev/null | head -1)
 [ -z "$SIMAPP" ] && SIMAPP=$(find /Applications "$XC/Contents" ~/Applications -maxdepth 6 -iname "*Simulator*.app" -type d 2>/dev/null | grep -v -i "widgetkit\|quicklook" | head -1)
-echo "Xcode: $XC"; ls "$XC/Contents/Developer/Applications" 2>/dev/null | tr '\n' ' '; echo
 echo "Simulator.app: ${SIMAPP:-not found}"
-open -b com.apple.iphonesimulator 2>/dev/null || { [ -n "$SIMAPP" ] && open "$SIMAPP"; } || open -a Simulator
+open -b com.apple.dt.Devices 2>/dev/null || open -b com.apple.iphonesimulator 2>/dev/null || { [ -n "$SIMAPP" ] && open "$SIMAPP"; } || echo "Open the simulator UI from Xcode (Device Hub / Simulator)."
 echo "--- building (Debug, simulator)"
 xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_iOS -configuration Debug -destination "id=$UDID" -derivedDataPath build/sim build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u
 APP=$(find build/sim/Build/Products -name "Schrodinger.app" -path "*iphonesimulator*" | head -1)
