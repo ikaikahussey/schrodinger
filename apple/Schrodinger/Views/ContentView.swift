@@ -5,6 +5,9 @@ enum Panel: String, CaseIterable, Identifiable {
     case outline, batch, review, inbox, calendar, digest, activity, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
+    /// Panels kept in code but not shown in navigation. Calendar is hidden pending a decision to remove it.
+    static let hidden: Set<Panel> = [.review, .calendar, .settings]
+    static var navItems: [Panel] { allCases.filter { !hidden.contains($0) } }
     var icon: String {
         switch self {
         case .outline: "list.bullet.indent"; case .batch: "square.stack.3d.up"; case .review: "checkmark.rectangle.stack"
@@ -32,7 +35,7 @@ struct ContentView: View {
             #if os(macOS)
             NavigationSplitView {
                 List(selection: Binding(get: { sel.panel }, set: { if let p = $0 { sel.panel = p } })) {
-                    ForEach(Panel.allCases.filter { $0 != .settings && $0 != .review }) { p in
+                    ForEach(Panel.navItems) { p in
                         Label(p.label, systemImage: p.icon).badge(badge(p)).tag(p)
                     }
                 }
@@ -45,7 +48,7 @@ struct ContentView: View {
             #else
             // Review is not a tab: it is pushed over the outline when an item is opened.
             TabView(selection: Binding(get: { sel.panel == .review ? .outline : sel.panel }, set: { sel.panel = $0 })) {
-                ForEach([Panel.outline, .batch, .inbox, .calendar, .settings]) { p in
+                ForEach([Panel.outline, .batch, .inbox, .settings].filter { !Panel.hidden.contains($0) || $0 == .settings }) { p in
                     NavigationStack {
                         if p == .outline {
                             OutlineView(sel: sel)

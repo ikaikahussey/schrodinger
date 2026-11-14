@@ -60,6 +60,10 @@ struct ReviewView: View {
             }
         }
         .navigationTitle("Review")
+        // Full-page swipe right returns to the outline.
+        .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { v in
+            if v.translation.width > 100 && abs(v.translation.height) < 80 { sel.nodeID = nil; sel.panel = .outline }
+        })
     }
 
     @ViewBuilder
