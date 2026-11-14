@@ -13,6 +13,23 @@ struct ReviewView: View {
 
     var body: some View {
         List {
+            Section {
+                HStack(spacing: 6) {
+                    Button("Outline") { sel.nodeID = nil; sel.panel = .outline }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    if let id = sel.nodeID, let n = store.node(id) {
+                        let proj = store.project(of: n)
+                        if proj.id != n.id {
+                            Text("›").foregroundStyle(.tertiary)
+                            Button(proj.title.isEmpty ? "Untitled" : proj.title) { sel.nodeID = proj.id }.buttonStyle(.plain).foregroundStyle(.secondary)
+                        }
+                        Text("›").foregroundStyle(.tertiary)
+                        Text(n.title.isEmpty ? "Untitled" : n.title).lineLimit(1)
+                    } else {
+                        Text("›").foregroundStyle(.tertiary); Text("Review")
+                    }
+                }
+                .font(.caption)
+            }
             if let id = sel.nodeID, let n = store.node(id) {
                 Section("Selected") {
                     DetailView(node: n)
@@ -92,6 +109,7 @@ struct DetailView: View {
                 if node.assignee == .shared {
                     HStack { Text("AI part: \(node.aiStatusRaw)"); if node.aiStatus == .done { Button("Send back to AI") { try? store.sendBackToAI(node, note: "") } } }
                 }
+                TextField("Notes", text: Binding(get: { node.notes }, set: { v in store.update(node) { $0.notes = v } }), axis: .vertical)
                 TextField("Acceptance note / review feedback", text: Binding(get: { node.acceptanceNote }, set: { v in store.update(node) { $0.acceptanceNote = v } }), axis: .vertical)
                 DepsPicker(node: node)
                 if let due = node.due {

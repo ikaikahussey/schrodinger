@@ -22,6 +22,7 @@ enum AgentTools {
                         var d: [String: Any] = ["id": t.id.uuidString, "title": t.title, "assignee": t.assigneeRaw, "state": t.stateRaw, "mode": t.modeRaw]
                         if let due = t.due { d["due"] = due.dayString }
                         if !t.acceptanceNote.isEmpty { d["acceptance_note"] = t.acceptanceNote }
+                        if !t.notes.isEmpty { d["notes"] = t.notes }
                         if let a = t.artifact { d["artifact"] = String(a.prefix(1500)) }
                         if t.parentID != p.id { d["parent_id"] = t.parentID?.uuidString }
                         return d

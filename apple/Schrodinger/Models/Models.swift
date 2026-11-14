@@ -46,6 +46,7 @@ final class Node {
     var aiStatusRaw: String = AIStatus.pending.rawValue
     var due: Date? = nil
     var acceptanceNote: String = ""
+    var notes: String = ""             // inline context shown under the title
     var artifact: String? = nil
     var deps: [UUID] = []
     var position: Int = 0

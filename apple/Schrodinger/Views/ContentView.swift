@@ -32,7 +32,7 @@ struct ContentView: View {
             #if os(macOS)
             NavigationSplitView {
                 List(selection: Binding(get: { sel.panel }, set: { if let p = $0 { sel.panel = p } })) {
-                    ForEach(Panel.allCases.filter { $0 != .settings }) { p in
+                    ForEach(Panel.allCases.filter { $0 != .settings && $0 != .review }) { p in
                         Label(p.label, systemImage: p.icon).badge(badge(p)).tag(p)
                     }
                 }
@@ -43,9 +43,16 @@ struct ContentView: View {
                 panelView(sel.panel == .outline ? .review : sel.panel).navigationSplitViewColumnWidth(min: 320, ideal: 420)
             }
             #else
-            TabView(selection: Binding(get: { sel.panel }, set: { sel.panel = $0 })) {
-                ForEach([Panel.outline, .batch, .review, .inbox, .calendar, .settings]) { p in
-                    NavigationStack { panelView(p) }.tabItem { Label(p.label, systemImage: p.icon) }.badge(badge(p)).tag(p)
+            // Review is not a tab: it is pushed over the outline when an item is opened.
+            TabView(selection: Binding(get: { sel.panel == .review ? .outline : sel.panel }, set: { sel.panel = $0 })) {
+                ForEach([Panel.outline, .batch, .inbox, .calendar, .settings]) { p in
+                    NavigationStack {
+                        if p == .outline {
+                            OutlineView(sel: sel)
+                                .navigationDestination(isPresented: Binding(get: { sel.panel == .review }, set: { if !$0 { sel.panel = .outline } })) { ReviewView(sel: sel) }
+                        } else { panelView(p) }
+                    }
+                    .tabItem { Label(p.label, systemImage: p.icon) }.badge(badge(p)).tag(p)
                 }
             }
             #endif

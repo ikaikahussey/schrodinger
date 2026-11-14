@@ -41,6 +41,11 @@ struct OutlineView: View {
         .toolbar {
             ToolbarItem(placement: .principal) { Text("Schrodinger").font(.headline) }
             ToolbarItem(placement: .primaryAction) {
+                Button { captureThought(roots: roots) } label: { Image(systemName: "plus") }
+                    .help("New thought (goes under “Thoughts”)")
+                    .keyboardShortcut("n", modifiers: .command)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Picker("Show", selection: $filter) { ForEach(Filter.allCases) { Text($0.label).tag($0) } }
                     Picker("Mode", selection: $modeFilter) { Text("Any mode").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.rawValue).tag(Mode?.some($0)) } }
@@ -49,6 +54,20 @@ struct OutlineView: View {
                 } label: { Image(systemName: filter == .all && modeFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") }
             }
         }
+    }
+
+    /// Quick capture: a new item under a top-level "Thoughts" project (created on first use), focused for typing.
+    private func captureThought(roots: [Node]) {
+        let s = store
+        let inbox = roots.first { $0.title.caseInsensitiveCompare("Thoughts") == .orderedSame } ?? {
+            let p = s.create(title: "Thoughts", position: 0)
+            s.update(p) { $0.goal = "Loose thoughts to sort into projects later." }
+            return p
+        }()
+        if inbox.collapsed { s.update(inbox) { $0.collapsed = false } }
+        let n = s.create(parentID: inbox.id, assignee: .human, position: 0)
+        s.save()
+        focused = n.id
     }
 
     private func matches(_ n: Node) -> Bool {
@@ -242,6 +261,9 @@ struct NodeRow: View {
     let onKey: (OutlineView.Key) -> Void
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
+    @State private var note: String = ""
+    @State private var showNote = false
+    @FocusState private var noteFocused: Bool
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -258,14 +280,18 @@ struct NodeRow: View {
             .help(summary)
             .accessibilityLabel(summary)
 
+            VStack(alignment: .leading, spacing: 2) {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(node.isProject ? .title3.weight(.semibold) : .body)
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
-                .onAppear { title = node.title }
+                .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
                 .onChange(of: node.title) { _, v in if v != title { title = v } }
+                .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
+                // Return always makes a new item (the field is multi-line, so a typed newline is caught here too).
+                .onChange(of: title) { _, v in if v.contains("\n") { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter) } }
                 .onSubmit { commit(); onKey(.enter) }
                 .onChange(of: focused.wrappedValue) { old, new in if old == node.id && new != node.id { commit() } }
                 .onTapGesture { sel.nodeID = node.id }
@@ -275,7 +301,18 @@ struct NodeRow: View {
                 .onKeyPress(.delete) { if title.isEmpty { onKey(.backspaceEmpty); return .handled }; return .ignored }
                 .onKeyPress(.upArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altUp); return .handled }; return .ignored }
                 .onKeyPress(.downArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altDown); return .handled }; return .ignored }
+                .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
+            if showNote && !node.isProject {
+                TextField("Add context…", text: $note, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .foregroundStyle(Color.ink.opacity(0.6))
+                    .focused($noteFocused)
+                    .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
+                    .onSubmit { commitNote(); focused.wrappedValue = node.id }
+            }
+            }
             Spacer(minLength: 6)
             marker
         }
@@ -367,9 +404,18 @@ struct NodeRow: View {
         Button("Move up") { onKey(.altUp) }
         Button("Move down") { onKey(.altDown) }
         Button("Add item below") { onKey(.enter) }
+        if !node.isProject { Button(showNote ? "Edit context" : "Add context") { openNote() } }
         Divider()
         Button("Details") { sel.nodeID = node.id; sel.panel = .review }
         Button("Delete", role: .destructive) { store.delete(node); store.save() }
+    }
+
+    private func openNote() { showNote = true; DispatchQueue.main.async { noteFocused = true } }
+    private func commitNote() {
+        let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n != node.notes { store.update(node) { $0.notes = n }; store.save() }
+        note = n
+        if n.isEmpty { showNote = false }
     }
 
     private func commit() {
