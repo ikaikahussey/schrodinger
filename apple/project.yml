@@ -12,7 +12,7 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""   # set your Apple team ID
+    DEVELOPMENT_TEAM: "3D52FT6PP7"
 targets:
   Schrodinger:
     type: application
