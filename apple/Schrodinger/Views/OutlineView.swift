@@ -320,26 +320,27 @@ struct NodeRow: View {
         .padding(.leading, 6)
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .offset(x: pull)
-        .background(alignment: .leading) { pullArrow("arrow.left", active: pull > pullThreshold, show: pull > 8) }
-        .background(alignment: .trailing) { pullArrow("arrow.right", active: pull < -pullThreshold, show: pull < -8) }
-        .gesture(pullGesture)
+        // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
+        .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: -4) }
+        .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
+        .simultaneousGesture(pullGesture)
         .contextMenu { menu }
     }
 
-    /// Pull to move: drag the row right to outdent (←), left to indent (→). Projects can't outdent.
+    /// Pull to move: drag the row left to outdent (←), right to indent (→). The text moves the way it will land.
     private var pullGesture: some Gesture {
-        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+        DragGesture(minimumDistance: 16, coordinateSpace: .local)
             .onChanged { v in
-                guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                guard abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
                 var x = v.translation.width
-                if node.isProject && x > 0 { x = 0 }
+                if node.isProject && x < 0 { x = 0 }
                 pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
             }
             .onEnded { _ in
                 let p = pull
                 withAnimation(.snappy(duration: 0.22)) { pull = 0 }
-                if p > pullThreshold { commit(); onKey(.shiftTab) }
-                else if p < -pullThreshold { commit(); onKey(.tab) }
+                if p < -pullThreshold { commit(); onKey(.shiftTab) }
+                else if p > pullThreshold { commit(); onKey(.tab) }
             }
     }
 
@@ -347,8 +348,10 @@ struct NodeRow: View {
         Image(systemName: name)
             .font(.system(size: 13, weight: active ? .bold : .regular))
             .foregroundStyle(active ? Color.ink : Color.ink.opacity(0.35))
-            .padding(.horizontal, 10)
+            .padding(6)
+            .background(Color.canvas.opacity(0.9), in: Circle())
             .opacity(show ? 1 : 0)
+            .allowsHitTesting(false)
     }
 
     private var summary: String {
