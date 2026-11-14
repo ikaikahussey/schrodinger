@@ -74,4 +74,4 @@ cd "$REPO"
 git rev-parse HEAD > "$REPO/apple/build/.last-sha"
 git add -f apple/build-log.txt && git commit -q -m "build log $(date +%F_%T)" -- apple/build-log.txt && git push -q origin HEAD:build-logs --force 2>&1 | tail -1
 git reset -q --soft HEAD~1 && git reset -q apple/build-log.txt   # keep main clean; log lives on build-logs
-[ "${1:-}" = "--if-changed" ] || { echo; echo "Log pushed to branch build-logs. You can close this window."; }
+echo; echo "Log pushed to branch build-logs. You can close this window."; exit 0
