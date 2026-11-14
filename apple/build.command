@@ -89,7 +89,7 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
   $INSTALLER
   <key>provisioningProfiles</key><dict><key>org.schrodinger.app</key><string>$PROF</string></dict>
   <key>uploadSymbols</key><true/>
-  <key>manageAppVersionAndBuildNumber</key><true/>
+  <key>manageAppVersionAndBuildNumber</key><false/>
 </dict></plist>
 EOP
       echo "--- upload $P (profile: $PROF)"
