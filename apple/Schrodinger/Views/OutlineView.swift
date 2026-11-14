@@ -12,6 +12,7 @@ struct OutlineView: View {
     @State private var modeFilter: Mode? = nil
     @State private var showLegend = false
     @FocusState private var focused: UUID?
+    @State private var drag = OutlineDrag()
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
@@ -32,6 +33,16 @@ struct OutlineView: View {
                 if showLegend { BarLegend().padding(.top, 24) }
             }
             .padding(.horizontal, 16).padding(.top, 8)
+            .coordinateSpace(name: "outline")
+            .onPreferenceChange(RowFrameKey.self) { v in Task { @MainActor in drag.frames = v } }
+            .overlay(alignment: .topLeading) {
+                if let t = drag.target, drag.id != nil {
+                    Rectangle().fill(Color.ink).frame(height: 2)
+                        .padding(.leading, 16 + CGFloat(t.depth) * 7).padding(.trailing, 16)
+                        .offset(y: t.y - 1)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .background(Color.canvas)
         .navigationTitle("")
@@ -106,7 +117,10 @@ struct OutlineView: View {
         let hidden = (filter != .all || modeFilter != nil) && depth > 0 && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
-            NodeRow(node: n, depth: depth, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, onKey: { key in handleKey(key, n, kids: kids) })
+            NodeRow(node: n, depth: depth, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, drag: drag,
+                    onKey: { key in handleKey(key, n, kids: kids) },
+                    onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
+                    onDrop: { performDrop(n) })
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed {
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids) }
@@ -119,6 +133,54 @@ struct OutlineView: View {
         let c = kids[n.id] ?? []
         if c.isEmpty { return (n.state == .done ? 1 : 0, 1) }
         return c.map { leafCount($0, kids: kids) }.reduce((0, 0)) { ($0.0 + $1.done, $0.1 + $1.total) }
+    }
+
+    // MARK: Drag anywhere
+
+    private func depthOf(_ n: Node) -> Int { var d = 0; var p = n.parentID; while let id = p, let x = store.node(id) { d += 1; p = x.parentID }; return d }
+    private func isInSubtree(_ id: UUID, of root: UUID) -> Bool { var p: UUID? = id; while let x = p { if x == root { return true }; p = store.node(x)?.parentID }; return false }
+
+    /// Rows currently laid out, top to bottom, excluding the dragged item and its descendants.
+    private func visibleOrder(excluding root: UUID) -> [(node: Node, frame: CGRect, depth: Int)] {
+        drag.frames.compactMap { id, f in store.node(id).map { ($0, f, 0) } }
+            .filter { !isInSubtree($0.0.id, of: root) }
+            .sorted { $0.1.minY < $1.1.minY }
+            .map { ($0.0, $0.1, depthOf($0.0)) }
+    }
+
+    private func updateDropTarget(_ n: Node, dx: CGFloat, dy: CGFloat) {
+        guard let own = drag.frames[n.id] else { return }
+        let y = own.midY + dy
+        let rows = visibleOrder(excluding: n.id)
+        // Insertion point: before the first row whose middle is below the finger.
+        let idx = rows.firstIndex { $0.frame.midY > y } ?? rows.count
+        let above = idx > 0 ? rows[idx - 1] : nil
+        let below = idx < rows.count ? rows[idx] : nil
+        let lineY = above.map { $0.frame.maxY } ?? below.map { $0.frame.minY } ?? own.minY
+        let maxD = (above?.depth ?? -1) + 1
+        let minD = below?.depth ?? 0
+        let want = (above?.depth ?? 0) + Int((dx / 44).rounded())
+        let depth = max(min(minD, maxD), min(maxD, want))
+        drag.target = OutlineDrag.Target(y: lineY, depth: depth, aboveID: above?.node.id)
+    }
+
+    private func performDrop(_ n: Node) {
+        defer { drag.target = nil; drag.id = nil }
+        guard let t = drag.target else { return }
+        let s = store
+        guard let aboveID = t.aboveID, let above = s.node(aboveID) else { try? s.move(n, to: nil, position: 0); s.save(); return }
+        let aboveDepth = depthOf(above)
+        if t.depth > aboveDepth {
+            try? s.move(n, to: above.id, position: 0)
+            if above.collapsed { s.update(above) { $0.collapsed = false } }
+        } else {
+            var anc = above
+            for _ in 0..<(aboveDepth - t.depth) { guard let pid = anc.parentID, let p = s.node(pid) else { break }; anc = p }
+            let sibs = s.children(of: anc.parentID).filter { $0.id != n.id }
+            let idx = (sibs.firstIndex(where: { $0.id == anc.id }) ?? (sibs.count - 1)) + 1
+            try? s.move(n, to: anc.parentID, position: idx)
+        }
+        s.save()
     }
 
     enum Key { case enter, tab, shiftTab, backspaceEmpty, altUp, altDown }
@@ -147,6 +209,20 @@ struct OutlineView: View {
         case .altDown: try? s.move(n, to: n.parentID, position: n.position + 1); s.save(); focused = n.id
         }
     }
+}
+
+@Observable @MainActor final class OutlineDrag {
+    struct Target: Equatable { var y: CGFloat; var depth: Int; var aboveID: UUID? }
+    var id: UUID? = nil
+    var dx: CGFloat = 0
+    var dy: CGFloat = 0
+    var frames: [UUID: CGRect] = [:]
+    var target: Target? = nil
+}
+
+struct RowFrameKey: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) { value.merge(nextValue()) { $1 } }
 }
 
 /// Hairline progress under a top-level item.
@@ -275,11 +351,13 @@ struct NodeRow: View {
     let leafCount: (done: Int, total: Int)
     var sel: Selection
     var focused: FocusState<UUID?>.Binding
+    let drag: OutlineDrag
     let onKey: (OutlineView.Key) -> Void
+    let onDragChanged: (CGFloat, CGFloat) -> Void
+    let onDrop: () -> Void
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
-    @State private var lift: CGFloat = 0
-    private let rowHeight: CGFloat = 36
+    private var lifting: Bool { drag.id == node.id }
     @State private var note: String = ""
     @State private var showNote = false
     @FocusState private var noteFocused: Bool
@@ -355,10 +433,12 @@ struct NodeRow: View {
         if sel.nodeID == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
-        .offset(x: pull, y: lift)
-        .background(Color.canvas.opacity(lift == 0 ? 0 : 1), in: RoundedRectangle(cornerRadius: 6))
-        .shadow(color: .black.opacity(lift == 0 ? 0 : 0.18), radius: lift == 0 ? 0 : 8, y: 2)
-        .zIndex(lift == 0 ? 0 : 1)
+        .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
+        .offset(x: pull + (lifting ? drag.dx * 0.3 : 0), y: lifting ? drag.dy : 0)
+        .background(Color.canvas.opacity(lifting ? 1 : 0), in: RoundedRectangle(cornerRadius: 6))
+        .shadow(color: .black.opacity(lifting ? 0.18 : 0), radius: lifting ? 8 : 0, y: 2)
+        .opacity(lifting ? 0.92 : 1)
+        .zIndex(lifting ? 1 : 0)
         // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: -4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
@@ -383,24 +463,29 @@ struct NodeRow: View {
             }
     }
 
-    /// The bars are the handle: drag sideways to indent/outdent, up or down to reorder among siblings. Tap opens the menu.
+    /// The bars are the handle. A short sideways pull indents/outdents; anything else lifts the item and lets you drop it
+    /// anywhere in the outline (horizontal position while dragging picks the depth at the drop point).
     private var handleGesture: some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { v in
                 let dx = v.translation.width, dy = v.translation.height
-                if abs(dx) > abs(dy) * 1.3 {
+                if drag.id == nil && abs(dy) < 10 && abs(dx) > abs(dy) * 1.3 {
                     var x = dx; if node.isProject && x < 0 { x = 0 }
-                    pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6)); lift = 0
+                    pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
                 } else {
-                    lift = dy; pull = 0
+                    if drag.id == nil { pull = 0; drag.id = node.id; commit() }
+                    drag.dx = dx; drag.dy = dy
+                    onDragChanged(dx, dy)
                 }
             }
-            .onEnded { v in
-                let p = pull, steps = Int((lift / rowHeight).rounded())
-                withAnimation(.snappy(duration: 0.22)) { pull = 0; lift = 0 }
-                if p < -pullThreshold { commit(); onKey(.shiftTab) }
+            .onEnded { _ in
+                let p = pull
+                withAnimation(.snappy(duration: 0.22)) { pull = 0 }
+                if drag.id == node.id {
+                    withAnimation(.snappy(duration: 0.22)) { drag.dx = 0; drag.dy = 0 }
+                    onDrop()
+                } else if p < -pullThreshold { commit(); onKey(.shiftTab) }
                 else if p > pullThreshold { commit(); onKey(.tab) }
-                else if steps != 0 { commit(); for _ in 0..<abs(steps) { onKey(steps < 0 ? .altUp : .altDown) } }
             }
     }
 
