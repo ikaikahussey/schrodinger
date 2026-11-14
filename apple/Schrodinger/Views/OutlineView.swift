@@ -40,6 +40,12 @@ struct OutlineView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .principal) { Text("Schrodinger").font(.headline) }
+            ToolbarItem(placement: .primaryAction) {
+                Button { ctx.undoManager?.undo(); store.save() } label: { Image(systemName: "arrow.uturn.backward") }.help("Undo")
+            }
+            ToolbarItem(placement: .secondaryAction) {
+                Button { ctx.undoManager?.redo(); store.save() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
+            }
             if focused != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Done") { focused = nil }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])

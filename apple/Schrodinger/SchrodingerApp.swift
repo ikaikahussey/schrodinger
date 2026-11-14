@@ -36,12 +36,12 @@ struct SchrodingerApp: App {
     var body: some Scene {
         #if os(macOS)
         WindowGroup { ContentView().environment(harness).task { harness.start() } }
-            .modelContainer(container)
+            .modelContainer(container, isUndoEnabled: true)
             .defaultSize(width: 1280, height: 820)
         Settings { SettingsView().modelContainer(container).environment(harness) }
         #else
         WindowGroup { ContentView().environment(harness).task { harness.start() } }
-            .modelContainer(container)
+            .modelContainer(container, isUndoEnabled: true)
         #endif
     }
 }

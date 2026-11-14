@@ -23,6 +23,8 @@ targets:
       path: Schrodinger/Resources/Info.plist
       properties:
         CFBundleDisplayName: Schrodinger
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSCalendarsFullAccessUsageDescription: "Schrodinger reads your calendar to show upcoming events alongside tasks and lets you add tasks to your calendar."
         BGTaskSchedulerPermittedIdentifiers: ["org.schrodinger.harness"]
         UIBackgroundModes: ["fetch", "processing"]
