@@ -6,6 +6,11 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 REPO=$(pwd)
+# Pull first, then re-exec so this run uses the freshly pulled script (bash reads scripts incrementally).
+if [ "${SCHRODINGER_PULLED:-}" != 1 ]; then
+  git pull --ff-only -q 2>/dev/null || true
+  SCHRODINGER_PULLED=1 exec bash "$0" "$@"
+fi
 LOG="$REPO/apple/build-log.txt"
 mkdir -p "$REPO/apple/build"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
