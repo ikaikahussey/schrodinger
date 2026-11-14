@@ -3,18 +3,25 @@
 # and uploads to TestFlight when the build passes. The full log is pushed to the `build-logs` branch so it can be
 # read remotely. Set ASC_* in ~/.schrodinger-asc.env to enable upload:
 #   ASC_KEY_ID=...  ASC_ISSUER_ID=...  ASC_KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_XXXX.p8  APPLE_TEAM_ID=...
+#
+# Also the engine for .github/workflows/mac-build.yml on the Mac mini runner. There (GITHUB_ACTIONS set) it
+# builds the checked-out commit as is: no pull, no build-logs push, upload only when UPLOAD=1, and it exits
+# non-zero when anything failed. By hand, UPLOAD defaults to 1.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 REPO=$(pwd)
+CI_RUN=${GITHUB_ACTIONS:+1}
+UPLOAD=${UPLOAD:-$([ -n "$CI_RUN" ] && echo 0 || echo 1)}
 # Pull first, then re-exec so this run uses the freshly pulled script (bash reads scripts incrementally).
-if [ "${SCHRODINGER_PULLED:-}" != 1 ]; then
+if [ -z "$CI_RUN" ] && [ "${SCHRODINGER_PULLED:-}" != 1 ]; then
   git pull --ff-only -q 2>/dev/null || true
   SCHRODINGER_PULLED=1 exec bash "$0" "$@"
 fi
 # Commits marked [skip ci] do not build or upload.
-git log -1 --pretty=%B | grep -q '\[skip ci\]' && { echo "[skip ci] — nothing to do"; exit 0; }
+[ -z "$CI_RUN" ] && git log -1 --pretty=%B | grep -q '\[skip ci\]' && { echo "[skip ci] — nothing to do"; exit 0; }
 LOG="$REPO/apple/build-log.txt"
 mkdir -p "$REPO/apple/build"
+rm -f "$REPO/apple/build/.rc"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 # --if-changed (used by the launchd poller): pull and exit unless main moved since the last build.
 if [ "${1:-}" = "--if-changed" ]; then
@@ -50,8 +57,9 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
 {
   echo "=== $(date) ==="; echo "Xcode: $XC"; xcodebuild -version
   echo "ASC key: ${ASC_KEY_ID:-none} ($( [ -f "${ASC_KEY_PATH:-/nonexistent}" ] && echo present || echo missing))  team: $APPLE_TEAM_ID"
-  echo "--- git pull"; git pull --ff-only 2>&1
-  cd apple
+  echo "commit: $(git log -1 --format='%h %s')  upload: $UPLOAD"
+  [ -z "$CI_RUN" ] && { echo "--- git pull"; git pull --ff-only 2>&1; }
+  cd apple; RC=0
   echo "--- xcodegen"; which xcodegen || brew install xcodegen 2>&1 | tail -3
   sed -i '' -E "s/DEVELOPMENT_TEAM: \"[A-Z0-9]*\"/DEVELOPMENT_TEAM: \"$APPLE_TEAM_ID\"/" project.yml
   xcodegen generate 2>&1 | tail -5
@@ -63,7 +71,10 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
   IOS=${PIPESTATUS[0]}
   echo "--- tests macOS"
   xcodebuild test -project Schrodinger.xcodeproj -scheme Schrodinger_macOS -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "error:|Test Case|Executed|\*\* " | tail -30
-  if [ "$MAC" = 0 ] && [ "$IOS" = 0 ] && [ -n "${ASC_KEY_ID:-}" ]; then
+  TESTS=${PIPESTATUS[0]}
+  [ "$MAC" = 0 ] && [ "$IOS" = 0 ] && [ "$TESTS" = 0 ] || RC=1
+  if [ "$RC" = 0 ] && [ "$UPLOAD" = 1 ] && [ -z "${ASC_KEY_ID:-}" ]; then echo "error: upload requested but no App Store Connect key on this Mac"; RC=1; fi
+  if [ "$RC" = 0 ] && [ "$UPLOAD" = 1 ]; then
     echo "--- signing prep (device registration + certificates via App Store Connect API)"
     pkill -f "xcodebuild -exportArchive" 2>/dev/null && echo "killed a stale export from an earlier run"
     python3 asc_prepare.py 2>&1 | tail -20
@@ -72,9 +83,12 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
     AUTH=(-allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH")
     BN=$(date +%Y%m%d%H%M)
     source build/profiles.env 2>/dev/null || true
+    : "${IOS_PROFILE:=}" "${MAC_PROFILE:=}"
+    [ -n "$IOS_PROFILE" ] && [ -n "$MAC_PROFILE" ] || echo "error: signing prep produced no App Store profiles (see above)"
     for P in iOS macOS; do
       echo "--- archive $P"
       xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_$P -configuration Release -destination "generic/platform=$P" -archivePath "build/$P.xcarchive" archive CURRENT_PROJECT_VERSION=$BN "${AUTH[@]}" 2>&1 | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)|\*\* " | sort -u
+      [ "${PIPESTATUS[0]}" = 0 ] || RC=1
       # Export with manual signing: local Apple Distribution cert + the App Store profile asc_prepare.py installed.
       if [ "$P" = iOS ]; then PROF="$IOS_PROFILE"; INSTALLER=""; else PROF="$MAC_PROFILE"; INSTALLER="<key>installerSigningCertificate</key><string>3rd Party Mac Developer Installer</string>"; fi
       cat > "build/export-$P.plist" <<EOP
@@ -95,13 +109,17 @@ EOP
       echo "--- upload $P (profile: $PROF)"
       xcodebuild -exportArchive -archivePath "build/$P.xcarchive" -exportPath "build/$P-export" -exportOptionsPlist "build/export-$P.plist" \
         -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH" 2>&1 | grep -E "error|EXPORT (SUCCEEDED|FAILED)|[Uu]pload|\*\* " | sort -u
+      [ "${PIPESTATUS[0]}" = 0 ] || RC=1
     done
   else
-    echo "--- skipping archive/upload (mac=$MAC ios=$IOS asc=${ASC_KEY_ID:+set})"
+    echo "--- skipping archive/upload (mac=$MAC ios=$IOS tests=$TESTS upload=$UPLOAD asc=${ASC_KEY_ID:+set})"
   fi
-  echo "=== done $(date) ==="
+  echo "$RC" > build/.rc
+  echo "=== done (exit $RC) $(date) ==="
 } 2>&1 | tee "$LOG"
 cd "$REPO"
+RC=$(cat "$REPO/apple/build/.rc" 2>/dev/null || echo 1)
+[ -n "$CI_RUN" ] && exit "$RC"
 git rev-parse HEAD > "$REPO/apple/build/.last-sha"
 git add -f apple/build-log.txt && git commit -q -m "build log $(date +%F_%T)" -- apple/build-log.txt && git push -q origin HEAD:build-logs --force 2>&1 | tail -1
 git reset -q --soft HEAD~1 && git reset -q apple/build-log.txt   # keep main clean; log lives on build-logs

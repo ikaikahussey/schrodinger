@@ -17,13 +17,22 @@ open Schrodinger.xcodeproj
 ```
 Set your team under Signing & Capabilities (or `DEVELOPMENT_TEAM` in `project.yml`). Requires Xcode 26.
 
-## Automated builds on your own Mac (no runner)
+## Remote builds on the Mac mini
 
-`apple/build.command` pulls, generates, compiles both platforms, runs tests, archives and uploads when `~/.schrodinger-asc.env` is present, and pushes its log to the `build-logs` branch. Double-click `apple/install-automation.command` once to install a launchd agent that runs it whenever `main` changes (checked every 5 min). The upload needs an App Store Connect API key in `~/.schrodinger-asc.env` (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`, `APPLE_TEAM_ID`) and an app record with bundle ID `org.schrodinger.app`.
+Same arrangement as Tact. The Mac mini runs a self-hosted GitHub Actions runner (label `schrodinger`) for `.github/workflows/mac-build.yml`:
+
+- Any push that touches `apple/` builds iOS and macOS and runs the unit tests. Nothing is uploaded.
+- Pushing a tag named `testflight-<anything>` builds, tests, then archives and uploads both platforms:
+  `git tag testflight-$(date -u +%Y%m%d%H%M) && git push origin --tags`
+- Actions > Mac build > Run workflow does the same, with a TestFlight checkbox (works from the GitHub mobile app).
+
+Each run posts a check run named **Schrodinger build log** on the commit; read it with `gh api repos/ikaikahussey/schrodinger/commits/<sha>/check-runs`.
+
+Setup on the Mac (once): `zsh apple/setup-mac-runner.sh`. It installs the runner beside Tact's and removes the old launchd poller. Signing material stays on the Mac in `~/.schrodinger-asc.env` and `~/.appstoreconnect`; the workflow uses no repository secrets.
+
+`apple/build.command` is the engine the workflow runs. Double-clicked on a Mac it still pulls, builds, uploads and pushes its log to the `build-logs` branch. `apple/install-automation.command` (the launchd poller) is superseded by the runner; do not install both.
 
 ## TestFlight
-
-Automated: `.github/workflows/testflight.yml` runs on a self-hosted macOS runner (the Mac mini already runs one for Tact). Register that runner for this repo (or at the account level), add secrets `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`, `APPLE_TEAM_ID`, then push to `main` or run the workflow manually. `ExportOptions.plist` uploads straight to App Store Connect.
 
 Manual:
 
@@ -36,6 +45,3 @@ xcrun altool --upload-app -f build/export/Schrodinger.ipa -t ios --apiKey <KEY_I
 ```
 (or Product → Archive → Distribute App in Xcode.)
 
-## Status
-
-Written without access to Xcode; not yet compiled. Expect a round of compiler fixes on first build, most likely around SwiftData `#Predicate` forms, `onKeyPress` modifiers, and the FoundationModels `Tool` signature.

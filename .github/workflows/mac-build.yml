@@ -1,0 +1,90 @@
+# Builds and tests Schrodinger (iOS + macOS) on the self-hosted Mac mini runner, and uploads
+# to TestFlight on request. Same shape as Tact's workflow, so both apps are driven the same way.
+#
+# Triggers
+#   - push to any branch that touches apple/:  build both platforms + unit tests
+#   - push of a tag named testflight-*:        build + tests, then archive and upload both platforms
+#   - "Run workflow" in the Actions tab:        build + tests, optionally TestFlight
+#
+# No pull_request trigger: the repository is public and this runs on a personal Mac,
+# so code from forks must never reach it.
+#
+# Results are posted as a check run named "Schrodinger build log" on the commit, so they can
+# be read with `gh api repos/ikaikahussey/schrodinger/commits/<sha>/check-runs`.
+#
+# Signing material stays on the Mac (~/.schrodinger-asc.env, ~/.appstoreconnect); no repository secrets.
+
+name: Mac build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['testflight-*']
+    paths:
+      - 'apple/**'
+      - '.github/workflows/mac-build.yml'
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: 'Upload to TestFlight after the tests pass'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: mac-build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/testflight-') }}
+
+jobs:
+  build:
+    runs-on: [self-hosted, macOS, schrodinger]
+    timeout-minutes: 60
+    env:
+      UPLOAD: ${{ (startsWith(github.ref, 'refs/tags/testflight-') || inputs.testflight == true) && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, test, upload if requested
+        id: build
+        run: bash apple/build.command
+
+      - name: Post build log check run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import json, os, urllib.request
+          try: text = open("apple/build-log.txt", errors="replace").read()
+          except OSError: text = "No log; the build did not start."
+          ok = os.environ["OUTCOME"] == "success"
+          up = "yes" if os.environ["UPLOAD"] == "1" else "no"
+          summary = f"ref {os.environ['GITHUB_REF_NAME']}; build: {os.environ['OUTCOME']}; TestFlight upload: {up}"
+          body = {
+              "name": "Schrodinger build log",
+              "head_sha": os.environ["GITHUB_SHA"],
+              "status": "completed",
+              "conclusion": "success" if ok else "failure",
+              "details_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "output": {"title": ("Passed" if ok else "Failed") + f" — {summary}",
+                         "summary": summary, "text": text[-60000:]},
+          }
+          req = urllib.request.Request(
+              f"{os.environ['GITHUB_API_URL']}/repos/{os.environ['GITHUB_REPOSITORY']}/check-runs",
+              data=json.dumps(body).encode(), method="POST",
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                       "Accept": "application/vnd.github+json"})
+          print(urllib.request.urlopen(req).status)
+          PY
+
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: apple/build-log.txt
+          retention-days: 7

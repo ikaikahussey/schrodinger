@@ -8,3 +8,4 @@ apple/build-log.txt
 apple/Schrodinger.xcodeproj/
 *.p8
 .schrodinger-asc.env
+__pycache__/
