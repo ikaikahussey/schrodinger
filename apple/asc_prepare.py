@@ -124,15 +124,13 @@ def ensure_cert(name, ctype):
     print(f"cert: {name} created and imported into build keychain ({data['data']['id']}){'' if r.returncode == 0 else ' [partition-list warning: ' + r.stderr.strip()[:120] + ']'}")
 
 def ensure_wwdr():
-    # Apple Worldwide Developer Relations intermediates must be present for the chain to validate.
-    try:
-        for n in ("AppleWWDRCAG3", "AppleWWDRCAG6"):
-            if sh("security", "find-certificate", "-c", "Apple Worldwide Developer Relations", "-a", check=False).stdout.count("G") and n == "AppleWWDRCAG3" and sh("security", "find-certificate", "-c", "Apple Worldwide Developer Relations", check=False).returncode == 0: continue
+    # Apple Worldwide Developer Relations intermediates (G3 for older certs, G6 for 2025+ certs) in the build keychain.
+    for n in ("AppleWWDRCAG3", "AppleWWDRCAG6"):
+        try:
             p = os.path.join(WORK, f"{n}.cer")
-            urllib.request.urlretrieve(f"https://www.apple.com/certificateauthority/{n}.cer", p)
+            if not os.path.exists(p): urllib.request.urlretrieve(f"https://www.apple.com/certificateauthority/{n}.cer", p)
             sh("security", "add-certificates", "-k", BUILD_KC, p, check=False)
-        print("wwdr: installed intermediate")
-    except Exception as e: print(f"wwdr: could not install intermediate: {e}")
+        except Exception as e: print(f"wwdr: {n}: {e}")
 
 # ---------- 3. App Store provisioning profiles (manual signing for export) ----------
 BUNDLE_ID = os.environ.get("BUNDLE_ID", "org.schrodinger.app")
