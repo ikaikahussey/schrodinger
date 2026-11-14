@@ -19,7 +19,9 @@ fi
 [ -z "$UDID" ] && { echo "No iPhone simulator available. Install one in Xcode → Settings → Components."; exit 1; }
 echo "Simulator: $(xcrun simctl list devices | grep "$UDID" | head -1)"
 xcrun simctl boot "$UDID" 2>/dev/null || true
-SIMAPP=$(find "$XC" -maxdepth 5 -name "Simulator.app" -type d 2>/dev/null | head -1)
+SIMAPP=$(mdfind "kMDItemCFBundleIdentifier == 'com.apple.iphonesimulator'" 2>/dev/null | head -1)
+[ -z "$SIMAPP" ] && SIMAPP=$(find /Applications "$XC/Contents" ~/Applications -maxdepth 6 -iname "*Simulator*.app" -type d 2>/dev/null | grep -v -i "widgetkit\|quicklook" | head -1)
+echo "Xcode: $XC"; ls "$XC/Contents/Developer/Applications" 2>/dev/null | tr '\n' ' '; echo
 echo "Simulator.app: ${SIMAPP:-not found}"
 open -b com.apple.iphonesimulator 2>/dev/null || { [ -n "$SIMAPP" ] && open "$SIMAPP"; } || open -a Simulator
 echo "--- building (Debug, simulator)"
