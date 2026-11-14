@@ -17,6 +17,7 @@ struct SchrodingerApp: App {
         let c: ModelContainer
         do { c = try ModelContainer(for: schema, configurations: [config]) }
         catch { c = try! ModelContainer(for: schema, configurations: [ModelConfiguration("Schrodinger-local", schema: schema, cloudKitDatabase: .none)]) }
+        c.mainContext.undoManager = UndoManager()   // enables undo/redo for every edit made through the main context
         container = c
         _harness = State(initialValue: HarnessEngine(container: c))
         #if os(iOS)
@@ -36,12 +37,12 @@ struct SchrodingerApp: App {
     var body: some Scene {
         #if os(macOS)
         WindowGroup { ContentView().environment(harness).task { harness.start() } }
-            .modelContainer(container, isUndoEnabled: true)
+            .modelContainer(container)
             .defaultSize(width: 1280, height: 820)
         Settings { SettingsView().modelContainer(container).environment(harness) }
         #else
         WindowGroup { ContentView().environment(harness).task { harness.start() } }
-            .modelContainer(container, isUndoEnabled: true)
+            .modelContainer(container)
         #endif
     }
 }
