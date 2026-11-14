@@ -14,14 +14,18 @@ struct ReviewView: View {
     var body: some View {
         List {
             if let id = sel.nodeID, let n = store.node(id) {
-                Section("Selected") { DetailView(node: n) }
+                Section("Selected") {
+                    DetailView(node: n)
+                    Button("OK") { store.save(); sel.nodeID = nil; sel.panel = .outline }
+                        .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                }
             }
             let shared = all.filter { $0.isYourTurn }
             if !shared.isEmpty {
                 Section("Shared tasks — AI part done, your turn") {
                     ForEach(shared) { n in
                         card(n) {
-                            Button("My part done → done") { store.update(n) { $0.state = .done }; store.save() }.buttonStyle(.borderedProminent)
+                            Button("OK") { store.update(n) { $0.state = .done }; store.save() }.buttonStyle(.borderedProminent)
                             Button("Send back to AI") { try? store.sendBackToAI(n, note: notes[n.id] ?? ""); store.save(); notes[n.id] = nil }
                         }
                     }
@@ -32,8 +36,8 @@ struct ReviewView: View {
                 if items.isEmpty { Text("No drafts in review.").foregroundStyle(.secondary) }
                 ForEach(items) { n in
                     card(n) {
-                        Button("Approve → done") { try? store.approve(n); store.save() }.buttonStyle(.borderedProminent)
-                        Button("Reject → redo") { try? store.reject(n, note: notes[n.id] ?? ""); store.save(); notes[n.id] = nil }
+                        Button("OK") { try? store.approve(n); store.save() }.buttonStyle(.borderedProminent)
+                        Button("Redo") { try? store.reject(n, note: notes[n.id] ?? ""); store.save(); notes[n.id] = nil }
                     }
                 }
             }
