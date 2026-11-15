@@ -47,6 +47,7 @@ struct OutlineView: View {
                 }
             }
         }
+        .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
         .background(Color.canvas)
         .navigationTitle("")
         #if os(iOS)
@@ -157,7 +158,7 @@ struct OutlineView: View {
     }
 
     private func updateDropTarget(_ n: Node, dx: CGFloat, dy: CGFloat) {
-        guard let own = drag.frames[n.id] else { return }
+        guard let own = drag.origin ?? drag.frames[n.id] else { return }
         let y = own.midY + dy
         let rows = visibleOrder(excluding: n.id)
         // Insertion point: before the first row whose middle is below the finger.
@@ -173,7 +174,7 @@ struct OutlineView: View {
     }
 
     private func performDrop(_ n: Node) {
-        defer { drag.target = nil; drag.id = nil }
+        defer { drag.target = nil; drag.id = nil; drag.origin = nil }
         guard let t = drag.target else { return }
         let s = store
         guard let aboveID = t.aboveID, let above = s.node(aboveID) else { try? s.move(n, to: nil, position: 0); s.save(); return }
@@ -228,6 +229,8 @@ struct OutlineView: View {
     var dx: CGFloat = 0
     var dy: CGFloat = 0
     var frames: [UUID: CGRect] = [:]
+    /// The lifted row's frame at the moment it was lifted. Its live frame includes the drag offset, so it can't be used.
+    var origin: CGRect? = nil
     var target: Target? = nil
 }
 
@@ -338,7 +341,7 @@ extension TaskState {
     /// Strip icon for the item's status.
     var icon: String {
         switch self {
-        case .todo: "circle"; case .in_progress: "circle.lefthalf.filled"; case .blocked: "exclamationmark.octagon"
+        case .unset: "circle.dashed"; case .todo: "circle"; case .in_progress: "circle.lefthalf.filled"; case .blocked: "exclamationmark.octagon"
         case .review: "eye"; case .done: "checkmark.circle.fill"
         }
     }
@@ -393,6 +396,7 @@ struct NodeRow: View {
     let onDrop: () -> Void
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
+    @GestureState private var handleActive = false
     private var lifting: Bool { drag.id == node.id }
     @State private var note: String = ""
     @State private var showNote = false
@@ -427,16 +431,17 @@ struct NodeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 10) {
-            Button { commit(); toggleSelect() } label: {
-                DepthBars(node: node, depth: depth, hasChildren: hasChildren)
-                    .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-            .help(summary + " · tap for actions, tap again to hide · drag to move")
-            .accessibilityLabel(summary)
-            .simultaneousGesture(handleGesture)
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren)
+                .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
+                .contentShape(Rectangle())
+                .onTapGesture { commit(); toggleSelect() }
+                .gesture(handleGesture)
+                .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
+                .help(summary + " · tap for actions, tap again to hide · hold and drag to move")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(summary)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { commit(); toggleSelect() }
 
             VStack(alignment: .leading, spacing: 2) {
             // Tap selects (shows the action strip), tap again deselects (hides it); long press (or double-tap) edits the text.
@@ -514,6 +519,8 @@ struct NodeRow: View {
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
+        .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
+        .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }
@@ -551,30 +558,27 @@ struct NodeRow: View {
             }
     }
 
-    /// The bars are the handle. A short sideways pull indents/outdents; anything else lifts the item and lets you drop it
-    /// anywhere in the outline (horizontal position while dragging picks the depth at the drop point).
+    /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
+    /// position while dragging picks the depth at the drop point. The hold keeps ordinary swipes scrolling the list, and
+    /// movement is measured in global coordinates so the lifted row's own offset doesn't feed back into the drag.
     private var handleGesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+        LongPressGesture(minimumDuration: 0.25)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+            .updating($handleActive) { v, active, _ in if case .second(true, _) = v { active = true } }
             .onChanged { v in
-                let dx = v.translation.width, dy = v.translation.height
-                if drag.id == nil && abs(dy) < 10 && abs(dx) > abs(dy) * 1.3 {
-                    var x = dx; if node.isProject && x < 0 { x = 0 }
-                    pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
-                } else {
-                    if drag.id == nil { pull = 0; drag.id = node.id; commit() }
-                    drag.dx = dx; drag.dy = dy
-                    onDragChanged(dx, dy)
-                }
+                guard case .second(true, let d) = v else { return }
+                if drag.id == nil { pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0 }
+                guard let d else { return }
+                drag.dx = d.translation.width; drag.dy = d.translation.height
+                onDragChanged(drag.dx, drag.dy)
             }
-            .onEnded { _ in
-                let p = pull
-                withAnimation(.snappy(duration: 0.22)) { pull = 0 }
-                if drag.id == node.id {
-                    withAnimation(.snappy(duration: 0.22)) { drag.dx = 0; drag.dy = 0 }
-                    onDrop()
-                } else if p < -pullThreshold { commit(); onKey(.shiftTab) }
-                else if p > pullThreshold { commit(); onKey(.tab) }
-            }
+    }
+    /// Ends a lift whether the gesture finished or was cancelled (GestureState resets in both cases; onEnded does not
+    /// run on cancel, which used to leave the row stuck lifted).
+    private func finishDrag() {
+        guard drag.id == node.id else { return }
+        drag.dx = 0; drag.dy = 0
+        withAnimation(.snappy(duration: 0.22)) { onDrop() }
     }
 
     private func pullArrow(_ name: String, active: Bool, show: Bool) -> some View {
