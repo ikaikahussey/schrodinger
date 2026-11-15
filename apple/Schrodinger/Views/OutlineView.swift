@@ -365,24 +365,28 @@ struct NodeRow: View {
 
     private var store: Store { Store(ctx) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
+    /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
+    private func toggleSelect() {
+        withAnimation(.easeOut(duration: 0.15)) { sel.nodeID = sel.nodeID == node.id ? nil : node.id }
+    }
     private var done: Bool { node.state == .done && isLeafTask }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .top, spacing: 10) {
-            Button { commit(); sel.nodeID = node.id } label: {
+            Button { commit(); toggleSelect() } label: {
                 DepthBars(node: node, depth: depth, hasChildren: hasChildren)
                     .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(.top, -1)
-            .help(summary + " · tap for actions · drag to move")
+            .help(summary + " · tap for actions, tap again to hide · drag to move")
             .accessibilityLabel(summary)
             .simultaneousGesture(handleGesture)
 
             VStack(alignment: .leading, spacing: 2) {
-            // Tap selects (shows the action strip); long press (or double-tap) edits the text.
+            // Tap selects (shows the action strip), tap again deselects (hides it); long press (or double-tap) edits the text.
             if focused.wrappedValue != node.id {
                 Text(title.isEmpty ? "New item" : title)
                     .font(node.isProject ? .title3.weight(.semibold) : .body)
@@ -391,7 +395,7 @@ struct NodeRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { focused.wrappedValue = node.id }
-                    .onTapGesture { commit(); sel.nodeID = node.id }
+                    .onTapGesture { commit(); toggleSelect() }
                     .onLongPressGesture(minimumDuration: 0.35) { sel.nodeID = node.id; focused.wrappedValue = node.id }
             } else {
             TextField("", text: $title, axis: .vertical)
