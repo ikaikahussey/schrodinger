@@ -327,6 +327,23 @@ extension VerticalAlignment {
     static var rowLine: VerticalAlignment { VerticalAlignment(RowLine.self) }
 }
 
+extension Assignee {
+    /// Strip icon for who holds the item.
+    var icon: String {
+        switch self { case .human: "person.fill"; case .ai: "sparkles"; case .shared: "person.2.fill"; case .unassigned: "person.slash" }
+    }
+}
+
+extension TaskState {
+    /// Strip icon for the item's status.
+    var icon: String {
+        switch self {
+        case .todo: "circle"; case .in_progress: "circle.lefthalf.filled"; case .blocked: "exclamationmark.octagon"
+        case .review: "eye"; case .done: "checkmark.circle.fill"
+        }
+    }
+}
+
 extension Mode {
     /// Emoji shown under the bars and in menus.
     var emoji: String {
@@ -592,42 +609,42 @@ struct NodeRow: View {
         }
     }
 
-    /// The item's actions, on screen (shown under the selected row). Related choices are grouped into menus:
+    /// The item's actions, on screen (shown under the selected row), as icons only; the current value shows in the icon. Related choices are grouped into menus:
     /// responsible, status, mode, move, and more (context, details, delete). Edit and add stay one tap.
     @ViewBuilder private var actionStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 if editing {
-                    Pill(systemImage: "checkmark", title: "Done", on: true) { commit(); endEdit() }.help("Finish editing")
+                    Pill(systemImage: "checkmark", on: true) { commit(); endEdit() }.help("Finish editing").accessibilityLabel("Done")
                 } else {
-                    Pill(systemImage: "pencil", title: "Edit") { startEdit() }.help("Edit text")
+                    Pill(systemImage: "pencil") { startEdit() }.help("Edit text").accessibilityLabel("Edit")
                 }
                 if !node.isProject {
-                    PillMenu(systemImage: "person", title: node.assignee == .unassigned ? "—" : node.assignee.label) {
+                    PillMenu(systemImage: node.assignee.icon, title: nil) {
                         Picker("Responsible", selection: assigneeBinding) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }.pickerStyle(.inline)
-                    }.help("Responsible")
-                    PillMenu(systemImage: "circle.dotted", title: node.state == .in_progress ? "doing" : node.state.label) {
+                    }.help("Responsible: " + node.assignee.label).accessibilityLabel("Responsible: " + node.assignee.label)
+                    PillMenu(systemImage: node.state.icon, title: nil) {
                         Picker("Status", selection: stateBinding) { ForEach(TaskState.allCases) { Text($0 == .in_progress ? "doing" : $0.label).tag($0) } }.pickerStyle(.inline)
-                    }.help("Status")
-                    PillMenu(systemImage: node.mode == nil ? "tag" : nil, title: node.mode?.label ?? "mode") {
+                    }.help("Status: " + node.state.label).accessibilityLabel("Status: " + node.state.label)
+                    PillMenu(systemImage: node.mode == nil ? "tag" : nil, title: node.mode?.emoji) {
                         Picker("Mode", selection: modeBinding) { Text("none").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }.pickerStyle(.inline)
-                    }.help("Mode")
+                    }.help("Mode: " + (node.mode?.rawValue ?? "none")).accessibilityLabel("Mode: " + (node.mode?.rawValue ?? "none"))
                 }
-                PillMenu(systemImage: "arrow.up.and.down.and.arrow.left.and.right", title: "Move") {
+                PillMenu(systemImage: "arrow.up.and.down.and.arrow.left.and.right", title: nil) {
                     Button { onKey(.altUp) } label: { Label("Move up", systemImage: "arrow.up") }
                     Button { onKey(.altDown) } label: { Label("Move down", systemImage: "arrow.down") }
                     if !node.isProject {
                         Button { onKey(.tab) } label: { Label("Indent", systemImage: "arrow.right") }
                         Button { onKey(.shiftTab) } label: { Label("Outdent", systemImage: "arrow.left") }
                     }
-                }.help("Move")
-                Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below")
+                }.help("Move").accessibilityLabel("Move")
+                Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below").accessibilityLabel("Add item below")
                 PillMenu(systemImage: "ellipsis", title: nil) {
                     if !node.isProject { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
                     Button { sel.nodeID = node.id; sel.panel = .review } label: { Label("Details", systemImage: "info.circle") }
                     Divider()
                     Button(role: .destructive) { store.delete(node); store.save() } label: { Label("Delete", systemImage: "trash") }
-                }.help("More")
+                }.help("More").accessibilityLabel("More")
             }
             .padding(.vertical, 2)
         }
@@ -753,7 +770,7 @@ struct PillMenu<Content: View>: View {
     var title: String?
     @ViewBuilder var content: () -> Content
     var body: some View {
-        Menu { content() } label: { PillLabel(systemImage: systemImage, title: title, chevron: title != nil) }
+        Menu { content() } label: { PillLabel(systemImage: systemImage, title: title) }
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
