@@ -35,8 +35,8 @@ final class StoreTests: XCTestCase {
         let out = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
         XCTAssertTrue(out.contains { $0.hasPrefix("drafted: first") })
         XCTAssertEqual(ai.state, .review)
-        XCTAssertEqual(dep.state, .todo, "dependent task not picked up")
-        XCTAssertEqual(hum.state, .todo)
+        XCTAssertEqual(dep.state, .unset, "dependent task not picked up")
+        XCTAssertEqual(hum.state, .unset)
         XCTAssertEqual(sh.state, .in_progress); XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.isYourTurn)
         XCTAssertTrue(s.byMode(assignee: .human).contains { $0.tasks.contains { $0.0.id == sh.id } })
         // reject with note → redraft includes note
@@ -79,7 +79,7 @@ final class StoreTests: XCTestCase {
         s.update(t, actor: .ai, detail: "draft") { $0.state = .review; $0.artifact = "x" }
         let a = try XCTUnwrap(s.activity(for: t.id).first)
         try s.applyUndo(a)
-        XCTAssertEqual(t.state, .todo); XCTAssertNil(t.artifact)
+        XCTAssertEqual(t.state, .unset); XCTAssertNil(t.artifact)
         XCTAssertThrowsError(try AgentTools.safePathThrowing("../../etc/passwd"))
         XCTAssertThrowsError(try AgentTools.safePathThrowing("/tmp/x"))
         XCTAssertEqual(try AgentTools.safePathThrowing("notes/./a.md"), "notes/a.md")

@@ -12,9 +12,13 @@ enum Assignee: String, Codable, CaseIterable, Identifiable {
 }
 
 enum TaskState: String, Codable, CaseIterable, Identifiable {
+    /// No status set (the default for new items). Treated like `todo` wherever work is picked up.
+    case unset = "none"
     case todo, in_progress, blocked, review, done
     var id: String { rawValue }
     var label: String { rawValue.replacingOccurrences(of: "_", with: " ") }
+    /// Not started: no status, or explicitly to-do.
+    var notStarted: Bool { self == .unset || self == .todo }
 }
 
 enum ProjectStatus: String, Codable, CaseIterable, Identifiable {
@@ -41,7 +45,7 @@ final class Node {
     var constraints: String = ""       // projects
     var projectStatusRaw: String = ProjectStatus.active.rawValue
     var assigneeRaw: String = Assignee.human.rawValue
-    var stateRaw: String = TaskState.todo.rawValue
+    var stateRaw: String = TaskState.unset.rawValue
     var modeRaw: String = ""
     var aiStatusRaw: String = AIStatus.pending.rawValue
     var due: Date? = nil
@@ -68,7 +72,7 @@ final class Node {
     var isProject: Bool { parentID == nil }
     var projectStatus: ProjectStatus { get { ProjectStatus(rawValue: projectStatusRaw) ?? .active } set { projectStatusRaw = newValue.rawValue } }
     var assignee: Assignee { get { Assignee(rawValue: assigneeRaw) ?? .unassigned } set { assigneeRaw = newValue.rawValue } }
-    var state: TaskState { get { TaskState(rawValue: stateRaw) ?? .todo } set { stateRaw = newValue.rawValue } }
+    var state: TaskState { get { TaskState(rawValue: stateRaw) ?? .unset } set { stateRaw = newValue.rawValue } }
     var mode: Mode? { get { Mode(rawValue: modeRaw) } set { modeRaw = newValue?.rawValue ?? "" } }
     var aiStatus: AIStatus { get { AIStatus(rawValue: aiStatusRaw) ?? .pending } set { aiStatusRaw = newValue.rawValue } }
     /// Shared task whose AI part is done and which the human still has to finish.

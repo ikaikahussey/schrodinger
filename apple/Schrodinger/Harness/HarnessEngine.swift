@@ -94,7 +94,7 @@ struct ProjectAgent {
 
         // 1. Execute ready AI work.
         func aiTurn(_ t: Node) -> Bool {
-            (t.assignee == .ai && t.state == .todo) || (t.assignee == .shared && t.aiStatus == .pending && [.todo, .in_progress].contains(t.state))
+            (t.assignee == .ai && t.state.notStarted) || (t.assignee == .shared && t.aiStatus == .pending && (t.state.notStarted || t.state == .in_progress))
         }
         let ready = leaves.filter { aiTurn($0) && s.depsSatisfied($0) }
             .sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
@@ -112,7 +112,7 @@ struct ProjectAgent {
                 }
                 out.append("drafted: \(t.title)")
             } catch {
-                s.update(t, actor: .ai, detail: "draft failed: \(error.localizedDescription)") { $0.state = t.assignee == .shared ? originalState : .todo }
+                s.update(t, actor: .ai, detail: "draft failed: \(error.localizedDescription)") { $0.state = originalState }
                 out.append("failed: \(t.title): \(error.localizedDescription)")
             }
             s.save()
@@ -144,7 +144,7 @@ struct ProjectAgent {
             s.propose(projectID: projectID, nodeID: nil, type: .no_path, summary: "No open tasks but goal not complete — add tasks toward: \(project.goal.isEmpty ? project.title : project.goal)")
         }
         let parents = Set(tasks.compactMap(\.parentID))
-        for t in open where !parents.contains(t.id) && t.assignee == .ai && stateBefore[t.id] == .todo && (t.title.count > 70 || t.title.range(of: "\\band\\b", options: [.regularExpression, .caseInsensitive]) != nil) {
+        for t in open where !parents.contains(t.id) && t.assignee == .ai && (stateBefore[t.id]?.notStarted ?? false) && (t.title.count > 70 || t.title.range(of: "\\band\\b", options: [.regularExpression, .caseInsensitive]) != nil) {
             let parts = t.title.components(separatedBy: " and ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let subs = (parts.count > 1 ? parts : [t.title + " — part 1", t.title + " — part 2"]).map { ["title": $0, "assignee": "ai"] }
             s.propose(projectID: projectID, nodeID: t.id, type: .decompose, summary: "\"\(t.title)\" looks like more than one step — split it?", payload: ["subtasks": subs])
@@ -171,7 +171,7 @@ struct ProjectAgent {
         func grp(_ st: TaskState) -> String { let l = fresh.filter { $0.state == st }.map { "- \($0.title)" }; return l.isEmpty ? "- none" : l.joined(separator: "\n") }
         var needs: [String] = fresh.filter { $0.state == .review }.map { "- review: \($0.title)" }
         needs += fresh.filter { $0.isYourTurn }.map { "- your part: \($0.title)" }
-        needs += fresh.filter { $0.assignee == .human && $0.state == .todo && ($0.due.map { $0 < Date() } ?? false) }.map { "- overdue: \($0.title) (\($0.due!.dayString))" }
+        needs += fresh.filter { $0.assignee == .human && $0.state.notStarted && ($0.due.map { $0 < Date() } ?? false) }.map { "- overdue: \($0.title) (\($0.due!.dayString))" }
         needs += waitingOnHuman.map { "- AI waiting on your task before: \($0.title)" }
         let todayEvents = await CalendarService.shared.events(days: 1).map { e -> String in
             let t = e.allDay ? "all day" : e.start.formatted(date: .omitted, time: .shortened)
