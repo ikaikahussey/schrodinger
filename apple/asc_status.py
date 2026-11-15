@@ -8,8 +8,9 @@ import asc_prepare as asc  # reuses jwt()/api()
 
 APP_ID = os.environ.get("ASC_APP_ID", "6834190372")
 fix = "--fix" in sys.argv
+expect = os.environ.get("ASC_EXPECT_BUILD")  # build number just uploaded; exit 2 until both platforms show it as VALID
 
-builds = asc.api("GET", f"/builds?filter[app]={APP_ID}&sort=-uploadedDate&limit=12&fields[builds]=version,uploadedDate,processingState,expired,usesNonExemptEncryption,buildAudienceType&include=preReleaseVersion").get("data", [])
+builds = asc.api("GET", f"/builds?filter[app]={APP_ID}&sort=-uploadedDate&limit=12&fields[builds]=version,uploadedDate,processingState,expired,usesNonExemptEncryption,preReleaseVersion&include=preReleaseVersion").get("data", [])
 pre = {p["id"]: p["attributes"] for p in asc.api("GET", f"/preReleaseVersions?filter[app]={APP_ID}&limit=50").get("data", [])}
 print(f"--- TestFlight builds for app {APP_ID} ({len(builds)} most recent)")
 if not builds: print("  (none — uploads have not been accepted by App Store Connect)")
@@ -19,6 +20,12 @@ for b in builds:
     enc = a.get("usesNonExemptEncryption")
     flag = " MISSING-COMPLIANCE" if enc is None else ""
     print(f"  {plat:6} {mv} ({a['version']})  {a['processingState']:11} uploaded {a['uploadedDate'][:16]}{' expired' if a.get('expired') else ''}{flag}")
+
+if expect:
+    mine = [b for b in builds if b["attributes"]["version"] == expect]
+    ready = [b for b in mine if b["attributes"]["processingState"] == "VALID"]
+    print(f"--- build {expect}: {len(mine)} uploaded, {len(ready)} processed")
+    pending = len(ready) < 2
 
 groups = asc.api("GET", f"/betaGroups?filter[app]={APP_ID}&fields[betaGroups]=name,isInternalGroup,hasAccessToAllBuilds").get("data", [])
 print(f"--- beta groups: {len(groups)}")
@@ -40,3 +47,5 @@ if fix:
     # Internal groups need testers who are team members with the Developer/App Manager/Admin role.
     users = asc.api("GET", "/users?limit=50&fields[users]=username,roles").get("data", [])
     print("  team members eligible as internal testers: " + ", ".join(u["attributes"]["username"] for u in users))
+
+if expect and pending: sys.exit(2)

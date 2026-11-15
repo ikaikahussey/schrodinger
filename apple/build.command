@@ -97,10 +97,9 @@ EOP
         -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH" 2>&1 | grep -E "error|EXPORT (SUCCEEDED|FAILED)|[Uu]pload|\*\* " | sort -u
     done
     echo "--- TestFlight status (waits up to 10 min for Apple to process)"
-    for i in 1 2 3 4 5 6 7 8 9 10; do
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
       sleep 60
-      python3 asc_status.py --fix 2>&1 | tee build/asc_status.txt
-      grep -q PROCESSING build/asc_status.txt || break
+      if ASC_EXPECT_BUILD=$BN python3 asc_status.py --fix 2>&1 | tee build/asc_status.txt; then break; fi
     done
   else
     echo "--- skipping archive/upload (mac=$MAC ios=$IOS asc=${ASC_KEY_ID:+set})"
