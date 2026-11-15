@@ -50,7 +50,10 @@ struct OutlineView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            ToolbarItem(placement: .principal) { Text("Schrodinger").font(.headline) }
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) { CatLogo().frame(width: 22, height: 22); Text("Schrodinger").font(.headline) }
+                    .accessibilityElement(children: .combine).accessibilityLabel("Schrodinger")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { ctx.undoManager?.undo(); store.save() } label: { Image(systemName: "arrow.uturn.backward") }.help("Undo")
             }
@@ -76,7 +79,7 @@ struct OutlineView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Picker("Show", selection: $filter) { ForEach(Filter.allCases) { Text($0.label).tag($0) } }
-                    Picker("Mode", selection: $modeFilter) { Text("Any mode").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.rawValue).tag(Mode?.some($0)) } }
+                    Picker("Mode", selection: $modeFilter) { Text("Any mode").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }
                     Divider()
                     Toggle("Show bar legend", isOn: $showLegend)
                 } label: { Image(systemName: filter == .all && modeFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") }
@@ -246,7 +249,8 @@ struct ProjectLine: View {
 
 /// The item's own bar. Encodes state (fill), assignee (shape) and nothing else.
 ///   state:    todo/in progress = solid · review = hollow · blocked = dashed · done = faint
-///   assignee: human = one bar · ai = bar with a gap · shared = two half-height bars side by side · unassigned = thin
+///   assignee: human = one bar · ai = bar with a gap · shared = two thin bars side by side · unassigned = faded
+/// Every bar (ancestor, project, item) has the same footprint: w × h.
 struct StatusBar: View {
     let state: TaskState
     let assignee: Assignee
@@ -258,17 +262,17 @@ struct StatusBar: View {
         let h = Self.h
         Group {
             if isProject {
-                RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: Self.w + 2, height: h)
+                RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: Self.w, height: h)
             } else {
                 switch assignee {
                 case .ai:
                     VStack(spacing: 3) { styled.frame(height: (h - 3) * 0.4); styled.frame(height: (h - 3) * 0.6) }.frame(width: Self.w, height: h)
                 case .shared:
-                    HStack(spacing: 2) { styled.frame(width: 2, height: h); styled.frame(width: 2, height: h) }
+                    HStack(spacing: 1) { styled.frame(width: (Self.w - 1) / 2, height: h); styled.frame(width: (Self.w - 1) / 2, height: h) }
                 case .human:
                     styled.frame(width: Self.w, height: h)
                 case .unassigned:
-                    styled.frame(width: 1.5, height: h)
+                    styled.frame(width: Self.w, height: h).opacity(0.4)
                 }
             }
         }
@@ -285,7 +289,7 @@ struct StatusBar: View {
     }
 }
 
-/// One bar per depth level: ancestors faint, the item's own bar styled by StatusBar, mode letter beneath. Tap = menu.
+/// One bar per depth level: ancestors faint, the item's own bar styled by StatusBar, mode emoji beneath. Tap = menu.
 struct DepthBars: View {
     let node: Node
     let depth: Int
@@ -294,7 +298,7 @@ struct DepthBars: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: 3) {
                 ForEach(0..<max(depth, 0), id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1).fill(Color.ink.opacity(0.18)).frame(width: 3, height: StatusBar.h)
+                    RoundedRectangle(cornerRadius: 1).fill(Color.ink.opacity(0.18)).frame(width: StatusBar.w, height: StatusBar.h)
                 }
                 StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject)
                 if hasChildren && node.collapsed {
@@ -302,22 +306,24 @@ struct DepthBars: View {
                 }
             }
             if let m = node.mode, !node.isProject {
-                Text(m.glyph).font(.system(size: 8, weight: .semibold, design: .monospaced)).foregroundStyle(Color.ink.opacity(0.55))
-                    .padding(.leading, CGFloat(depth) * 6)
+                Text(m.emoji).font(.system(size: 10)).fixedSize()
+                    .padding(.leading, CGFloat(depth) * 7)
             }
         }
-        .frame(minWidth: 10, alignment: .leading)
+        .frame(minWidth: CGFloat(depth) * 7 + 12, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
 
 extension Mode {
-    /// One-letter glyph shown under the bars.
-    var glyph: String {
+    /// Emoji shown under the bars and in menus.
+    var emoji: String {
         switch self {
-        case .call: "c"; case .errand: "e"; case .email: "m"; case .write: "w"; case .research: "r"; case .meeting: "t"; case .admin: "a"; case .other: "o"
+        case .call: "📞"; case .errand: "🚗"; case .email: "✉️"; case .write: "✍️"; case .research: "🔎"; case .meeting: "👥"; case .admin: "🗂️"; case .other: "📌"
         }
     }
+    /// Emoji plus name, for menus and pickers.
+    var label: String { "\(emoji) \(rawValue)" }
 }
 
 struct BarLegend: View {
@@ -331,7 +337,7 @@ struct BarLegend: View {
             row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
             row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
             row(StatusBar(state: .done, assignee: .human, isProject: false), "done")
-            Text("Letter under the bar is the mode: c call · e errand · m email · w write · r research · t meeting · a admin · o other")
+            Text("Emoji under the bar is the mode: " + Mode.allCases.map(\.label).joined(separator: " · "))
                 .font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
         }
         .padding(.leading, 6)
@@ -446,7 +452,7 @@ struct NodeRow: View {
         .onChange(of: node.title) { _, v in if v != title { title = v } }
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
         .onChange(of: focused.wrappedValue) { old, new in if new == node.id { sel.nodeID = node.id }; if old == node.id && new != node.id { commit() } }
-        if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8).transition(.opacity) }
+        if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 7).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
@@ -538,48 +544,54 @@ struct NodeRow: View {
         }
     }
 
-    /// The item's actions, on screen (shown under the selected row). Same set as the context menu.
+    /// The item's actions, on screen (shown under the selected row). Related choices are grouped into menus:
+    /// responsible, status, mode, move, and more (context, details, delete). Edit and add stay one tap.
     @ViewBuilder private var actionStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
+            HStack(spacing: 6) {
+                if focused.wrappedValue == node.id {
+                    Pill(systemImage: "checkmark", title: "Done", on: true) { focused.wrappedValue = nil }.help("Finish editing")
+                } else {
+                    Pill(systemImage: "pencil", title: "Edit") { sel.nodeID = node.id; focused.wrappedValue = node.id }.help("Edit text")
+                }
                 if !node.isProject {
-                    group {
-                        ForEach(Assignee.allCases) { a in
-                            Pill(a == .unassigned ? "—" : a.label, on: node.assignee == a) { store.update(node) { $0.assignee = a }; store.save() }
-                        }
-                    }
-                    group {
-                        ForEach(TaskState.allCases) { st in
-                            Pill(st == .in_progress ? "doing" : st.label, on: node.state == st) { store.update(node) { $0.state = st }; store.save() }
-                        }
-                    }
-                    group {
-                        ForEach(Mode.allCases) { m in
-                            Pill(m.glyph, on: node.mode == m, mono: true) { store.update(node) { $0.mode = $0.mode == m ? nil : m }; store.save() }
-                                .help(m.rawValue)
-                        }
-                    }
+                    PillMenu(systemImage: "person", title: node.assignee == .unassigned ? "—" : node.assignee.label) {
+                        Picker("Responsible", selection: assigneeBinding) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }.pickerStyle(.inline)
+                    }.help("Responsible")
+                    PillMenu(systemImage: "circle.dotted", title: node.state == .in_progress ? "doing" : node.state.label) {
+                        Picker("Status", selection: stateBinding) { ForEach(TaskState.allCases) { Text($0 == .in_progress ? "doing" : $0.label).tag($0) } }.pickerStyle(.inline)
+                    }.help("Status")
+                    PillMenu(systemImage: node.mode == nil ? "tag" : nil, title: node.mode?.label ?? "mode") {
+                        Picker("Mode", selection: modeBinding) { Text("none").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }.pickerStyle(.inline)
+                    }.help("Mode")
                 }
-                group {
+                PillMenu(systemImage: "arrow.up.and.down.and.arrow.left.and.right", title: "Move") {
+                    Button { onKey(.altUp) } label: { Label("Move up", systemImage: "arrow.up") }
+                    Button { onKey(.altDown) } label: { Label("Move down", systemImage: "arrow.down") }
                     if !node.isProject {
-                        Pill(systemImage: "arrow.left") { onKey(.shiftTab) }.help("Outdent")
-                        Pill(systemImage: "arrow.right") { onKey(.tab) }.help("Indent")
+                        Button { onKey(.tab) } label: { Label("Indent", systemImage: "arrow.right") }
+                        Button { onKey(.shiftTab) } label: { Label("Outdent", systemImage: "arrow.left") }
                     }
-                    Pill(systemImage: "arrow.up") { onKey(.altUp) }.help("Move up")
-                    Pill(systemImage: "arrow.down") { onKey(.altDown) }.help("Move down")
-                    if hasChildren { Pill(systemImage: node.collapsed ? "chevron.down" : "chevron.up") { store.update(node) { $0.collapsed.toggle() }; store.save() }.help(node.collapsed ? "Expand" : "Collapse") }
-                }
-                group {
-                    Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below")
-                    if !node.isProject { Pill(systemImage: "text.alignleft") { openNote() }.help(showNote ? "Edit context" : "Add context") }
-                    Pill(systemImage: "info.circle") { sel.nodeID = node.id; sel.panel = .review }.help("Details")
-                    Pill(systemImage: "trash") { store.delete(node); store.save() }.help("Delete")
-                }
+                    if hasChildren {
+                        Divider()
+                        Button { store.update(node) { $0.collapsed.toggle() }; store.save() } label: { Label(node.collapsed ? "Expand" : "Collapse", systemImage: node.collapsed ? "chevron.down" : "chevron.up") }
+                    }
+                }.help("Move")
+                Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below")
+                PillMenu(systemImage: "ellipsis", title: nil) {
+                    if !node.isProject { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
+                    Button { sel.nodeID = node.id; sel.panel = .review } label: { Label("Details", systemImage: "info.circle") }
+                    Divider()
+                    Button(role: .destructive) { store.delete(node); store.save() } label: { Label("Delete", systemImage: "trash") }
+                }.help("More")
             }
             .padding(.vertical, 2)
         }
     }
-    private func group<V: View>(@ViewBuilder _ content: () -> V) -> some View { HStack(spacing: 4) { content() } }
+    // Bindings for the strip pickers; they write through the store so undo and save work.
+    private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
+    private var stateBinding: Binding<TaskState> { Binding(get: { node.state }, set: { v in store.update(node) { $0.state = v }; store.save() }) }
+    private var modeBinding: Binding<Mode?> { Binding(get: { node.mode }, set: { v in store.update(node) { $0.mode = v }; store.save() }) }
 
     @ViewBuilder private var menu: some View {
         if !node.isProject {
@@ -591,7 +603,7 @@ struct NodeRow: View {
             Menu("Mode") {
                 Button { store.update(node) { $0.mode = nil }; store.save() } label: { if node.mode == nil { Label("none", systemImage: "checkmark") } else { Text("none") } }
                 ForEach(Mode.allCases) { m in
-                    Button { store.update(node) { $0.mode = m }; store.save() } label: { if node.mode == m { Label("\(m.glyph) · \(m.rawValue)", systemImage: "checkmark") } else { Text("\(m.glyph) · \(m.rawValue)") } }
+                    Button { store.update(node) { $0.mode = m }; store.save() } label: { if node.mode == m { Label(m.label, systemImage: "checkmark") } else { Text(m.label) } }
                 }
             }
             Menu("Status") {
@@ -601,6 +613,7 @@ struct NodeRow: View {
             }
             Divider()
         }
+        Button { sel.nodeID = node.id; focused.wrappedValue = node.id } label: { Label("Edit text", systemImage: "pencil") }
         if hasChildren { Button(node.collapsed ? "Expand" : "Collapse") { store.update(node) { $0.collapsed.toggle() }; store.save() } }
         if !node.isProject {
             ControlGroup {
@@ -656,27 +669,97 @@ struct Dot: View {
     }
 }
 
-/// Small on-screen action: text or symbol; `on` = filled.
+/// Capsule look shared by on-screen actions and menus: optional symbol, optional text; `on` = filled.
+struct PillLabel: View {
+    var systemImage: String? = nil
+    var title: String? = nil
+    var on = false
+    var chevron = false
+    var body: some View {
+        HStack(spacing: 4) {
+            if let i = systemImage { Image(systemName: i).font(.system(size: 11, weight: .semibold)) }
+            if let t = title { Text(t).font(.caption.weight(.medium)).lineLimit(1) }
+            if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5) }
+        }
+        .padding(.horizontal, title == nil ? 8 : 10).padding(.vertical, 6)
+        .frame(minWidth: 30, minHeight: 28)
+        .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
+        .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
+        .contentShape(Capsule())
+    }
+}
+
+/// Small on-screen action: text or symbol (or both); `on` = filled.
 struct Pill: View {
     var text: String? = nil
     var systemImage: String? = nil
     var on = false
-    var mono = false
     let action: () -> Void
-    init(_ text: String, on: Bool = false, mono: Bool = false, action: @escaping () -> Void) { self.text = text; self.on = on; self.mono = mono; self.action = action }
-    init(systemImage: String, action: @escaping () -> Void) { self.systemImage = systemImage; self.action = action }
+    init(_ text: String, on: Bool = false, action: @escaping () -> Void) { self.text = text; self.on = on; self.action = action }
+    init(systemImage: String, title: String? = nil, on: Bool = false, action: @escaping () -> Void) { self.systemImage = systemImage; self.text = title; self.on = on; self.action = action }
     var body: some View {
-        Button(action: action) {
-            Group {
-                if let t = text { Text(t).font(mono ? .system(size: 11, weight: .semibold, design: .monospaced) : .caption2.weight(.medium)) }
-                else if let i = systemImage { Image(systemName: i).font(.system(size: 11, weight: .semibold)) }
-            }
-            .padding(.horizontal, text == nil ? 7 : 8).padding(.vertical, 4)
-            .frame(minWidth: 26)
-            .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
-            .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
+        Button(action: action) { PillLabel(systemImage: systemImage, title: text, on: on) }
+            .buttonStyle(.plain)
+    }
+}
+
+/// A pill that opens a menu of related choices.
+struct PillMenu<Content: View>: View {
+    var systemImage: String?
+    var title: String?
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        Menu { content() } label: { PillLabel(systemImage: systemImage, title: title, chevron: title != nil) }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+    }
+}
+
+/// The app's mark: a cat head, left half solid with an open eye, right half outline with a closed eye.
+/// Drawn from the same 64×64 geometry as public/logo.svg; follows light/dark appearance.
+struct CatLogo: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let k = min(size.width, size.height) / 64
+            ctx.translateBy(x: (size.width - 64 * k) / 2, y: (size.height - 64 * k) / 2)
+            ctx.scaleBy(x: k, y: k)
+            let ink = GraphicsContext.Shading.color(Color.primary)
+            let paper = GraphicsContext.Shading.color(Color.canvas)
+            let head = Self.head
+            let left = Path(CGRect(x: 0, y: 0, width: 32, height: 64)), right = Path(CGRect(x: 32, y: 0, width: 32, height: 64))
+            var l = ctx; l.clip(to: left)
+            l.fill(head, with: ink)
+            l.fill(Path(ellipseIn: CGRect(x: 19.8, y: 34, width: 6.4, height: 8)), with: paper)
+            l.fill(Path(ellipseIn: CGRect(x: 21.7, y: 36.7, width: 2.6, height: 2.6)), with: ink)
+            l.fill(Self.nose, with: paper)
+            var r = ctx; r.clip(to: right)
+            r.stroke(head, with: ink, style: StrokeStyle(lineWidth: 3, lineJoin: .round))
+            r.fill(Self.nose, with: ink)
+            var eye = Path(); eye.move(to: CGPoint(x: 37, y: 38)); eye.addQuadCurve(to: CGPoint(x: 45, y: 38), control: CGPoint(x: 41, y: 41))
+            ctx.stroke(eye, with: ink, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            var wl = Path(); wl.move(to: CGPoint(x: 22, y: 47)); wl.addLine(to: CGPoint(x: 10, y: 45)); wl.move(to: CGPoint(x: 22, y: 50)); wl.addLine(to: CGPoint(x: 11, y: 52))
+            ctx.stroke(wl, with: paper, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+            var wr = Path(); wr.move(to: CGPoint(x: 42, y: 47)); wr.addLine(to: CGPoint(x: 54, y: 45)); wr.move(to: CGPoint(x: 42, y: 50)); wr.addLine(to: CGPoint(x: 53, y: 52))
+            ctx.stroke(wr, with: ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
         }
-        .buttonStyle(.plain)
+        .accessibilityHidden(true)
+    }
+    private static var head: Path {
+        var p = Path()
+        p.move(to: CGPoint(x: 14, y: 30))
+        p.addLine(to: CGPoint(x: 12, y: 10)); p.addLine(to: CGPoint(x: 26, y: 20)); p.addLine(to: CGPoint(x: 38, y: 20))
+        p.addLine(to: CGPoint(x: 52, y: 10)); p.addLine(to: CGPoint(x: 50, y: 30))
+        p.addQuadCurve(to: CGPoint(x: 50, y: 50), control: CGPoint(x: 56, y: 40))
+        p.addQuadCurve(to: CGPoint(x: 32, y: 60), control: CGPoint(x: 40, y: 60))
+        p.addQuadCurve(to: CGPoint(x: 14, y: 50), control: CGPoint(x: 24, y: 60))
+        p.addQuadCurve(to: CGPoint(x: 14, y: 30), control: CGPoint(x: 8, y: 40))
+        p.closeSubpath()
+        return p
+    }
+    private static var nose: Path {
+        var p = Path(); p.move(to: CGPoint(x: 30, y: 46)); p.addLine(to: CGPoint(x: 34, y: 46)); p.addLine(to: CGPoint(x: 32, y: 49)); p.closeSubpath(); return p
     }
 }
 

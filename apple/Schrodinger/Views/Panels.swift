@@ -104,7 +104,7 @@ struct DetailView: View {
                 CalendarLinkPicker(node: node)
             } else {
                 Picker("Assignee (shared = AI preps, you finish)", selection: Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v } })) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }
-                Picker("Mode", selection: Binding(get: { node.mode }, set: { v in store.update(node) { $0.mode = v } })) { Text("none").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.rawValue).tag(Mode?.some($0)) } }
+                Picker("Mode", selection: Binding(get: { node.mode }, set: { v in store.update(node) { $0.mode = v } })) { Text("none").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }
                 Picker("State", selection: Binding(get: { node.state }, set: { v in store.update(node) { $0.state = v } })) { ForEach(TaskState.allCases) { Text($0.label).tag($0) } }
                 HStack {
                     Toggle("Due", isOn: Binding(get: { node.due != nil }, set: { on in store.update(node) { $0.due = on ? Date() : nil } }))
@@ -190,7 +190,7 @@ struct BatchView: View {
         List {
             if groups.isEmpty { Text("No open tasks match.").foregroundStyle(.secondary) }
             ForEach(groups, id: \.mode) { g in
-                Section("\(g.mode.uppercased())  \(g.tasks.count)") {
+                Section("\(Mode(rawValue: g.mode)?.emoji ?? "") \(g.mode.uppercased())  \(g.tasks.count)") {
                     ForEach(g.tasks, id: \.0.id) { t, project in
                         HStack {
                             Button { Store(ctx).update(t) { $0.state = $0.state == .done ? .todo : .done }; Store(ctx).save() } label: { Image(systemName: t.state == .done ? "checkmark.square.fill" : "square") }.buttonStyle(.plain)
