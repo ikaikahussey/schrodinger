@@ -41,7 +41,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, 16 + CGFloat(t.depth) * 7).padding(.trailing, 16)
+                        .padding(.leading, 16 + CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -256,15 +256,17 @@ struct ProjectLine: View {
 // MARK: - Bars
 
 /// The item's own bar. Encodes state (fill), assignee (shape) and nothing else.
-///   state:    todo/in progress = solid · review = hollow · blocked = dashed · done = faint
-///   assignee: human = one bar · ai = bar with a gap · shared = two thin bars side by side · unassigned = faded
-/// Every bar (ancestor, project, item) has the same footprint: w × h.
+///   state:    todo/in progress = solid · review = hollow · blocked = dashed · done = solid (the text is struck through)
+///   assignee: human = one bar · ai = bar with a gap · shared = two thin bars side by side · unassigned = half-height bar
+/// Every bar is full ink (black in light mode, white in dark mode), never gray, and fits the same w × h footprint.
 struct StatusBar: View {
     let state: TaskState
     let assignee: Assignee
     let isProject: Bool
     static let h: CGFloat = 16
-    static let w: CGFloat = 4
+    static let w: CGFloat = 6
+    /// Horizontal distance from one depth bar to the next (bar width + gap).
+    static let step: CGFloat = w + 3
 
     var body: some View {
         let h = Self.h
@@ -276,22 +278,21 @@ struct StatusBar: View {
                 case .ai:
                     VStack(spacing: 3) { styled.frame(height: (h - 3) * 0.4); styled.frame(height: (h - 3) * 0.6) }.frame(width: Self.w, height: h)
                 case .shared:
-                    HStack(spacing: 1) { styled.frame(width: (Self.w - 1) / 2, height: h); styled.frame(width: (Self.w - 1) / 2, height: h) }
+                    HStack(spacing: 2) { styled.frame(width: (Self.w - 2) / 2, height: h); styled.frame(width: (Self.w - 2) / 2, height: h) }
                 case .human:
                     styled.frame(width: Self.w, height: h)
                 case .unassigned:
-                    styled.frame(width: Self.w, height: h).opacity(0.4)
+                    styled.frame(width: Self.w, height: h / 2).frame(width: Self.w, height: h, alignment: .top)
                 }
             }
         }
-        .opacity(state == .done ? 0.25 : 1)
     }
 
     @ViewBuilder private var styled: some View {
         let shape = RoundedRectangle(cornerRadius: 1)
         switch state {
-        case .review:  shape.strokeBorder(Color.ink, lineWidth: 1)
-        case .blocked: shape.strokeBorder(Color.ink, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+        case .review:  shape.strokeBorder(Color.ink, lineWidth: 1.5)
+        case .blocked: shape.strokeBorder(Color.ink, style: StrokeStyle(lineWidth: 1.5, dash: [2, 2]))
         default:       shape.fill(Color.ink)
         }
     }
@@ -312,10 +313,10 @@ struct DepthBars: View {
             }
             if let m = node.mode, !node.isProject {
                 Text(m.emoji).font(.system(size: 10)).fixedSize()
-                    .padding(.leading, CGFloat(depth) * 7)
+                    .padding(.leading, CGFloat(depth) * StatusBar.step)
             }
         }
-        .frame(minWidth: CGFloat(depth) * 7 + 12, alignment: .leading)
+        .frame(minWidth: CGFloat(depth) * StatusBar.step + 14, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -500,7 +501,7 @@ struct NodeRow: View {
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }
         }
-        if sel.nodeID == node.id || editing { actionStrip.padding(.leading, 6 + CGFloat(depth) * 7).padding(.bottom, 8).transition(.opacity) }
+        if sel.nodeID == node.id || editing { actionStrip.padding(.leading, 6 + CGFloat(depth) * StatusBar.step).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
