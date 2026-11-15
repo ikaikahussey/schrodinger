@@ -249,7 +249,8 @@ struct ProjectLine: View {
 
 /// The item's own bar. Encodes state (fill), assignee (shape) and nothing else.
 ///   state:    todo/in progress = solid · review = hollow · blocked = dashed · done = faint
-///   assignee: human = one bar · ai = bar with a gap · shared = two half-height bars side by side · unassigned = thin
+///   assignee: human = one bar · ai = bar with a gap · shared = two thin bars side by side · unassigned = faded
+/// Every bar (ancestor, project, item) has the same footprint: w × h.
 struct StatusBar: View {
     let state: TaskState
     let assignee: Assignee
@@ -261,17 +262,17 @@ struct StatusBar: View {
         let h = Self.h
         Group {
             if isProject {
-                RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: Self.w + 2, height: h)
+                RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: Self.w, height: h)
             } else {
                 switch assignee {
                 case .ai:
                     VStack(spacing: 3) { styled.frame(height: (h - 3) * 0.4); styled.frame(height: (h - 3) * 0.6) }.frame(width: Self.w, height: h)
                 case .shared:
-                    HStack(spacing: 2) { styled.frame(width: 2, height: h); styled.frame(width: 2, height: h) }
+                    HStack(spacing: 1) { styled.frame(width: (Self.w - 1) / 2, height: h); styled.frame(width: (Self.w - 1) / 2, height: h) }
                 case .human:
                     styled.frame(width: Self.w, height: h)
                 case .unassigned:
-                    styled.frame(width: 1.5, height: h)
+                    styled.frame(width: Self.w, height: h).opacity(0.4)
                 }
             }
         }
@@ -297,7 +298,7 @@ struct DepthBars: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: 3) {
                 ForEach(0..<max(depth, 0), id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1).fill(Color.ink.opacity(0.18)).frame(width: 3, height: StatusBar.h)
+                    RoundedRectangle(cornerRadius: 1).fill(Color.ink.opacity(0.18)).frame(width: StatusBar.w, height: StatusBar.h)
                 }
                 StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject)
                 if hasChildren && node.collapsed {
@@ -306,10 +307,10 @@ struct DepthBars: View {
             }
             if let m = node.mode, !node.isProject {
                 Text(m.emoji).font(.system(size: 10)).fixedSize()
-                    .padding(.leading, CGFloat(depth) * 6)
+                    .padding(.leading, CGFloat(depth) * 7)
             }
         }
-        .frame(minWidth: CGFloat(depth) * 6 + 12, alignment: .leading)
+        .frame(minWidth: CGFloat(depth) * 7 + 12, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -451,7 +452,7 @@ struct NodeRow: View {
         .onChange(of: node.title) { _, v in if v != title { title = v } }
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
         .onChange(of: focused.wrappedValue) { old, new in if new == node.id { sel.nodeID = node.id }; if old == node.id && new != node.id { commit() } }
-        if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8).transition(.opacity) }
+        if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 7).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
