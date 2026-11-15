@@ -382,20 +382,27 @@ struct NodeRow: View {
             .simultaneousGesture(handleGesture)
 
             VStack(alignment: .leading, spacing: 2) {
+            // Tap selects (shows the action strip); long press (or double-tap) edits the text.
+            if focused.wrappedValue != node.id {
+                Text(title.isEmpty ? "New item" : title)
+                    .font(node.isProject ? .title3.weight(.semibold) : .body)
+                    .strikethrough(done)
+                    .foregroundStyle(title.isEmpty ? Color.ink.opacity(0.3) : done ? Color.ink.opacity(0.4) : Color.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { focused.wrappedValue = node.id }
+                    .onTapGesture { commit(); sel.nodeID = node.id }
+                    .onLongPressGesture(minimumDuration: 0.35) { sel.nodeID = node.id; focused.wrappedValue = node.id }
+            } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(node.isProject ? .title3.weight(.semibold) : .body)
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
-                .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
-                .onChange(of: node.title) { _, v in if v != title { title = v } }
-                .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
                 // Return always makes a new item (the field is multi-line, so a typed newline is caught here too).
                 .onChange(of: title) { _, v in if v.contains("\n") { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter) } }
                 .onSubmit { commit(); onKey(.enter) }
-                .onChange(of: focused.wrappedValue) { old, new in if new == node.id { sel.nodeID = node.id }; if old == node.id && new != node.id { commit() } }
-                .onTapGesture { sel.nodeID = node.id }
                 #if os(macOS)
                 .onKeyPress(.tab) { commit(); onKey(.tab); return .handled }
                 .onKeyPress(.tab, phases: .down) { press in if press.modifiers.contains(.shift) { commit(); onKey(.shiftTab); return .handled }; return .ignored }
@@ -404,6 +411,7 @@ struct NodeRow: View {
                 .onKeyPress(.downArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altDown); return .handled }; return .ignored }
                 .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
+            }
             if showNote && !node.isProject {
                 TextField("Add context…", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -430,6 +438,10 @@ struct NodeRow: View {
         }
         .padding(.vertical, 6)
         .padding(.leading, 6)
+        .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
+        .onChange(of: node.title) { _, v in if v != title { title = v } }
+        .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
+        .onChange(of: focused.wrappedValue) { old, new in if new == node.id { sel.nodeID = node.id }; if old == node.id && new != node.id { commit() } }
         if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
