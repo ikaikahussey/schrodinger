@@ -12,6 +12,9 @@ struct OutlineView: View {
     @State private var modeFilter: Mode? = nil
     @State private var showLegend = false
     @FocusState private var focused: UUID?
+    /// Row that should switch to its text field and take focus. Focus can't be set on a field that isn't on screen yet,
+    /// so the row shows its field first, then claims focus (see NodeRow.claimEdit).
+    @State private var editRequest: UUID?
     @State private var drag = OutlineDrag()
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
@@ -26,7 +29,7 @@ struct OutlineView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(roots) { p in nodeTree(p, depth: 0, kids: kids) }
-                Button { let n = store.create(); store.save(); focused = n.id } label: {
+                Button { let n = store.create(); store.save(); beginEdit(n.id) } label: {
                     HStack(spacing: 10) { Image(systemName: "plus").font(.caption.weight(.semibold)); Text("New item").font(.callout) }
                 }
                 .buttonStyle(.plain).foregroundStyle(.tertiary).padding(.vertical, 10).padding(.leading, 6)
@@ -51,8 +54,8 @@ struct OutlineView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) { CatLogo().frame(width: 22, height: 22); Text("Schrodinger").font(.headline) }
-                    .accessibilityElement(children: .combine).accessibilityLabel("Schrodinger")
+                CatLogo().frame(width: 26, height: 26)
+                    .accessibilityElement().accessibilityLabel("Schrodinger").accessibilityAddTraits(.isHeader)
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { ctx.undoManager?.undo(); store.save() } label: { Image(systemName: "arrow.uturn.backward") }.help("Undo")
@@ -60,14 +63,14 @@ struct OutlineView: View {
             ToolbarItem(placement: .secondaryAction) {
                 Button { ctx.undoManager?.redo(); store.save() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
             }
-            if focused != nil {
+            if focused != nil || editRequest != nil {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Done") { focused = nil }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
+                    Button("Done") { endEdit() }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
                 }
                 #if os(iOS)
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") { focused = nil }.fontWeight(.semibold)
+                    Button("Done") { endEdit() }.fontWeight(.semibold)
                 }
                 #endif
             }
@@ -98,8 +101,10 @@ struct OutlineView: View {
         if inbox.collapsed { s.update(inbox) { $0.collapsed = false } }
         let n = s.create(parentID: inbox.id, assignee: .human, position: 0)
         s.save()
-        focused = n.id
+        beginEdit(n.id)
     }
+    private func beginEdit(_ id: UUID) { sel.nodeID = id; editRequest = id }
+    private func endEdit() { editRequest = nil; focused = nil }
 
     private func matches(_ n: Node) -> Bool {
         if n.isProject { return true }
@@ -120,7 +125,7 @@ struct OutlineView: View {
         let hidden = (filter != .all || modeFilter != nil) && depth > 0 && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
-            NodeRow(node: n, depth: depth, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, drag: drag,
+            NodeRow(node: n, depth: depth, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) })
@@ -189,27 +194,30 @@ struct OutlineView: View {
     enum Key { case enter, tab, shiftTab, backspaceEmpty, altUp, altDown }
     private func handleKey(_ key: Key, _ n: Node, kids: [UUID?: [Node]]) {
         let s = store
+        // Moves keep editing only if the item was being edited (strip buttons move without opening the keyboard).
+        let wasEditing = focused == n.id || editRequest == n.id
+        func keep() { if wasEditing { beginEdit(n.id) } }
         switch key {
         case .enter:
             let created: Node
             if !(kids[n.id] ?? []).isEmpty && !n.collapsed { created = s.create(parentID: n.id, position: 0) }
             else { created = s.create(parentID: n.parentID, assignee: n.isProject ? nil : n.assignee, position: n.position + 1) }
-            s.save(); focused = created.id
+            s.save(); beginEdit(created.id)
         case .tab:
             let siblings = kids[n.parentID] ?? []
             guard let idx = siblings.firstIndex(where: { $0.id == n.id }), idx > 0 else { return }
-            try? s.move(n, to: siblings[idx - 1].id, position: 999); s.save(); focused = n.id
+            try? s.move(n, to: siblings[idx - 1].id, position: 999); s.save(); keep()
         case .shiftTab:
             guard let pid = n.parentID, let parent = s.node(pid) else { return }
-            try? s.move(n, to: parent.parentID, position: parent.position + 1); s.save(); focused = n.id
+            try? s.move(n, to: parent.parentID, position: parent.position + 1); s.save(); keep()
         case .backspaceEmpty:
             guard (kids[n.id] ?? []).isEmpty else { return }
             let siblings = kids[n.parentID] ?? []
             let idx = siblings.firstIndex(where: { $0.id == n.id }) ?? 0
             s.delete(n); s.save()
-            if idx > 0 { focused = siblings[idx - 1].id }
-        case .altUp: try? s.move(n, to: n.parentID, position: max(0, n.position - 1)); s.save(); focused = n.id
-        case .altDown: try? s.move(n, to: n.parentID, position: n.position + 1); s.save(); focused = n.id
+            if idx > 0 { beginEdit(siblings[idx - 1].id) }
+        case .altUp: try? s.move(n, to: n.parentID, position: max(0, n.position - 1)); s.save(); keep()
+        case .altDown: try? s.move(n, to: n.parentID, position: n.position + 1); s.save(); keep()
         }
     }
 }
@@ -289,7 +297,7 @@ struct StatusBar: View {
     }
 }
 
-/// One bar per depth level: ancestors faint, the item's own bar styled by StatusBar, mode emoji beneath. Tap = menu.
+/// One bar per depth level: ancestors solid, the item's own bar styled by StatusBar, mode emoji beneath. Tap = menu.
 struct DepthBars: View {
     let node: Node
     let depth: Int
@@ -298,12 +306,9 @@ struct DepthBars: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: 3) {
                 ForEach(0..<max(depth, 0), id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1).fill(Color.ink.opacity(0.18)).frame(width: StatusBar.w, height: StatusBar.h)
+                    RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
                 }
                 StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject)
-                if hasChildren && node.collapsed {
-                    Text("\u{2026}").font(.caption2).foregroundStyle(Color.ink.opacity(0.45)).offset(y: -4)
-                }
             }
             if let m = node.mode, !node.isProject {
                 Text(m.emoji).font(.system(size: 10)).fixedSize()
@@ -313,6 +318,12 @@ struct DepthBars: View {
         .frame(minWidth: CGFloat(depth) * 7 + 12, alignment: .leading)
         .contentShape(Rectangle())
     }
+}
+
+extension VerticalAlignment {
+    /// Row alignment: middle of the bars = middle of the first line of text.
+    private enum RowLine: AlignmentID { static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] } }
+    static var rowLine: VerticalAlignment { VerticalAlignment(RowLine.self) }
 }
 
 extension Mode {
@@ -357,6 +368,7 @@ struct NodeRow: View {
     let leafCount: (done: Int, total: Int)
     var sel: Selection
     var focused: FocusState<UUID?>.Binding
+    @Binding var editRequest: UUID?
     let drag: OutlineDrag
     let onKey: (OutlineView.Key) -> Void
     let onDragChanged: (CGFloat, CGFloat) -> Void
@@ -376,33 +388,50 @@ struct NodeRow: View {
         withAnimation(.easeOut(duration: 0.15)) { sel.nodeID = sel.nodeID == node.id ? nil : node.id }
     }
     private var done: Bool { node.state == .done && isLeafTask }
+    private var editing: Bool { focused.wrappedValue == node.id || editRequest == node.id }
+    private func startEdit() {
+        commit(); sel.nodeID = node.id
+        if editRequest == node.id { claimEdit() } else { editRequest = node.id }   // field appears, then its onAppear claims focus
+    }
+    /// Called once the text field is on screen: move focus into it (retry once in case the field isn't focusable yet).
+    private func claimEdit() {
+        let id = node.id
+        Task { @MainActor in
+            await Task.yield()
+            focused.wrappedValue = id
+            try? await Task.sleep(for: .milliseconds(150))
+            if editRequest == id && focused.wrappedValue != id { focused.wrappedValue = id }
+        }
+    }
+    private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
+    private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .rowLine, spacing: 10) {
             Button { commit(); toggleSelect() } label: {
                 DepthBars(node: node, depth: depth, hasChildren: hasChildren)
                     .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.top, -1)
+            .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
             .help(summary + " · tap for actions, tap again to hide · drag to move")
             .accessibilityLabel(summary)
             .simultaneousGesture(handleGesture)
 
             VStack(alignment: .leading, spacing: 2) {
             // Tap selects (shows the action strip), tap again deselects (hides it); long press (or double-tap) edits the text.
-            if focused.wrappedValue != node.id {
+            if !editing {
                 Text(title.isEmpty ? "New item" : title)
                     .font(node.isProject ? .title3.weight(.semibold) : .body)
                     .strikethrough(done)
                     .foregroundStyle(title.isEmpty ? Color.ink.opacity(0.3) : done ? Color.ink.opacity(0.4) : Color.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { focused.wrappedValue = node.id }
+                    .onTapGesture(count: 2) { startEdit() }
                     .onTapGesture { commit(); toggleSelect() }
-                    .onLongPressGesture(minimumDuration: 0.35) { sel.nodeID = node.id; focused.wrappedValue = node.id }
+                    .onLongPressGesture(minimumDuration: 0.35) { startEdit() }
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -410,6 +439,7 @@ struct NodeRow: View {
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
+                .onAppear { if editRequest == node.id { claimEdit() } }
                 // Return always makes a new item (the field is multi-line, so a typed newline is caught here too).
                 .onChange(of: title) { _, v in if v.contains("\n") { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter) } }
                 .onSubmit { commit(); onKey(.enter) }
@@ -429,11 +459,26 @@ struct NodeRow: View {
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .focused($noteFocused)
                     .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
-                    .onSubmit { commitNote(); focused.wrappedValue = node.id }
+                    .onSubmit { commitNote(); startEdit() }
             }
             }
+            // Middle of the first line of text lines up with the middle of the bars.
+            .alignmentGuide(.rowLine) { d in d[.firstTextBaseline] * 0.65 }
             Spacer(minLength: 6)
-            marker
+            marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+            if hasChildren {
+                Button { commit(); toggleChildren() } label: {
+                    Image(systemName: node.collapsed ? "plus.square" : "minus.square")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+                .help(node.collapsed ? "Show children" : "Hide children")
+                .accessibilityLabel(node.collapsed ? "Show children" : "Hide children")
+            }
             Button { commit(); sel.nodeID = node.id; sel.panel = .review } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
@@ -442,17 +487,20 @@ struct NodeRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             .help("Details")
             .accessibilityLabel("Details")
-            .padding(.top, -3)
         }
         .padding(.vertical, 6)
         .padding(.leading, 6)
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
-        .onChange(of: focused.wrappedValue) { old, new in if new == node.id { sel.nodeID = node.id }; if old == node.id && new != node.id { commit() } }
-        if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 7).padding(.bottom, 8).transition(.opacity) }
+        .onChange(of: focused.wrappedValue) { old, new in
+            if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
+            if old == node.id && new != node.id { commit() }
+        }
+        if sel.nodeID == node.id || editing { actionStrip.padding(.leading, 6 + CGFloat(depth) * 7).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
@@ -532,7 +580,7 @@ struct NodeRow: View {
     /// Right edge: due date, "your turn", or counts for a parent. The bars carry everything else.
     @ViewBuilder private var marker: some View {
         if hasChildren && !node.isProject {
-            Text("\(leafCount.done)/\(leafCount.total)").font(.caption2.monospacedDigit()).foregroundStyle(Color.ink.opacity(0.4)).padding(.top, 3)
+            Text("\(leafCount.done)/\(leafCount.total)").font(.caption2.monospacedDigit()).foregroundStyle(Color.ink.opacity(0.4))
         } else if !node.isProject {
             HStack(spacing: 8) {
                 if let due = node.due, node.state != .done {
@@ -540,7 +588,6 @@ struct NodeRow: View {
                 }
                 if node.isYourTurn && node.state != .done { Dot(label: "your turn", filled: true) }
             }
-            .padding(.top, 3)
         }
     }
 
@@ -549,10 +596,10 @@ struct NodeRow: View {
     @ViewBuilder private var actionStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                if focused.wrappedValue == node.id {
-                    Pill(systemImage: "checkmark", title: "Done", on: true) { focused.wrappedValue = nil }.help("Finish editing")
+                if editing {
+                    Pill(systemImage: "checkmark", title: "Done", on: true) { commit(); endEdit() }.help("Finish editing")
                 } else {
-                    Pill(systemImage: "pencil", title: "Edit") { sel.nodeID = node.id; focused.wrappedValue = node.id }.help("Edit text")
+                    Pill(systemImage: "pencil", title: "Edit") { startEdit() }.help("Edit text")
                 }
                 if !node.isProject {
                     PillMenu(systemImage: "person", title: node.assignee == .unassigned ? "—" : node.assignee.label) {
@@ -571,10 +618,6 @@ struct NodeRow: View {
                     if !node.isProject {
                         Button { onKey(.tab) } label: { Label("Indent", systemImage: "arrow.right") }
                         Button { onKey(.shiftTab) } label: { Label("Outdent", systemImage: "arrow.left") }
-                    }
-                    if hasChildren {
-                        Divider()
-                        Button { store.update(node) { $0.collapsed.toggle() }; store.save() } label: { Label(node.collapsed ? "Expand" : "Collapse", systemImage: node.collapsed ? "chevron.down" : "chevron.up") }
                     }
                 }.help("Move")
                 Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below")
@@ -613,8 +656,8 @@ struct NodeRow: View {
             }
             Divider()
         }
-        Button { sel.nodeID = node.id; focused.wrappedValue = node.id } label: { Label("Edit text", systemImage: "pencil") }
-        if hasChildren { Button(node.collapsed ? "Expand" : "Collapse") { store.update(node) { $0.collapsed.toggle() }; store.save() } }
+        Button { startEdit() } label: { Label("Edit text", systemImage: "pencil") }
+        if hasChildren { Button(node.collapsed ? "Show children" : "Hide children") { toggleChildren() } }
         if !node.isProject {
             ControlGroup {
                 Button { onKey(.shiftTab) } label: { Label("Outdent", systemImage: "arrow.left") }
