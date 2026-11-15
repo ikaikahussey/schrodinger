@@ -370,7 +370,7 @@ struct NodeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .top, spacing: 10) {
-            Button { commit(); sel.nodeID = sel.nodeID == node.id ? nil : node.id } label: {
+            Button { commit(); sel.nodeID = node.id } label: {
                 DepthBars(node: node, depth: depth, hasChildren: hasChildren)
                     .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
                     .contentShape(Rectangle())
@@ -394,7 +394,7 @@ struct NodeRow: View {
                 // Return always makes a new item (the field is multi-line, so a typed newline is caught here too).
                 .onChange(of: title) { _, v in if v.contains("\n") { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter) } }
                 .onSubmit { commit(); onKey(.enter) }
-                .onChange(of: focused.wrappedValue) { old, new in if old == node.id && new != node.id { commit() } }
+                .onChange(of: focused.wrappedValue) { old, new in if new == node.id { sel.nodeID = node.id }; if old == node.id && new != node.id { commit() } }
                 .onTapGesture { sel.nodeID = node.id }
                 #if os(macOS)
                 .onKeyPress(.tab) { commit(); onKey(.tab); return .handled }
@@ -430,7 +430,7 @@ struct NodeRow: View {
         }
         .padding(.vertical, 6)
         .padding(.leading, 6)
-        if sel.nodeID == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8) }
+        if sel.nodeID == node.id || focused.wrappedValue == node.id { actionStrip.padding(.leading, 6 + CGFloat(depth) * 6).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
@@ -466,7 +466,7 @@ struct NodeRow: View {
     /// The bars are the handle. A short sideways pull indents/outdents; anything else lifts the item and lets you drop it
     /// anywhere in the outline (horizontal position while dragging picks the depth at the drop point).
     private var handleGesture: some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+        DragGesture(minimumDistance: 10, coordinateSpace: .local)
             .onChanged { v in
                 let dx = v.translation.width, dy = v.translation.height
                 if drag.id == nil && abs(dy) < 10 && abs(dx) > abs(dy) * 1.3 {
