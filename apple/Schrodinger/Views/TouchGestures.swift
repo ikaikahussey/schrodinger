@@ -16,6 +16,7 @@ struct HorizontalPanGesture: UIGestureRecognizerRepresentable {
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let g = UIPanGestureRecognizer()
+        g.maximumNumberOfTouches = 1   // two fingers are a pinch (zoom), never an indent pull
         g.delegate = context.coordinator
         g.cancelsTouchesInView = false
         return g
@@ -84,6 +85,29 @@ struct HoldDragGesture: UIGestureRecognizerRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var start: CGPoint = .zero
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+/// A two-finger pinch. Reports the final scale when the fingers lift: above 1 = spread apart, below 1 = pinched in.
+/// Runs alongside the list's own scrolling.
+struct PinchGesture: UIGestureRecognizerRepresentable {
+    var onEnded: (CGFloat) -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UIPinchGestureRecognizer {
+        let g = UIPinchGestureRecognizer()
+        g.delegate = context.coordinator
+        g.cancelsTouchesInView = false
+        return g
+    }
+
+    func handleUIGestureRecognizerAction(_ g: UIPinchGestureRecognizer, context: Context) {
+        if g.state == .ended { onEnded(g.scale) }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
     }
 }

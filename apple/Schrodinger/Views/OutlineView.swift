@@ -177,12 +177,12 @@ struct OutlineView: View {
             Button { finishTyping(); sel.panel = .settings } label: { Label("Settings", systemImage: "gear") }
             #endif
         } label: {
-            // The header's right end: a block with a rounded right edge. Peach while a filter is on.
+            // The header's right end: a circle (like the + button). It takes the "on" color while a filter is on.
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .heavy)).foregroundStyle(PanelPalette.text(on: filtering ? PanelPalette.peach : PanelPalette.orange))
-                .padding(.leading, 10).padding(.trailing, 13).frame(height: Self.headerHeight)
-                .background { UnevenRoundedRectangle(bottomTrailingRadius: Self.headerHeight / 2, topTrailingRadius: Self.headerHeight / 2).fill(filtering ? PanelPalette.peach : PanelPalette.orange) }
-                .contentShape(Rectangle())
+                .frame(width: Self.headerHeight + 4, height: Self.headerHeight + 4)
+                .background(filtering ? PanelPalette.peach : PanelPalette.orange, in: Circle())
+                .contentShape(Circle())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .help(filtering ? "Filters (on)" : "Filters")
@@ -415,6 +415,11 @@ struct OutlineView: View {
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) },
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
+                    onPinch: { spread in
+                        // Spread two fingers on an item: zoom into it. Pinch in: back out one level.
+                        if spread { if n.id != zoomID { zoom(to: n.id) } }
+                        else if let z = zoomID { zoom(to: store.node(z)?.parentID) }
+                    },
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
                     childrenShown: !n.collapsed || n.id == zoomID || searching)
@@ -710,6 +715,8 @@ struct NodeRow: View {
     let onDragChanged: (CGFloat, CGFloat) -> Void
     let onDrop: () -> Void
     var onZoom: () -> Void = {}
+    /// Two-finger pinch on the row ended: true = fingers spread (zoom in), false = pinched in (zoom out).
+    var onPinch: (Bool) -> Void = { _ in }
     /// The page handles a quick right swipe as "back" (zoomed in), so the row must not also indent on it.
     var swipeBack = false
     /// Items the AI can work on now, in this item or under it. Non-empty = show the play button.
@@ -757,6 +764,11 @@ struct NodeRow: View {
         }
     }
     private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
+    /// A pinch ended at `scale` (1 = no change). Clear spreads zoom in, clear pinches zoom out; small ones do nothing.
+    private func pinched(_ scale: CGFloat) {
+        guard drag.id == nil else { return }
+        if scale > 1.25 { commit(); onPinch(true) } else if scale < 0.8 { commit(); onPinch(false) }
+    }
     private var infoOpen: Bool { sel.infoID == node.id }
 
     /// This row's work is part of the run in progress.
@@ -941,7 +953,9 @@ struct NodeRow: View {
         .gesture(HorizontalPanGesture(onChanged: { t in pullChanged(t) }, onEnded: { t, vx in
             pullEnded(isBack: swipeBack && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx))
         }))
+        .gesture(PinchGesture { scale in pinched(scale) })
         #else
+        .simultaneousGesture(MagnifyGesture().onEnded { v in pinched(v.magnification) })
         .simultaneousGesture(pullGesture)
         #endif
         #if os(macOS)
