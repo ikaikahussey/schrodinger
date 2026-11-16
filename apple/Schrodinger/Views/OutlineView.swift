@@ -34,7 +34,6 @@ struct OutlineView: View {
         ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if let z = zoomed { breadcrumb(z) }
                 VStack(alignment: .leading, spacing: 0) {
                     if let z = zoomed {
                         nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)), active: store.project(of: z).projectStatus == .active)
@@ -69,6 +68,8 @@ struct OutlineView: View {
             }
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
+        // Always present, fixed height: the outline's top edge does not move when zooming in or out.
+        .safeAreaInset(edge: .top, spacing: 0) { breadcrumbBar(zoomed) }
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
@@ -196,26 +197,49 @@ struct OutlineView: View {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
         return roots.firstIndex { $0.id == r.id } ?? 0
     }
-    /// Path back out: All › ancestors. The zoomed item itself is the first row below.
-    private func breadcrumb(_ z: Node) -> some View {
+    /// Where you are, as a row of flat color blocks: ALL, then the path down to the zoomed item. Tap a block to go
+    /// there. Shown whether or not the outline is zoomed, at a fixed height.
+    private func breadcrumbBar(_ z: Node?) -> some View {
         var path: [Node] = []
-        var p = z.parentID
-        while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                Button { zoom(to: nil) } label: { Label("All", systemImage: "chevron.left").labelStyle(.titleAndIcon) }
-                    .keyboardShortcut("[", modifiers: .command)
-                ForEach(path) { a in
-                    Text("›").foregroundStyle(Color.ink.opacity(0.3))
-                    Button(a.title.isEmpty ? "Untitled" : a.title) { zoom(to: a.id) }.lineLimit(1)
-                }
+        var p = z
+        while let x = p { path.insert(x, at: 0); p = x.parentID.flatMap { store.node($0) } }
+        let shown = Array(path.suffix(3))            // deepest three levels; earlier ones fold into "…"
+        let h: CGFloat = 24
+        return HStack(spacing: 3) {
+            Button { zoom(to: nil) } label: {
+                Text("ALL").font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                    .padding(.leading, 14).padding(.trailing, 8).frame(height: h)
+                    .background(PanelPalette.orange, in: UnevenRoundedRectangle(topLeadingRadius: h / 2, bottomLeadingRadius: h / 2))
             }
-            .buttonStyle(.plain)
-            .font(look.font.font(.footnote, weight: .medium))
-            .foregroundStyle(Color.ink.opacity(0.6))
-            .padding(.leading, 16).padding(.vertical, 8)
+            .keyboardShortcut("[", modifiers: .command)
+            .allowsHitTesting(z != nil)   // not dimmed at the top level: the block is part of the frame
+            .accessibilityLabel("All items")
+            if path.count > shown.count {
+                Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                    .padding(.horizontal, 8).frame(height: h).background(PanelPalette.rose)
+            }
+            ForEach(Array(shown.enumerated()), id: \.element.id) { i, a in
+                let current = a.id == z?.id
+                Button { zoom(to: a.id) } label: {
+                    Text((a.title.isEmpty ? "Untitled" : a.title).uppercased())
+                        .font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                        .lineLimit(1).truncationMode(.tail)
+                        .padding(.horizontal, 8).frame(maxWidth: current ? 180 : 110).frame(height: h)
+                        .fixedSize(horizontal: !current, vertical: false)
+                        .background(current ? PanelPalette.peach : [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3])
+                }
+                .allowsHitTesting(!current)
+                .layoutPriority(current ? 1 : 0)
+            }
+            // Filler bar and end cap: the row always spans the full width.
+            Rectangle().fill(z == nil ? PanelPalette.lavender : PanelPalette.periwinkle).frame(minWidth: 8).frame(height: h)
+            Capsule().fill(PanelPalette.orange).frame(width: 22, height: h)
         }
-        .transition(.opacity)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(Color.canvas)
+        .animation(.snappy(duration: 0.25), value: zoomID)
     }
     private func beginEdit(_ id: UUID) { sel.nodeID = id; editRequest = id }
     private func endEdit() { editRequest = nil; focused = nil }
@@ -659,7 +683,8 @@ struct NodeRow: View {
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // Tap zooms into the item; hold shows the action strip (again hides it), hold and move drags; double-tap edits the text.
+            // Tap shows/hides the item's children; hold zooms in (again on the zoomed item zooms out); hold and move drags;
+            // double-tap edits the text.
             if !editing {
                 Text(title.isEmpty ? "New item" : title)
                     .font(titleFont)
@@ -713,7 +738,7 @@ struct NodeRow: View {
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
             if hasChildren && node.collapsed {
-                // No button: tapping the item zooms in and shows its children. This only marks that some are hidden.
+                // No button: tapping the item shows its children. This only marks that some are hidden.
                 Text("\u{2026}").font(.callout.weight(.bold)).foregroundStyle(Color.ink.opacity(0.5))
                     .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
                     .accessibilityLabel("Children hidden")
@@ -788,7 +813,7 @@ struct NodeRow: View {
     }
 
     #if os(iOS)
-    /// Hold 0.25 s to lift (release without moving = show/hide the action strip), then move to drag.
+    /// Hold 0.25 s to lift (release without moving = zoom in), then move to drag.
     private var holdDrag: HoldDragGesture {
         HoldDragGesture(onBegan: { lift() }, onChanged: { t in
             guard drag.id == node.id else { return }
@@ -802,11 +827,12 @@ struct NodeRow: View {
         holdFired = true
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
-    /// Single tap zooms in. Releasing a long press also completes a tap; that tap is ignored, so a long press only
-    /// shows the action strip (or drops a dragged item) and never zooms.
+    /// Single tap on the text shows or hides the item's children. Releasing a long press also completes a tap; that
+    /// tap is ignored, so a long press only zooms (or drops a dragged item).
     private func tapped() {
         if holdFired { holdFired = false; return }
-        commit(); onZoom()
+        commit()
+        if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
     }
     /// Tap on the squares: the item's sheet. Same hold guard as `tapped()`.
     private func squareTapped() {
@@ -833,12 +859,12 @@ struct NodeRow: View {
     /// run on cancel, which used to leave the row stuck lifted).
     private func finishDrag() {
         guard drag.id == node.id else { return }
-        // Held and released without moving: a long-tap, which shows the action strip instead of moving the item.
+        // Held and released without moving: a long press, which zooms into the item instead of moving it.
         let still = abs(drag.dx) < 6 && abs(drag.dy) < 6
         drag.dx = 0; drag.dy = 0
         // The release's tap (if any) arrives about now; stop ignoring taps shortly after.
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); holdFired = false }
-        if still { drag.target = nil; onDrop(); toggleSelect(); return }
+        if still { drag.target = nil; onDrop(); onZoom(); return }
         withAnimation(.snappy(duration: 0.22)) { onDrop() }
     }
 
