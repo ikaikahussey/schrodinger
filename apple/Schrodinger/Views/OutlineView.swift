@@ -31,6 +31,7 @@ struct OutlineView: View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
         let zoomed = zoomID.flatMap { store.node($0) }
+        ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if let z = zoomed { breadcrumb(z) }
@@ -69,9 +70,15 @@ struct OutlineView: View {
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
+        #if os(iOS)
+        .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
+            if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx) { zoom(to: nil) }
+        }))
+        #else
         .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { v in
             if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(v) { zoom(to: nil) }
         })
+        #endif
         .background(Color.canvas)
         .navigationTitle("")
         #if os(iOS)
@@ -106,9 +113,27 @@ struct OutlineView: View {
             }
             ToolbarItem(placement: .primaryAction) { filterMenu }
             ToolbarItem(placement: .primaryAction) {
-                Button { withAnimation(.snappy(duration: 0.2)) { showLegend.toggle() } } label: { Image(systemName: showLegend ? "info.circle.fill" : "info.circle") }
+                Button { withAnimation(.snappy(duration: 0.2)) { showLegend.toggle() } } label: { Image(systemName: showLegend ? "questionmark.circle.fill" : "questionmark.circle") }
                     .help(showLegend ? "Hide the square legend" : "Show the square legend")
             }
+        }
+        // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
+        .onChange(of: sel.revealID) { _, id in reveal(id, proxy) }
+        }
+    }
+
+    private func reveal(_ id: UUID?, _ proxy: ScrollViewProxy) {
+        guard let id, let n = store.node(id) else { return }
+        sel.revealID = nil
+        if let z = zoomID, !isInSubtree(id, of: z) { withAnimation(.snappy(duration: 0.32)) { zoomID = nil } }
+        if !matches(n) { filter = .all; modeFilter = nil }
+        var p = n.parentID
+        while let pid = p, let x = store.node(pid) { if x.collapsed { store.update(x) { $0.collapsed = false } }; p = x.parentID }
+        store.save()
+        sel.nodeID = id; sel.infoID = id
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(id, anchor: .top) }
         }
     }
 
@@ -142,6 +167,10 @@ struct OutlineView: View {
         let dx = v.translation.width, dy = v.translation.height
         return dx > 60 && abs(dy) < max(50, dx * 0.5) && v.predictedEndTranslation.width - dx > 80
     }
+    /// Same test from a translation and horizontal velocity (points/s), for the UIKit pan on iPhone/iPad.
+    nonisolated static func isBackSwipe(dx: CGFloat, dy: CGFloat, vx: CGFloat) -> Bool {
+        dx > 60 && abs(dy) < max(50, dx * 0.5) && vx > 300
+    }
 
     /// Quick capture: a new item under a top-level "Thoughts" project (created on first use), focused for typing.
     private func captureThought(roots: [Node]) {
@@ -161,7 +190,7 @@ struct OutlineView: View {
     private func zoom(to id: UUID?) {
         endEdit()
         zoomingIn = id.map { target in zoomID.map { isInSubtree(target, of: $0) && target != $0 } ?? true } ?? false
-        withAnimation(.snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil }
+        withAnimation(.snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil; sel.infoID = nil }
     }
     private func rootIndex(_ n: Node, roots: [Node]) -> Int {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
@@ -218,6 +247,7 @@ struct OutlineView: View {
                     onDrop: { performDrop(n) },
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
                     swipeBack: zoomID != nil)
+                .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID {
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context) }
@@ -517,7 +547,9 @@ struct NodeRow: View {
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
     private func toggleSelect() {
-        withAnimation(.easeOut(duration: 0.15)) { sel.nodeID = sel.nodeID == node.id ? nil : node.id }
+        withAnimation(.easeOut(duration: 0.15)) {
+            if sel.nodeID == node.id { sel.nodeID = nil; if infoOpen { sel.infoID = nil } } else { sel.nodeID = node.id }
+        }
     }
     private var done: Bool { node.state == .done && isLeafTask }
     private var editing: Bool { focused.wrappedValue == node.id || editRequest == node.id }
@@ -536,6 +568,13 @@ struct NodeRow: View {
         }
     }
     private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
+    private var infoOpen: Bool { sel.infoID == node.id }
+    /// ⓘ: show the action strip with the item's drafts, context and details under it; again hides both.
+    private func toggleInfo() {
+        withAnimation(.snappy(duration: 0.22)) {
+            if infoOpen { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } } else { sel.nodeID = node.id; sel.infoID = node.id }
+        }
+    }
     private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
     /// SwiftData traps when a deleted model's attributes are read, and a row can be re-rendered once more after its node
@@ -553,7 +592,11 @@ struct NodeRow: View {
                 .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
                 .onTapGesture { commit(); onZoom() }
-                .simultaneousGesture(handleGesture)   // simultaneous so a swipe starting on the bars still scrolls
+                #if os(iOS)
+                .gesture(holdDrag)
+                #else
+                .simultaneousGesture(handleGesture)
+                #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
                 .help(summary + " · tap to zoom in · long-press for actions · hold and drag to move")
                 .accessibilityElement(children: .ignore)
@@ -574,10 +617,13 @@ struct NodeRow: View {
                     .onTapGesture(count: 2) { startEdit() }
                     .onTapGesture { commit(); onZoom() }
                     // Same as the bars: hold and release shows/hides the action strip; hold and move drags the item.
-                    // Simultaneous, not exclusive: an exclusive long-press+drag on the text (most of the screen) stops the
-                    // list from scrolling on iOS 18. A swipe fails the hold (it moves before 0.25 s) and scrolls as usual;
-                    // once an item is lifted, scrolling is disabled so the drag doesn't also scroll.
+                    // iPhone/iPad: a UIKit long press (see TouchGestures.swift); SwiftUI drag gestures here stop the list from
+                    // scrolling on iOS 18+. A swipe fails the hold and scrolls; once lifted, scrolling is disabled.
+                    #if os(iOS)
+                    .gesture(holdDrag)
+                    #else
                     .simultaneousGesture(handleGesture)
+                    #endif
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -625,17 +671,17 @@ struct NodeRow: View {
                 .help(node.collapsed ? "Show children" : "Hide children")
                 .accessibilityLabel(node.collapsed ? "Show children" : "Hide children")
             }
-            Button { commit(); sel.nodeID = node.id; sel.panel = .review } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.ink.opacity(0.3))
+            Button { commit(); toggleInfo() } label: {
+                Image(systemName: infoOpen ? "info.circle.fill" : "info.circle")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(Color.ink)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-            .help("Details")
-            .accessibilityLabel("Details")
+            .help(infoOpen ? "Hide info" : "Info: actions, drafts, context")
+            .accessibilityLabel(infoOpen ? "Hide info" : "Info")
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
@@ -647,7 +693,12 @@ struct NodeRow: View {
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }
         }
-        if sel.nodeID == node.id || editing { actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity) }
+        if sel.nodeID == node.id || editing || infoOpen { actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity) }
+        if infoOpen {
+            ItemInfo(node: node, onDelete: { if sel.infoID == node.id { sel.infoID = nil }; if sel.nodeID == node.id { sel.nodeID = nil } })
+                .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
@@ -659,7 +710,13 @@ struct NodeRow: View {
         // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: 4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
+        #if os(iOS)
+        .gesture(HorizontalPanGesture(onChanged: { t in pullChanged(t) }, onEnded: { t, vx in
+            pullEnded(isBack: swipeBack && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx))
+        }))
+        #else
         .simultaneousGesture(pullGesture)
+        #endif
         #if os(macOS)
         // Right-click menu on the Mac. On iPhone/iPad a long-press context menu would take over the touch and cancel
         // the hold-and-drag on the bars (and the long press that opens the action strip), so the strip is used there.
@@ -670,19 +727,37 @@ struct NodeRow: View {
     /// Pull to move: drag the row left to outdent (←), right to indent (→). The text moves the way it will land.
     private var pullGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .local)
-            .onChanged { v in
-                guard abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
-                var x = v.translation.width
-                if node.isProject && x < 0 { x = 0 }
-                pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
-            }
-            .onEnded { v in
-                let p = pull
-                withAnimation(.snappy(duration: 0.22)) { pull = 0 }
-                if swipeBack && OutlineView.isBackSwipe(v) { return }   // the page goes back instead
-                if p < -pullThreshold { commit(); onKey(.shiftTab) }
-                else if p > pullThreshold { commit(); onKey(.tab) }
-            }
+            .onChanged { v in pullChanged(v.translation) }
+            .onEnded { v in pullEnded(isBack: swipeBack && OutlineView.isBackSwipe(v)) }
+    }
+    private func pullChanged(_ t: CGSize) {
+        guard drag.id == nil, abs(t.width) > abs(t.height) * 1.2 else { return }
+        var x = t.width
+        if node.isProject && x < 0 { x = 0 }
+        pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
+    }
+    /// `isBack`: the swipe was the page's "go back" gesture, so it must not also indent.
+    private func pullEnded(isBack: Bool) {
+        let p = pull
+        withAnimation(.snappy(duration: 0.22)) { pull = 0 }
+        if isBack { return }
+        if p < -pullThreshold { commit(); onKey(.shiftTab) }
+        else if p > pullThreshold { commit(); onKey(.tab) }
+    }
+
+    #if os(iOS)
+    /// Hold 0.25 s to lift (release without moving = show/hide the action strip), then move to drag.
+    private var holdDrag: HoldDragGesture {
+        HoldDragGesture(onBegan: { lift() }, onChanged: { t in
+            guard drag.id == node.id else { return }
+            drag.dx = t.width; drag.dy = t.height
+            onDragChanged(drag.dx, drag.dy)
+        }, onEnded: { finishDrag() })
+    }
+    #endif
+    private func lift() {
+        guard drag.id == nil else { return }
+        pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
@@ -694,7 +769,7 @@ struct NodeRow: View {
             .updating($handleActive) { v, active, _ in if case .second(true, _) = v { active = true } }
             .onChanged { v in
                 guard case .second(true, let d) = v else { return }
-                if drag.id == nil { pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0 }
+                lift()
                 guard let d else { return }
                 drag.dx = d.translation.width; drag.dy = d.translation.height
                 onDragChanged(drag.dx, drag.dy)
@@ -775,7 +850,7 @@ struct NodeRow: View {
                 Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below").accessibilityLabel("Add item below")
                 PillMenu(systemImage: "ellipsis", title: nil) {
                     if !node.isProject { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
-                    Button { sel.nodeID = node.id; sel.panel = .review } label: { Label("Details", systemImage: "info.circle") }
+                    Button { toggleInfo() } label: { Label(infoOpen ? "Hide info" : "Info", systemImage: "info.circle") }
                     Divider()
                     Button(role: .destructive) { deleteItem() } label: { Label("Delete", systemImage: "trash") }
                 }.help("More").accessibilityLabel("More")
@@ -821,7 +896,7 @@ struct NodeRow: View {
         Button("Add item below") { onKey(.enter) }
         if !node.isProject { Button(showNote ? "Edit context" : "Add context") { openNote() } }
         Divider()
-        Button("Details") { sel.nodeID = node.id; sel.panel = .review }
+        Button(infoOpen ? "Hide info" : "Info") { toggleInfo() }
         Button("Delete", role: .destructive) { deleteItem() }
     }
 
@@ -830,6 +905,7 @@ struct NodeRow: View {
     private func deleteItem() {
         endEdit(); noteFocused = false
         if sel.nodeID == node.id { sel.nodeID = nil }
+        if sel.infoID == node.id { sel.infoID = nil }
         store.delete(node); store.save()
     }
     private func commitNote() {

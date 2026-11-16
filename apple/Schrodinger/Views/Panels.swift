@@ -1,145 +1,6 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Review (AI drafts + shared "your turn") and node details
-
-struct ReviewView: View {
-    @Environment(\.modelContext) private var ctx
-    var sel: Selection
-    @Query private var all: [Node]
-    @State private var notes: [UUID: String] = [:]
-    @State private var error: String? = nil
-    private var store: Store { Store(ctx) }
-
-    var body: some View {
-        List {
-            Section {
-                HStack(spacing: 6) {
-                    Button("Outline") { sel.nodeID = nil; sel.panel = .outline }.buttonStyle(.plain).foregroundStyle(.secondary)
-                    if let id = sel.nodeID, let n = store.node(id) {
-                        let proj = store.project(of: n)
-                        if proj.id != n.id {
-                            Text("›").foregroundStyle(.tertiary)
-                            Button(proj.title.isEmpty ? "Untitled" : proj.title) { sel.nodeID = proj.id }.buttonStyle(.plain).foregroundStyle(.secondary)
-                        }
-                        Text("›").foregroundStyle(.tertiary)
-                        Text(n.title.isEmpty ? "Untitled" : n.title).lineLimit(1)
-                    } else {
-                        Text("›").foregroundStyle(.tertiary); Text("Review")
-                    }
-                }
-                .font(.caption)
-            }
-            if let id = sel.nodeID, let n = store.node(id) {
-                Section("Selected") {
-                    DetailView(node: n, onDelete: { sel.nodeID = nil })
-                    Button("OK") { store.save(); sel.nodeID = nil; sel.panel = .outline }
-                        .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                }
-            }
-            let shared = all.filter { $0.isYourTurn }
-            if !shared.isEmpty {
-                Section("Shared tasks — AI part done, your turn") {
-                    ForEach(shared) { n in
-                        card(n) {
-                            Button("OK") { store.update(n) { $0.state = .done }; store.save() }.buttonStyle(.borderedProminent)
-                            Button("Send back to AI") { try? store.sendBackToAI(n, note: notes[n.id] ?? ""); store.save(); notes[n.id] = nil }
-                        }
-                    }
-                }
-            }
-            Section("AI drafts awaiting your review") {
-                let items = all.filter { $0.state == .review }
-                if items.isEmpty { Text("No drafts in review.").foregroundStyle(.secondary) }
-                ForEach(items) { n in
-                    card(n) {
-                        Button("OK") { try? store.approve(n); store.save() }.buttonStyle(.borderedProminent)
-                        Button("Redo") { try? store.reject(n, note: notes[n.id] ?? ""); store.save(); notes[n.id] = nil }
-                    }
-                }
-            }
-        }
-        .navigationTitle("Review")
-        // Full-page swipe right returns to the outline.
-        .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { v in
-            if (v.translation.width > 100 && abs(v.translation.height) < 80) || OutlineView.isBackSwipe(v) { sel.nodeID = nil; sel.panel = .outline }
-        })
-    }
-
-    @ViewBuilder
-    private func card(_ n: Node, @ViewBuilder actions: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(store.project(of: n).title).font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
-            Text(n.title).font(.headline)
-            ScrollView { Text(n.artifact ?? "(no artifact)").font(.system(.caption, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
-                .frame(maxHeight: 260).padding(8).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-            TextField("Note for the AI (what to change)", text: Binding(get: { notes[n.id] ?? "" }, set: { notes[n.id] = $0 }), axis: .vertical)
-            HStack { actions(); Spacer(); Button("Copy") { copy(n.artifact ?? "") } }
-        }
-        .padding(.vertical, 4)
-    }
-    private func copy(_ s: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string)
-        #else
-        UIPasteboard.general.string = s
-        #endif
-    }
-}
-
-struct DetailView: View {
-    @Environment(\.modelContext) private var ctx
-    @Bindable var node: Node
-    /// Called before the node is deleted (clears the selection that shows this view).
-    var onDelete: () -> Void = {}
-    @State private var calendarMessage: String? = nil
-    private var store: Store { Store(ctx) }
-
-    var body: some View {
-        // Reading a deleted model traps; this view can render once more after Delete.
-        if node.isDeleted || node.modelContext == nil { EmptyView() } else { content }
-    }
-
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Title", text: Binding(get: { node.title }, set: { v in store.update(node) { $0.title = v } }))
-            if node.isProject {
-                TextField("Goal", text: Binding(get: { node.goal }, set: { v in store.update(node) { $0.goal = v } }), axis: .vertical)
-                TextField("Success criteria (checkable)", text: Binding(get: { node.successCriteria }, set: { v in store.update(node) { $0.successCriteria = v } }), axis: .vertical)
-                TextField("Constraints for the AI", text: Binding(get: { node.constraints }, set: { v in store.update(node) { $0.constraints = v } }), axis: .vertical)
-                Picker("Status", selection: Binding(get: { node.projectStatus }, set: { v in store.update(node) { $0.projectStatus = v } })) { ForEach(ProjectStatus.allCases) { Text($0.rawValue).tag($0) } }
-                CalendarLinkPicker(node: node)
-            } else {
-                Picker("Assignee (shared = AI preps, you finish)", selection: Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v } })) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }
-                Picker("Mode", selection: Binding(get: { node.mode }, set: { v in store.update(node) { $0.mode = v } })) { Text("none").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }
-                Picker("State", selection: Binding(get: { node.state }, set: { v in store.update(node) { $0.state = v } })) { ForEach(TaskState.allCases) { Text($0.label).tag($0) } }
-                HStack {
-                    Toggle("Due", isOn: Binding(get: { node.due != nil }, set: { on in store.update(node) { $0.due = on ? Date() : nil } }))
-                    if node.due != nil { DatePicker("", selection: Binding(get: { node.due ?? Date() }, set: { v in store.update(node) { $0.due = v } }), displayedComponents: .date).labelsHidden() }
-                }
-                if node.assignee == .shared {
-                    HStack { Text("AI part: \(node.aiStatusRaw)"); if node.aiStatus == .done { Button("Send back to AI") { try? store.sendBackToAI(node, note: "") } } }
-                }
-                TextField("Notes", text: Binding(get: { node.notes }, set: { v in store.update(node) { $0.notes = v } }), axis: .vertical)
-                TextField("Acceptance note / review feedback", text: Binding(get: { node.acceptanceNote }, set: { v in store.update(node) { $0.acceptanceNote = v } }), axis: .vertical)
-                DepsPicker(node: node)
-                if let due = node.due {
-                    Button("Add to calendar") {
-                        Task { do { _ = try await CalendarService.shared.addTask(title: node.title, due: due, notes: "Schrodinger · \(store.project(of: node).title)"); calendarMessage = "Added to your calendar." } catch { calendarMessage = error.localizedDescription } }
-                    }
-                    if let m = calendarMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
-                }
-                if let a = node.artifact { DisclosureGroup("Artifact") { Text(a).font(.system(.caption, design: .monospaced)).textSelection(.enabled) } }
-            }
-            DisclosureGroup("Activity") {
-                ForEach(store.activity(for: node.id)) { a in ActivityLine(entry: a) }
-            }
-            Button("Delete", role: .destructive) { onDelete(); store.delete(node); store.save() }
-        }
-        .onChange(of: node.updatedAt) { store.save() }
-    }
-}
-
 struct DepsPicker: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var node: Node
@@ -237,7 +98,7 @@ struct InboxView: View {
                     HStack {
                         Button(p.isInformational ? "Acknowledge" : "Accept") { try? s.accept(p); s.save() }.buttonStyle(.borderedProminent)
                         Button("Dismiss") { s.dismiss(p); s.save() }
-                        if let id = p.nodeID { Button("Show task") { sel.nodeID = id; sel.panel = .review } }
+                        if let id = p.nodeID { Button("Show task") { sel.open(id) } }
                     }
                 }.padding(.vertical, 4)
             }
@@ -265,7 +126,7 @@ struct CalendarView: View {
                 Section(day) {
                     ForEach(Array(items.filter { $0.0.dayString == day }.enumerated()), id: \.offset) { _, it in
                         HStack { Text(it.1).font(.caption.weight(.semibold)).frame(width: 60, alignment: .leading); Text(it.2) }
-                            .contentShape(Rectangle()).onTapGesture { if let id = it.3 { sel.nodeID = id; sel.panel = .review } }
+                            .contentShape(Rectangle()).onTapGesture { if let id = it.3 { sel.open(id) } }
                     }
                 }
             }
