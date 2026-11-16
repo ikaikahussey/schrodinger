@@ -32,7 +32,7 @@ struct ReviewView: View {
             }
             if let id = sel.nodeID, let n = store.node(id) {
                 Section("Selected") {
-                    DetailView(node: n)
+                    DetailView(node: n, onDelete: { sel.nodeID = nil })
                     Button("OK") { store.save(); sel.nodeID = nil; sel.panel = .outline }
                         .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }
@@ -90,10 +90,17 @@ struct ReviewView: View {
 struct DetailView: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var node: Node
+    /// Called before the node is deleted (clears the selection that shows this view).
+    var onDelete: () -> Void = {}
     @State private var calendarMessage: String? = nil
     private var store: Store { Store(ctx) }
 
     var body: some View {
+        // Reading a deleted model traps; this view can render once more after Delete.
+        if node.isDeleted || node.modelContext == nil { EmptyView() } else { content }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Title", text: Binding(get: { node.title }, set: { v in store.update(node) { $0.title = v } }))
             if node.isProject {
@@ -127,7 +134,7 @@ struct DetailView: View {
             DisclosureGroup("Activity") {
                 ForEach(store.activity(for: node.id)) { a in ActivityLine(entry: a) }
             }
-            Button("Delete", role: .destructive) { store.delete(node); store.save() }
+            Button("Delete", role: .destructive) { onDelete(); store.delete(node); store.save() }
         }
         .onChange(of: node.updatedAt) { store.save() }
     }

@@ -104,6 +104,7 @@ EOP
   else
     echo "--- skipping archive/upload (mac=$MAC ios=$IOS asc=${ASC_KEY_ID:+set})"
   fi
+  python3 asc_crashes.py 2>&1 | head -200
   echo "=== done $(date) ==="
 } 2>&1 | tee "$LOG"
 cd "$REPO"
