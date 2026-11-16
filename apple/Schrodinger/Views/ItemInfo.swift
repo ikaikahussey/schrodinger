@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// Everything about one item, shown in the outline under its action strip when its ⓘ button is on:
+/// Everything about one item, shown in the outline under its action strip when its squares are tapped:
 /// the AI's draft (approve / redo), the shared "your turn" step, context, due date, project brief,
 /// dependencies and activity. Replaces the separate Review screen.
 struct ItemInfo: View {

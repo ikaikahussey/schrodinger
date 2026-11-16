@@ -571,7 +571,7 @@ struct NodeRow: View {
     }
     private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
     private var infoOpen: Bool { sel.infoID == node.id }
-    /// ⓘ: show the action strip with the item's drafts, context and details under it; again hides both.
+    /// Tap on the squares: show the action strip with the item's drafts, context and details under it; again hides both.
     private func toggleInfo() {
         withAnimation(.snappy(duration: 0.22)) {
             if infoOpen { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } } else { sel.nodeID = node.id; sel.infoID = node.id }
@@ -593,19 +593,21 @@ struct NodeRow: View {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
                 .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
-                .onTapGesture { tapped() }
+                // Tap the squares: open/close the item's sheet (action strip + drafts, context, details).
+                .onTapGesture { squareTapped() }
                 #if os(iOS)
                 .gesture(holdDrag)
                 #else
                 .simultaneousGesture(handleGesture)
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + " · tap to zoom in · long-press for actions · hold and drag to move")
+                .help(summary + " · tap for the item's details and actions · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
+                .accessibilityHint(infoOpen ? "Hides details" : "Shows details and actions")
                 .accessibilityAddTraits(.isButton)
-                .accessibilityAction { commit(); onZoom() }
-                .accessibilityAction(named: "Actions") { commit(); toggleSelect() }
+                .accessibilityAction { commit(); toggleInfo() }
+                .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
 
             VStack(alignment: .leading, spacing: 2) {
             // Tap zooms into the item; hold shows the action strip (again hides it), hold and move drags; double-tap edits the text.
@@ -673,17 +675,6 @@ struct NodeRow: View {
                 .help(node.collapsed ? "Show children" : "Hide children")
                 .accessibilityLabel(node.collapsed ? "Show children" : "Hide children")
             }
-            Button { commit(); toggleInfo() } label: {
-                Image(systemName: infoOpen ? "info.circle.fill" : "info.circle")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(Color.ink)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-            .help(infoOpen ? "Hide info" : "Info: actions, drafts, context")
-            .accessibilityLabel(infoOpen ? "Hide info" : "Info")
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
@@ -767,6 +758,11 @@ struct NodeRow: View {
     private func tapped() {
         if holdFired { holdFired = false; return }
         commit(); onZoom()
+    }
+    /// Tap on the squares: the item's sheet. Same hold guard as `tapped()`.
+    private func squareTapped() {
+        if holdFired { holdFired = false; return }
+        commit(); toggleInfo()
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
