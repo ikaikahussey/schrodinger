@@ -860,10 +860,12 @@ struct NodeRow: View {
         holdFired = true
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
-    /// Single tap on the text shows or hides the item's children. Releasing a long press also completes a tap; that
+    /// Single tap on the text shows or hides the item's children; on an item with no text it starts editing. Releasing a long press also completes a tap; that
     /// tap is ignored, so a long press only zooms (or drops a dragged item).
     private func tapped() {
         if holdFired { holdFired = false; return }
+        // An item with no text yet ("New item"): a tap starts typing.
+        if title.trimmingCharacters(in: .whitespaces).isEmpty { startEdit(); return }
         commit()
         if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
     }
