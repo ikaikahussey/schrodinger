@@ -68,7 +68,10 @@ struct OutlineView: View {
             }
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
-        .safeAreaInset(edge: .top, spacing: 0) { filterBar }
+        // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
+        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { v in
+            if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(v) { zoom(to: nil) }
+        })
         .background(Color.canvas)
         .navigationTitle("")
         #if os(iOS)
@@ -101,6 +104,7 @@ struct OutlineView: View {
                     .help("New thought (goes under “Thoughts”)")
                     .keyboardShortcut("n", modifiers: .command)
             }
+            ToolbarItem(placement: .primaryAction) { filterMenu }
             ToolbarItem(placement: .primaryAction) {
                 Button { withAnimation(.snappy(duration: 0.2)) { showLegend.toggle() } } label: { Image(systemName: showLegend ? "info.circle.fill" : "info.circle") }
                     .help(showLegend ? "Hide the square legend" : "Show the square legend")
@@ -108,51 +112,35 @@ struct OutlineView: View {
         }
     }
 
-    /// Filters, always on screen above the outline: who/what status on the first row, mode (with its color) on the second.
-    private var filterBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(Filter.allCases) { f in
-                        Button { withAnimation(.snappy(duration: 0.25)) { filter = f } } label: { PillLabel(title: f.label, on: filter == f) }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(filter == f ? .isSelected : [])
-                    }
-                }
-                .padding(.horizontal, 16)
+    private var filtering: Bool { filter != .all || modeFilter != nil }
+
+    /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Show", selection: Binding(get: { filter }, set: { v in withAnimation(.snappy(duration: 0.25)) { filter = v } })) {
+                ForEach(Filter.allCases) { Text($0.label).tag($0) }
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(Mode.allCases) { m in
-                        let on = modeFilter == m
-                        Button { withAnimation(.snappy(duration: 0.25)) { modeFilter = on ? nil : m } } label: {
-                            HStack(spacing: 5) {
-                                StatusBar(state: .todo, assignee: .human, isProject: false, color: look.color(for: m)).scaleEffect(0.75)
-                                    .frame(width: 12, height: 12)
-                                Text(m.rawValue).font(look.font.font(.caption, weight: .medium))
-                            }
-                            .padding(.horizontal, 9).padding(.vertical, 6)
-                            .frame(minHeight: 28)
-                            .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
-                            .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
-                            .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Mode " + m.rawValue)
-                        .accessibilityAddTraits(on ? .isSelected : [])
-                    }
-                    if filter != .all || modeFilter != nil {
-                        Button { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { PillLabel(systemImage: "xmark", title: "Clear") }
-                            .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
+            .pickerStyle(.inline)
+            Picker("Mode", selection: Binding(get: { modeFilter }, set: { v in withAnimation(.snappy(duration: 0.25)) { modeFilter = v } })) {
+                Text("Any mode").tag(Mode?.none)
+                ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) }
             }
+            .pickerStyle(.inline)
+            if filtering {
+                Divider()
+                Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
+            }
+        } label: {
+            Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.canvas)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.ink.opacity(0.08)).frame(height: 0.5) }
+        .help(filtering ? "Filters (on)" : "Filters")
+        .accessibilityLabel(filtering ? "Filters, on" : "Filters")
+    }
+
+    /// A quick, mostly horizontal swipe to the right: the "go back" gesture. Distinct from the slower row pull that indents.
+    nonisolated static func isBackSwipe(_ v: DragGesture.Value) -> Bool {
+        let dx = v.translation.width, dy = v.translation.height
+        return dx > 60 && abs(dy) < max(50, dx * 0.5) && v.predictedEndTranslation.width - dx > 80
     }
 
     /// Quick capture: a new item under a top-level "Thoughts" project (created on first use), focused for typing.
@@ -228,7 +216,8 @@ struct OutlineView: View {
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) },
-                    onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) })
+                    onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
+                    swipeBack: zoomID != nil)
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID {
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context) }
@@ -333,7 +322,8 @@ struct OutlineView: View {
             guard let idx = siblings.firstIndex(where: { $0.id == n.id }) else { return }
             let to = key == .altUp ? idx - 1 : idx + 1
             guard to >= 0, to < siblings.count else { return }
-            try? s.move(n, to: n.parentID, position: max(0, n.position + (key == .altUp ? -1 : 1))); s.save(); keep()
+            // Target index among the on-screen siblings (stored positions can have gaps or duplicates).
+            try? s.move(n, to: n.parentID, position: to); s.save(); keep()
             Xylophone.shared.play(OutlinePitch.position(to, depth: depthOf(n)))
         }
     }
@@ -510,6 +500,8 @@ struct NodeRow: View {
     let onDragChanged: (CGFloat, CGFloat) -> Void
     let onDrop: () -> Void
     var onZoom: () -> Void = {}
+    /// The page handles a quick right swipe as "back" (zoomed in), so the row must not also indent on it.
+    var swipeBack = false
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
     @GestureState private var handleActive = false
@@ -663,7 +655,11 @@ struct NodeRow: View {
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: 4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
         .simultaneousGesture(pullGesture)
+        #if os(macOS)
+        // Right-click menu on the Mac. On iPhone/iPad a long-press context menu would take over the touch and cancel
+        // the hold-and-drag on the bars (and the long press that opens the action strip), so the strip is used there.
         .contextMenu { menu }
+        #endif
     }
 
     /// Pull to move: drag the row left to outdent (←), right to indent (→). The text moves the way it will land.
@@ -675,9 +671,10 @@ struct NodeRow: View {
                 if node.isProject && x < 0 { x = 0 }
                 pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
             }
-            .onEnded { _ in
+            .onEnded { v in
                 let p = pull
                 withAnimation(.snappy(duration: 0.22)) { pull = 0 }
+                if swipeBack && OutlineView.isBackSwipe(v) { return }   // the page goes back instead
                 if p < -pullThreshold { commit(); onKey(.shiftTab) }
                 else if p > pullThreshold { commit(); onKey(.tab) }
             }
