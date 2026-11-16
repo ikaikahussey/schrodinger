@@ -744,14 +744,16 @@ struct NodeRow: View {
                 .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
             }
-            if showNote && !node.isProject {
-                TextField("Add context…", text: $note, axis: .vertical)
+            // The item's notes, read and edited here in the row (the sheet does not repeat them). The field is there
+            // whenever there are notes, and also while the sheet is open so notes can be added.
+            if showNote || infoOpen {
+                TextField("Notes", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(Appearance.shared.font.font(.callout))
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .focused($noteFocused)
                     .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
-                    .onSubmit { commitNote(); startEdit() }
+                    .onSubmit { commitNote() }
             }
             }
             // Middle of the first line of text lines up with the middle of the bars.
@@ -773,9 +775,10 @@ struct NodeRow: View {
             }
         }
         .padding(.vertical, 6)
-        .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
+        .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
-        .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
+        .onChange(of: infoOpen) { _, open in if !open { commitNote() } }   // closing the sheet saves notes being typed
+        .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
         .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
@@ -784,7 +787,8 @@ struct NodeRow: View {
             if old == node.id && new != node.id { commit() }
         }
         if infoOpen {
-            // The item sheet: the action strip and one text field on a plain black panel.
+            // The item sheet: the action strip on a plain black panel (plus the AI's draft, if any). Notes are edited
+            // in the row's own notes field above.
             ItemPanel {
                 actionStrip
                 ItemSheetBody(node: node)
@@ -966,7 +970,7 @@ struct NodeRow: View {
                 PillMenu(systemImage: "ellipsis", title: nil) {
                     if hasChildren { Button { toggleChildren() } label: { Label(node.collapsed ? "Show children" : "Hide children", systemImage: node.collapsed ? "chevron.down" : "chevron.up") } }
                     if node.isYourTurn { Button { try? store.sendBackToAI(node, note: ""); store.save() } label: { Label("Send back to AI", systemImage: "sparkles") } }
-                    if !node.isProject && !infoOpen { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
+                    Button { openNote() } label: { Label(showNote ? "Edit notes" : "Add notes", systemImage: "text.alignleft") }
                     Button { toggleInfo() } label: { Label(infoOpen ? "Close sheet" : "Open sheet", systemImage: "rectangle.and.text.magnifyingglass") }
                     Divider()
                     Button(role: .destructive) { deleteItem() } label: { Label("Delete", systemImage: "trash") }
@@ -1011,7 +1015,7 @@ struct NodeRow: View {
         Button("Move up") { onKey(.altUp) }
         Button("Move down") { onKey(.altDown) }
         Button("Add item below") { onKey(.enter) }
-        if !node.isProject { Button(showNote ? "Edit context" : "Add context") { openNote() } }
+        Button(showNote ? "Edit notes" : "Add notes") { openNote() }
         Divider()
         Button(infoOpen ? "Hide info" : "Info") { toggleInfo() }
         Button("Delete", role: .destructive) { deleteItem() }
@@ -1025,12 +1029,14 @@ struct NodeRow: View {
         if sel.infoID == node.id { sel.infoID = nil }
         store.delete(node); store.save()
     }
+    /// Where the row's notes are stored: a task's notes; for a top-level item, the text its agent works toward.
+    private var noteSource: String { node.isProject ? node.goal : node.notes }
     private func commitNote() {
         guard !gone else { return }
         let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        if n != node.notes { store.update(node) { $0.notes = n }; store.save() }
+        if n != noteSource { store.update(node) { if $0.isProject { $0.goal = n } else { $0.notes = n } }; store.save() }
         note = n
-        if n.isEmpty { showNote = false }
+        showNote = !n.isEmpty
     }
 
     private func commit() {
