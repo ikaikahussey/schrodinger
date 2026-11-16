@@ -85,7 +85,7 @@ final class Appearance {
 
     private init() {
         palette = PaletteKind(rawValue: d.string(forKey: "palette") ?? "") ?? .lcars
-        font = AppFontFamily(rawValue: d.string(forKey: "fontFamily") ?? "") ?? .system
+        font = AppFontFamily(rawValue: d.string(forKey: "fontFamily") ?? "") ?? .helveticaNeue
         sounds = d.object(forKey: "outlineSounds") as? Bool ?? true
         let env = EnvironmentValues()
         customModes = Self.load("customModeColors", count: Palette.modeCount) ?? Palette.lcars.modes.map { $0.resolve(in: env) }
