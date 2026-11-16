@@ -1,8 +1,8 @@
 import SwiftUI
 import SwiftData
 
-// The item sheet: opened by tapping an item's squares. It is the action strip plus one text field on a plain black
-// panel, with flat colored capsule buttons. The decorative frame (rail, elbows, bars) lives only in the outline's
+// The item sheet: opened by tapping an item's squares. It is the action strip (flat colored capsule buttons) on a
+// plain black panel, plus the AI's draft when there is one. Notes are edited inline in the row, not here. The decorative frame (rail, elbows, bars) lives only in the outline's
 // breadcrumb bar and new-item button.
 
 /// Panel palette. Fixed colors on black: the panel looks the same in light and dark mode.
@@ -64,69 +64,27 @@ struct ItemPanel<Content: View>: View {
     }
 }
 
-/// The sheet's one text field, and — only when the AI has written one — its draft to read.
-/// Tasks: the field is the item's context. Projects: the field is the goal (what the project's agent works toward).
+/// Under the strip in the item sheet: the AI's draft, when it has written one. The item's notes are not repeated
+/// here; they are read and edited inline in the row.
 struct ItemSheetBody: View {
-    @Environment(\.modelContext) private var ctx
     @Bindable var node: Node
-    private var store: Store { Store(ctx) }
 
     var body: some View {
         // Reading a deleted model traps; this view can render once more after Delete.
         if node.isDeleted || node.modelContext == nil { EmptyView() } else { content }
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if node.isProject {
-                // Labeled like every other item's field. What is typed here is what the project's agent works toward.
-                PanelText(placeholder: "NOTES", value: node.goal) { v in store.update(node) { $0.goal = v }; store.save() }
-            } else {
-                PanelText(placeholder: "NOTES", value: node.notes) { v in store.update(node) { $0.notes = v }; store.save() }
-            }
-            if let a = node.artifact, !a.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(node.state == .review ? "DRAFT · AWAITING REVIEW" : "DRAFT")
-                        .font(PanelPalette.label(.caption2)).foregroundStyle(PanelPalette.periwinkle)
-                    ScrollView {
-                        Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(PanelPalette.peach)
-                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 260)
+    @ViewBuilder private var content: some View {
+        if let a = node.artifact, !a.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(node.state == .review ? "DRAFT · AWAITING REVIEW" : "DRAFT")
+                    .font(PanelPalette.label(.caption2)).foregroundStyle(PanelPalette.periwinkle)
+                ScrollView {
+                    Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(PanelPalette.peach)
+                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: 260)
             }
         }
-    }
-}
-
-/// Multi-line text that saves when editing ends (Return, focus leaves, or the view goes away) rather than on every
-/// keystroke, so one edit is one undo step and one activity entry.
-struct PanelText: View {
-    let placeholder: String
-    let value: String
-    let commit: (String) -> Void
-    @State private var text = ""
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(PanelPalette.orange.opacity(0.45)), axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(.system(.body, design: .default, weight: .medium).width(.condensed))
-            .foregroundStyle(PanelPalette.orange)
-            .tint(PanelPalette.peach)
-            .lineLimit(2...12)
-            .focused($focused)
-            .padding(.horizontal, 10).padding(.vertical, 8)
-            .overlay(alignment: .leading) { Rectangle().fill(focused ? PanelPalette.peach : PanelPalette.orange.opacity(0.6)).frame(width: 3) }
-            .onAppear { text = value }
-            .onChange(of: value) { _, v in if !focused { text = v } }
-            .onChange(of: focused) { _, f in if !f { save() } }
-            .onSubmit { save() }
-            .onDisappear { save() }
-    }
-
-    private func save() {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t != value { commit(t) }
     }
 }
