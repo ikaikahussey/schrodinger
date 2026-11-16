@@ -756,6 +756,18 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
+            if hasChildren && node.collapsed {
+                // Children are hidden: tap the … to show them.
+                Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
+                    Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
+                        .frame(width: 36, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+                .help("Show children")
+                .accessibilityLabel("Show children")
+            }
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
