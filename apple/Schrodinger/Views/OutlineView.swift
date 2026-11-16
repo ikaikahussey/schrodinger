@@ -553,7 +553,7 @@ struct NodeRow: View {
                 .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
                 .onTapGesture { commit(); onZoom() }
-                .gesture(handleGesture)
+                .simultaneousGesture(handleGesture)   // simultaneous so a swipe starting on the bars still scrolls
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
                 .help(summary + " · tap to zoom in · long-press for actions · hold and drag to move")
                 .accessibilityElement(children: .ignore)
@@ -574,7 +574,10 @@ struct NodeRow: View {
                     .onTapGesture(count: 2) { startEdit() }
                     .onTapGesture { commit(); onZoom() }
                     // Same as the bars: hold and release shows/hides the action strip; hold and move drags the item.
-                    .gesture(handleGesture)
+                    // Simultaneous, not exclusive: an exclusive long-press+drag on the text (most of the screen) stops the
+                    // list from scrolling on iOS 18. A swipe fails the hold (it moves before 0.25 s) and scrolls as usual;
+                    // once an item is lifted, scrolling is disabled so the drag doesn't also scroll.
+                    .simultaneousGesture(handleGesture)
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
