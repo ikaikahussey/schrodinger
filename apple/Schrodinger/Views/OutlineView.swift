@@ -535,6 +535,8 @@ struct NodeRow: View {
     var swipeBack = false
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
+    /// A long press lifted this item during the current touch; the tap that its release completes must not zoom.
+    @State private var holdFired = false
     @GestureState private var handleActive = false
     private var lifting: Bool { drag.id == node.id }
     @State private var note: String = ""
@@ -591,7 +593,7 @@ struct NodeRow: View {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
                 .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
-                .onTapGesture { commit(); onZoom() }
+                .onTapGesture { tapped() }
                 #if os(iOS)
                 .gesture(holdDrag)
                 #else
@@ -615,7 +617,7 @@ struct NodeRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { startEdit() }
-                    .onTapGesture { commit(); onZoom() }
+                    .onTapGesture { tapped() }
                     // Same as the bars: hold and release shows/hides the action strip; hold and move drags the item.
                     // iPhone/iPad: a UIKit long press (see TouchGestures.swift); SwiftUI drag gestures here stop the list from
                     // scrolling on iOS 18+. A swipe fails the hold and scrolls; once lifted, scrolling is disabled.
@@ -757,7 +759,14 @@ struct NodeRow: View {
     #endif
     private func lift() {
         guard drag.id == nil else { return }
+        holdFired = true
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
+    }
+    /// Single tap zooms in. Releasing a long press also completes a tap; that tap is ignored, so a long press only
+    /// shows the action strip (or drops a dragged item) and never zooms.
+    private func tapped() {
+        if holdFired { holdFired = false; return }
+        commit(); onZoom()
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
@@ -782,6 +791,8 @@ struct NodeRow: View {
         // Held and released without moving: a long-tap, which shows the action strip instead of moving the item.
         let still = abs(drag.dx) < 6 && abs(drag.dy) < 6
         drag.dx = 0; drag.dy = 0
+        // The release's tap (if any) arrives about now; stop ignoring taps shortly after.
+        Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); holdFired = false }
         if still { drag.target = nil; onDrop(); toggleSelect(); return }
         withAnimation(.snappy(duration: 0.22)) { onDrop() }
     }
