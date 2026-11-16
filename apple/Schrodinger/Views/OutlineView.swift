@@ -11,6 +11,9 @@ struct OutlineView: View {
     @State private var filter: Filter = .all
     @State private var modeFilter: Mode? = nil
     @State private var showLegend = false
+    /// Header search: words match an item's text; `#tag` words match its tags.
+    @State private var search = ""
+    @FocusState private var searchFocused: Bool
     @FocusState private var focused: UUID?
     /// Row that should switch to its text field and take focus. Focus can't be set on a field that isn't on screen yet,
     /// so the row shows its field first, then claims focus (see NodeRow.claimEdit).
@@ -62,10 +65,10 @@ struct OutlineView: View {
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
-        .safeAreaInset(edge: .top, spacing: 0) { breadcrumbBar(zoomed) }
+        .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) { breadcrumbBar(zoomed); tagBar } }
         // New item: fixed at the bottom right, over the list. Hidden while typing (the keyboard is up).
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
-            if focused == nil && editRequest == nil {
+            if focused == nil && editRequest == nil && !searchFocused {
                 newItemButton {
                     let n = zoomed.map { store.create(parentID: $0.id, position: (kids[$0.id] ?? []).count) } ?? store.create()
                     store.save(); beginEdit(n.id)
@@ -242,8 +245,8 @@ struct OutlineView: View {
                 .allowsHitTesting(!current)
                 .layoutPriority(current ? 1 : 0)
             }
-            // Filler bar and end cap: the row always spans the full width.
-            Rectangle().fill(z == nil ? PanelPalette.lavender : PanelPalette.periwinkle).frame(minWidth: 8).frame(height: h).panelBlink(17)
+            // The middle block is the search field; it takes the remaining width.
+            searchField(h, tint: z == nil ? PanelPalette.lavender : PanelPalette.periwinkle)
             filterMenu
         }
         .buttonStyle(.plain)
@@ -252,10 +255,90 @@ struct OutlineView: View {
         .background(Color.canvas)
         .animation(.snappy(duration: 0.25), value: zoomID)
     }
+
+    /// Search, inside the header's middle block. Type words to match text; tap a tag button (or type #tag) to match tags.
+    private func searchField(_ h: CGFloat, tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .heavy)).foregroundStyle(.black.opacity(0.7))
+            TextField("", text: $search, prompt: Text("SEARCH").foregroundStyle(.black.opacity(0.45)))
+                .textFieldStyle(.plain)
+                .font(PanelPalette.label(.subheadline)).foregroundStyle(.black).tint(.black)
+                .focused($searchFocused)
+                .submitLabel(.search)
+                .onSubmit { searchFocused = false }
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+            if !search.isEmpty || searchFocused {
+                Button { withAnimation(.snappy(duration: 0.25)) { search = "" }; searchFocused = false } label: {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .heavy)).foregroundStyle(.black.opacity(0.7))
+                        .frame(width: 24, height: h).contentShape(Rectangle())
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.leading, 8).padding(.trailing, 2)
+        .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
+        .background(searching ? PanelPalette.peach : tint)
+        .contentShape(Rectangle())
+        .onTapGesture { searchFocused = true }
+        .accessibilityLabel("Search")
+    }
+
+    /// Tag buttons, shown under the header while searching. Tap one to add or remove it from the search.
+    @ViewBuilder private var tagBar: some View {
+        let tags = allTags
+        if (searchFocused || searching) && !tags.isEmpty {
+            let active = Set(searchTerms.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()) })
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 3) {
+                    ForEach(tags, id: \.self) { t in
+                        let on = active.contains(t)
+                        Button { toggleTag(t) } label: {
+                            Text("#" + t.uppercased())
+                                .font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                                .padding(.horizontal, 9).frame(height: 24)
+                                .background(on ? PanelPalette.peach : PanelPalette.color(for: t))
+                        }
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 6)
+            .background(Color.canvas)
+            .transition(.opacity)
+        }
+    }
     private func beginEdit(_ id: UUID) { sel.nodeID = id; editRequest = id }
     private func endEdit() { editRequest = nil; focused = nil }
 
+    /// Search terms: lowercase words; a leading # means "has this tag".
+    private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" } }
+    private var searching: Bool { !searchTerms.isEmpty }
+    private func searchMatches(_ n: Node) -> Bool {
+        let terms = searchTerms
+        if terms.isEmpty { return true }
+        let text = (n.title + "\n" + n.notes + "\n" + n.goal).lowercased()
+        let tags = n.tags
+        return terms.allSatisfy { t in t.hasPrefix("#") ? tags.contains(String(t.dropFirst())) : text.contains(t) }
+    }
+    /// Tags in use across the outline, most used first.
+    private var allTags: [String] {
+        var count: [String: Int] = [:]
+        for n in all { for t in n.tags { count[t, default: 0] += 1 } }
+        return count.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
+    }
+    private func toggleTag(_ tag: String) {
+        var terms = search.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        if let i = terms.firstIndex(where: { $0.lowercased() == "#" + tag }) { terms.remove(at: i) } else { terms.append("#" + tag) }
+        withAnimation(.snappy(duration: 0.25)) { search = terms.joined(separator: " ") }
+    }
+
     private func matches(_ n: Node) -> Bool {
+        if !searchMatches(n) { return false }
         if n.isProject { return true }
         if let m = modeFilter, n.mode != m { return false }
         switch filter {
@@ -281,7 +364,8 @@ struct OutlineView: View {
         let children = kids[n.id] ?? []
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
-        let hidden = (filter != .all || modeFilter != nil) && depth > 0 && !subtreeMatches(n, kids: kids)
+        // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
+        let hidden = ((filter != .all || modeFilter != nil) && depth > 0 || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
@@ -291,10 +375,10 @@ struct OutlineView: View {
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
-                    childrenShown: !n.collapsed || n.id == zoomID)
+                    childrenShown: !n.collapsed || n.id == zoomID || searching)
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
-            if !n.collapsed || n.id == zoomID {
+            if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context, active: active) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
@@ -784,9 +868,13 @@ struct NodeRow: View {
         .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
-            if old == node.id && new != node.id { commit() }
+            if old == node.id && new != node.id {
+                commit()
+                // Left with no text at all: the item is removed (this is how an item is deleted on a touch screen).
+                if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil { deleteItem() }
+            }
         }
-        if infoOpen {
+        if infoOpen && (!node.isProject || node.state == .review) {
             // The item sheet: the action strip on a plain black panel (plus the AI's draft, if any). Notes are edited
             // in the row's own notes field above.
             ItemPanel {
@@ -795,8 +883,6 @@ struct NodeRow: View {
             }
             .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
             .transition(.opacity.combined(with: .move(edge: .top)))
-        } else if sel.nodeID == node.id || editing {
-            actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity)
         }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -863,8 +949,8 @@ struct NodeRow: View {
     /// tap is ignored, so a long press only zooms (or drops a dragged item).
     private func tapped() {
         if holdFired { holdFired = false; return }
-        // An item with no text yet ("New item"): a tap starts typing.
-        if title.trimmingCharacters(in: .whitespaces).isEmpty { startEdit(); return }
+        // An item with no text yet ("New item"), or the selected item: a tap starts typing.
+        if title.trimmingCharacters(in: .whitespaces).isEmpty || sel.nodeID == node.id { startEdit(); return }
         commit()
         if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
     }
@@ -932,52 +1018,23 @@ struct NodeRow: View {
         }
     }
 
-    /// The item's actions, on screen (shown under the selected row), as icons only; the current value shows in the icon. Related choices are grouped into menus:
-    /// responsible, status, mode, move, and more (context, details, delete). Edit and add stay one tap.
+    /// The item sheet's controls: the AI selector (who holds the item), and Approve / Redo while a draft awaits
+    /// review. Everything else is a gesture or a typed tag.
     @ViewBuilder private var actionStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                if editing {
-                    Pill(systemImage: "checkmark", on: true) { commit(); endEdit() }.help("Finish editing").accessibilityLabel("Done")
-                } else {
-                    Pill(systemImage: "pencil") { startEdit() }.help("Edit text").accessibilityLabel("Edit")
-                }
-                if !node.isProject {
-                    PillMenu(systemImage: node.assignee.icon, title: nil) {
-                        Picker("Responsible", selection: assigneeBinding) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }.pickerStyle(.inline)
-                    }.help("Responsible: " + node.assignee.label).accessibilityLabel("Responsible: " + node.assignee.label)
-                    PillMenu(systemImage: node.state.icon, title: nil) {
-                        Picker("Status", selection: stateBinding) { ForEach(TaskState.allCases) { Text($0 == .in_progress ? "doing" : $0.label).tag($0) } }.pickerStyle(.inline)
-                    }.help("Status: " + node.state.label).accessibilityLabel("Status: " + node.state.label)
-                    PillMenu(systemImage: node.mode == nil ? "tag" : nil, title: node.mode?.emoji) {
-                        Picker("Mode", selection: modeBinding) { Text("none").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }.pickerStyle(.inline)
-                    }.help("Mode: " + (node.mode?.rawValue ?? "none")).accessibilityLabel("Mode: " + (node.mode?.rawValue ?? "none"))
-                }
-                PillMenu(systemImage: "arrow.up.and.down.and.arrow.left.and.right", title: nil) {
-                    Button { onKey(.altUp) } label: { Label("Move up", systemImage: "arrow.up") }
-                    Button { onKey(.altDown) } label: { Label("Move down", systemImage: "arrow.down") }
-                    if !node.isProject {
-                        Button { onKey(.tab) } label: { Label("Indent", systemImage: "arrow.right") }
-                        Button { onKey(.shiftTab) } label: { Label("Outdent", systemImage: "arrow.left") }
-                    }
-                }.help("Move").accessibilityLabel("Move")
-                Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below").accessibilityLabel("Add item below")
-                if node.state == .review {
-                    // An AI draft is waiting: approve it, or send it back to be redone.
-                    Pill(systemImage: "checkmark.seal", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
-                    Pill(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
-                }
-                PillMenu(systemImage: "ellipsis", title: nil) {
-                    if hasChildren { Button { toggleChildren() } label: { Label(node.collapsed ? "Show children" : "Hide children", systemImage: node.collapsed ? "chevron.down" : "chevron.up") } }
-                    if node.isYourTurn { Button { try? store.sendBackToAI(node, note: ""); store.save() } label: { Label("Send back to AI", systemImage: "sparkles") } }
-                    Button { openNote() } label: { Label(showNote ? "Edit notes" : "Add notes", systemImage: "text.alignleft") }
-                    Button { toggleInfo() } label: { Label(infoOpen ? "Close sheet" : "Open sheet", systemImage: "rectangle.and.text.magnifyingglass") }
-                    Divider()
-                    Button(role: .destructive) { deleteItem() } label: { Label("Delete", systemImage: "trash") }
-                }.help("More").accessibilityLabel("More")
+        HStack(spacing: 6) {
+            if !node.isProject {
+                // Who holds the item: me, the AI, or both.
+                PillMenu(systemImage: node.assignee.icon, title: node.assignee.label) {
+                    Picker("Responsible", selection: assigneeBinding) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }.pickerStyle(.inline)
+                }.help("Responsible: " + node.assignee.label).accessibilityLabel("Responsible: " + node.assignee.label)
             }
-            .padding(.vertical, 2)
+            if node.state == .review {
+                // An AI draft is waiting: approve it, or send it back to be redone.
+                Pill(systemImage: "checkmark.seal", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
+                Pill(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+            }
         }
+        .padding(.vertical, 2)
     }
     // Bindings for the strip pickers; they write through the store so undo and save work.
     private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
@@ -1042,19 +1099,30 @@ struct NodeRow: View {
     private func commit() {
         guard !gone else { return }
         var t = title.trimmingCharacters(in: .whitespaces)
-        var assignee: Assignee? = nil, mode: Mode? = nil, clearMode = false
+        var assignee: Assignee? = nil, mode: Mode? = nil, clearMode = false, state: TaskState? = nil
         if let r = t.range(of: "\\s*@(ai|me|human|both|shared|none)\\b", options: [.regularExpression, .caseInsensitive]) {
             let tag = t[r].trimmingCharacters(in: .whitespaces).dropFirst().lowercased()
             assignee = ["ai": .ai, "me": .human, "human": .human, "both": .shared, "shared": .shared, "none": .unassigned][String(tag)]
             t.removeSubrange(r)
         }
-        if let r = t.range(of: "\\s*#([a-z]+)\\b", options: [.regularExpression, .caseInsensitive]) {
-            let tag = String(t[r].trimmingCharacters(in: .whitespaces).dropFirst().lowercased())
-            if let m = Mode(rawValue: tag) { mode = m; t.removeSubrange(r) } else if tag == "none" { clearMode = true; t.removeSubrange(r) }
+        // Tags that act: a mode (#call …), #none (clear the mode) and a status (#done #doing #blocked #todo) are applied
+        // and removed from the text. Any other #tag stays in the text and is searchable.
+        for tag in Tags.hashtags(in: t) {
+            if let m = Mode(rawValue: tag) { mode = m }
+            else if tag == "none" { clearMode = true }
+            else if let st = Tags.status[tag] { state = st }
+            else { continue }
+            if let r = t.range(of: "\\s*#" + tag + "(?![\\p{L}\\p{N}_-])", options: [.regularExpression, .caseInsensitive]) { t.removeSubrange(r) }
         }
         t = t.trimmingCharacters(in: .whitespaces)
-        if t != node.title || assignee != nil || mode != nil || clearMode {
-            store.update(node) { n in n.title = t; if let a = assignee, !n.isProject { n.assignee = a }; if let m = mode { n.mode = m }; if clearMode { n.mode = nil } }
+        if t != node.title || assignee != nil || mode != nil || clearMode || state != nil {
+            store.update(node) { n in
+                n.title = t
+                if let a = assignee, !n.isProject { n.assignee = a }
+                if let m = mode { n.mode = m }
+                if clearMode { n.mode = nil }
+                if let st = state, !n.isProject { n.state = st }
+            }
             store.save(); title = t
         }
     }

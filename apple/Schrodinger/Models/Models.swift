@@ -33,6 +33,27 @@ enum Mode: String, Codable, CaseIterable, Identifiable {
 
 enum AIStatus: String, Codable { case pending, done }
 
+/// Hashtags typed into an item's text. A tag is `#` followed by letters, digits, `_` or `-`; tags are lowercased.
+enum Tags {
+    static func hashtags(in text: String) -> [String] {
+        var out: [String] = []
+        var cur: String? = nil
+        for ch in text {
+            if ch == "#" {
+                if let c = cur, !c.isEmpty { out.append(c) }
+                cur = ""
+            } else if let c = cur {
+                if ch.isLetter || ch.isNumber || ch == "_" || ch == "-" { cur = c + String(ch) }
+                else { if !c.isEmpty { out.append(c) }; cur = nil }
+            }
+        }
+        if let c = cur, !c.isEmpty { out.append(c) }
+        return out.map { $0.lowercased() }
+    }
+    /// Tags that set an item's status when typed in its title (and are then removed from the text).
+    static let status: [String: TaskState] = ["done": .done, "doing": .in_progress, "blocked": .blocked, "todo": .todo]
+}
+
 enum Actor: String, Codable { case human, ai, harness }
 
 @Model
@@ -76,6 +97,12 @@ final class Node {
     var mode: Mode? { get { Mode(rawValue: modeRaw) } set { modeRaw = newValue?.rawValue ?? "" } }
     var aiStatus: AIStatus { get { AIStatus(rawValue: aiStatusRaw) ?? .pending } set { aiStatusRaw = newValue.rawValue } }
     /// Shared task whose AI part is done and which the human still has to finish.
+    /// Every tag on the item: hashtags in its title and notes (and, for a project, its goal), plus its mode.
+    var tags: Set<String> {
+        var t = Set(Tags.hashtags(in: title) + Tags.hashtags(in: notes) + Tags.hashtags(in: goal))
+        if let m = mode { t.insert(m.rawValue) }
+        return t
+    }
     var isYourTurn: Bool { assignee == .shared && aiStatus == .done && state != .done }
 }
 
