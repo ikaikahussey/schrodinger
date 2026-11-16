@@ -70,9 +70,15 @@ struct OutlineView: View {
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
+        #if os(iOS)
+        .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
+            if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx) { zoom(to: nil) }
+        }))
+        #else
         .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { v in
             if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(v) { zoom(to: nil) }
         })
+        #endif
         .background(Color.canvas)
         .navigationTitle("")
         #if os(iOS)
@@ -160,6 +166,10 @@ struct OutlineView: View {
     nonisolated static func isBackSwipe(_ v: DragGesture.Value) -> Bool {
         let dx = v.translation.width, dy = v.translation.height
         return dx > 60 && abs(dy) < max(50, dx * 0.5) && v.predictedEndTranslation.width - dx > 80
+    }
+    /// Same test from a translation and horizontal velocity (points/s), for the UIKit pan on iPhone/iPad.
+    nonisolated static func isBackSwipe(dx: CGFloat, dy: CGFloat, vx: CGFloat) -> Bool {
+        dx > 60 && abs(dy) < max(50, dx * 0.5) && vx > 300
     }
 
     /// Quick capture: a new item under a top-level "Thoughts" project (created on first use), focused for typing.
@@ -582,7 +592,11 @@ struct NodeRow: View {
                 .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
                 .onTapGesture { commit(); onZoom() }
-                .simultaneousGesture(handleGesture)   // simultaneous so a swipe starting on the bars still scrolls
+                #if os(iOS)
+                .gesture(holdDrag)
+                #else
+                .simultaneousGesture(handleGesture)
+                #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
                 .help(summary + " · tap to zoom in · long-press for actions · hold and drag to move")
                 .accessibilityElement(children: .ignore)
@@ -603,10 +617,13 @@ struct NodeRow: View {
                     .onTapGesture(count: 2) { startEdit() }
                     .onTapGesture { commit(); onZoom() }
                     // Same as the bars: hold and release shows/hides the action strip; hold and move drags the item.
-                    // Simultaneous, not exclusive: an exclusive long-press+drag on the text (most of the screen) stops the
-                    // list from scrolling on iOS 18. A swipe fails the hold (it moves before 0.25 s) and scrolls as usual;
-                    // once an item is lifted, scrolling is disabled so the drag doesn't also scroll.
+                    // iPhone/iPad: a UIKit long press (see TouchGestures.swift); SwiftUI drag gestures here stop the list from
+                    // scrolling on iOS 18+. A swipe fails the hold and scrolls; once lifted, scrolling is disabled.
+                    #if os(iOS)
+                    .gesture(holdDrag)
+                    #else
                     .simultaneousGesture(handleGesture)
+                    #endif
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -693,7 +710,13 @@ struct NodeRow: View {
         // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: 4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
+        #if os(iOS)
+        .gesture(HorizontalPanGesture(onChanged: { t in pullChanged(t) }, onEnded: { t, vx in
+            pullEnded(isBack: swipeBack && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx))
+        }))
+        #else
         .simultaneousGesture(pullGesture)
+        #endif
         #if os(macOS)
         // Right-click menu on the Mac. On iPhone/iPad a long-press context menu would take over the touch and cancel
         // the hold-and-drag on the bars (and the long press that opens the action strip), so the strip is used there.
@@ -704,19 +727,37 @@ struct NodeRow: View {
     /// Pull to move: drag the row left to outdent (←), right to indent (→). The text moves the way it will land.
     private var pullGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .local)
-            .onChanged { v in
-                guard abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
-                var x = v.translation.width
-                if node.isProject && x < 0 { x = 0 }
-                pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
-            }
-            .onEnded { v in
-                let p = pull
-                withAnimation(.snappy(duration: 0.22)) { pull = 0 }
-                if swipeBack && OutlineView.isBackSwipe(v) { return }   // the page goes back instead
-                if p < -pullThreshold { commit(); onKey(.shiftTab) }
-                else if p > pullThreshold { commit(); onKey(.tab) }
-            }
+            .onChanged { v in pullChanged(v.translation) }
+            .onEnded { v in pullEnded(isBack: swipeBack && OutlineView.isBackSwipe(v)) }
+    }
+    private func pullChanged(_ t: CGSize) {
+        guard drag.id == nil, abs(t.width) > abs(t.height) * 1.2 else { return }
+        var x = t.width
+        if node.isProject && x < 0 { x = 0 }
+        pull = max(-pullThreshold * 1.6, min(pullThreshold * 1.6, x * 0.6))
+    }
+    /// `isBack`: the swipe was the page's "go back" gesture, so it must not also indent.
+    private func pullEnded(isBack: Bool) {
+        let p = pull
+        withAnimation(.snappy(duration: 0.22)) { pull = 0 }
+        if isBack { return }
+        if p < -pullThreshold { commit(); onKey(.shiftTab) }
+        else if p > pullThreshold { commit(); onKey(.tab) }
+    }
+
+    #if os(iOS)
+    /// Hold 0.25 s to lift (release without moving = show/hide the action strip), then move to drag.
+    private var holdDrag: HoldDragGesture {
+        HoldDragGesture(onBegan: { lift() }, onChanged: { t in
+            guard drag.id == node.id else { return }
+            drag.dx = t.width; drag.dy = t.height
+            onDragChanged(drag.dx, drag.dy)
+        }, onEnded: { finishDrag() })
+    }
+    #endif
+    private func lift() {
+        guard drag.id == nil else { return }
+        pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
@@ -728,7 +769,7 @@ struct NodeRow: View {
             .updating($handleActive) { v, active, _ in if case .second(true, _) = v { active = true } }
             .onChanged { v in
                 guard case .second(true, let d) = v else { return }
-                if drag.id == nil { pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0 }
+                lift()
                 guard let d else { return }
                 drag.dx = d.translation.width; drag.dy = d.translation.height
                 onDragChanged(drag.dx, drag.dy)
