@@ -248,10 +248,11 @@ struct OutlineView: View {
     private func updateDropTarget(_ n: Node, dx: CGFloat, dy: CGFloat) {
         if n.id == zoomID { drag.target = nil; return }   // the zoomed item stays put
         guard let own = drag.origin ?? drag.frames[n.id] else { return }
-        let y = own.midY + dy
+        // Reference point: the item's own line, not the middle of the row (an open action strip makes the row taller).
+        let y = own.minY + min(own.height, 40) / 2 + dy
         let rows = visibleOrder(excluding: n.id)
         // Insertion point: before the first row whose middle is below the finger.
-        var idx = rows.firstIndex { $0.frame.midY > y } ?? rows.count
+        var idx = rows.firstIndex { $0.frame.minY + min($0.frame.height, 40) / 2 > y } ?? rows.count
         if zoomID != nil { idx = max(idx, 1) }   // zoomed: nothing can go above the zoomed item
         let above = idx > 0 && idx <= rows.count ? rows[idx - 1] : nil
         let below = idx < rows.count ? rows[idx] : nil
@@ -562,7 +563,7 @@ struct NodeRow: View {
                 .accessibilityAction(named: "Actions") { commit(); toggleSelect() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // Tap zooms into the item; long press shows the action strip (again hides it); double-tap edits the text.
+            // Tap zooms into the item; hold shows the action strip (again hides it), hold and move drags; double-tap edits the text.
             if !editing {
                 Text(title.isEmpty ? "New item" : title)
                     .font(titleFont)
@@ -572,7 +573,8 @@ struct NodeRow: View {
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { startEdit() }
                     .onTapGesture { commit(); onZoom() }
-                    .onLongPressGesture(minimumDuration: 0.35) { commit(); toggleSelect() }
+                    // Same as the bars: hold and release shows/hides the action strip; hold and move drags the item.
+                    .gesture(handleGesture)
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
