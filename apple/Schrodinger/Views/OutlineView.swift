@@ -39,7 +39,10 @@ struct OutlineView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let z = zoomed {
-                        nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)), active: store.project(of: z).projectStatus == .active)
+                        // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
+                        // reads the same as in the full outline.
+                        let context = look.contextColor(rootIndex(z, roots: roots))
+                        nodeTree(z, depth: depthOf(z), kids: kids, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
                         ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
@@ -57,7 +60,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, CGFloat(t.depth - (zoomed.map(depthOf) ?? 0)) * StatusBar.step).padding(.trailing, 16)
+                        .padding(.leading, CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -180,6 +183,13 @@ struct OutlineView: View {
         endEdit()
         zoomingIn = id.map { target in zoomID.map { isInSubtree(target, of: $0) && target != $0 } ?? true } ?? false
         withAnimation(.snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil; sel.infoID = nil }
+    }
+    /// The square colors of `n`'s ancestors, outermost first (what its children would inherit as their trail).
+    private func ancestorColors(_ n: Node, context: Color) -> [Color] {
+        var path: [Node] = []
+        var p = n.parentID
+        while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
+        return path.map { a in (a.isProject ? nil : a.mode.map { look.color(for: $0) }) ?? context }
     }
     private func rootIndex(_ n: Node, roots: [Node]) -> Int {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
@@ -365,7 +375,7 @@ struct OutlineView: View {
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
-        let hidden = ((filter != .all || modeFilter != nil) && depth > 0 || searching) && !subtreeMatches(n, kids: kids)
+        let hidden = ((filter != .all || modeFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
