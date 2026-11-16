@@ -662,18 +662,11 @@ struct NodeRow: View {
             .alignmentGuide(.rowLine) { d in d[.firstTextBaseline] * 0.65 }
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-            if hasChildren {
-                Button { commit(); toggleChildren() } label: {
-                    Image(systemName: node.collapsed ? "plus.square" : "minus.square")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                .help(node.collapsed ? "Show children" : "Hide children")
-                .accessibilityLabel(node.collapsed ? "Show children" : "Hide children")
+            if hasChildren && node.collapsed {
+                // No button: tapping the item zooms in and shows its children. This only marks that some are hidden.
+                Text("\u{2026}").font(.callout.weight(.bold)).foregroundStyle(Color.ink.opacity(0.5))
+                    .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+                    .accessibilityLabel("Children hidden")
             }
         }
         .padding(.vertical, 6)
@@ -686,11 +679,16 @@ struct NodeRow: View {
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }
         }
-        if sel.nodeID == node.id || editing || infoOpen { actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity) }
         if infoOpen {
-            ItemInfo(node: node, onDelete: { if sel.infoID == node.id { sel.infoID = nil }; if sel.nodeID == node.id { sel.nodeID = nil } })
-                .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            // The item sheet: the action strip and one text field, in the panel frame.
+            ItemPanel(label: node.isProject ? "Project" : "Item") {
+                actionStrip
+                ItemSheetBody(node: node)
+            }
+            .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if sel.nodeID == node.id || editing {
+            actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity)
         }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -855,9 +853,16 @@ struct NodeRow: View {
                     }
                 }.help("Move").accessibilityLabel("Move")
                 Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below").accessibilityLabel("Add item below")
+                if node.state == .review {
+                    // An AI draft is waiting: approve it, or send it back to be redone.
+                    Pill(systemImage: "checkmark.seal", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
+                    Pill(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+                }
                 PillMenu(systemImage: "ellipsis", title: nil) {
-                    if !node.isProject { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
-                    Button { toggleInfo() } label: { Label(infoOpen ? "Hide info" : "Info", systemImage: "info.circle") }
+                    if hasChildren { Button { toggleChildren() } label: { Label(node.collapsed ? "Show children" : "Hide children", systemImage: node.collapsed ? "chevron.down" : "chevron.up") } }
+                    if node.isYourTurn { Button { try? store.sendBackToAI(node, note: ""); store.save() } label: { Label("Send back to AI", systemImage: "sparkles") } }
+                    if !node.isProject && !infoOpen { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
+                    Button { toggleInfo() } label: { Label(infoOpen ? "Close sheet" : "Open sheet", systemImage: "rectangle.and.text.magnifyingglass") }
                     Divider()
                     Button(role: .destructive) { deleteItem() } label: { Label("Delete", systemImage: "trash") }
                 }.help("More").accessibilityLabel("More")
@@ -961,17 +966,23 @@ struct PillLabel: View {
     var title: String? = nil
     var on = false
     var chevron = false
+    @Environment(\.panelStyle) private var panelStyle
     var body: some View {
         HStack(spacing: 4) {
-            if let i = systemImage { Image(systemName: i).font(.system(size: 11, weight: .semibold)) }
+            if let i = systemImage { Image(systemName: i).font(.system(size: panelStyle ? 13 : 11, weight: panelStyle ? .bold : .semibold)) }
             if let t = title { Text(t).font(.caption.weight(.medium)).lineLimit(1) }
             if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5) }
         }
-        .padding(.horizontal, title == nil ? 8 : 10).padding(.vertical, 6)
-        .frame(minWidth: 30, minHeight: 28)
-        .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
-        .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
+        .padding(.horizontal, panelStyle ? 14 : (title == nil ? 8 : 10)).padding(.vertical, 6)
+        .frame(minWidth: panelStyle ? 46 : 30, minHeight: panelStyle ? 32 : 28)
+        .background(fill, in: Capsule())
+        .foregroundStyle(panelStyle ? Color.black : (on ? Color.canvas : Color.ink.opacity(0.8)))
         .contentShape(Capsule())
+    }
+    /// In the item sheet: flat colored capsules (peach when on); elsewhere: ink on canvas.
+    private var fill: Color {
+        if panelStyle { return on ? PanelPalette.peach : PanelPalette.color(for: (systemImage ?? "") + (title ?? "")) }
+        return on ? Color.ink : Color.ink.opacity(0.06)
     }
 }
 
