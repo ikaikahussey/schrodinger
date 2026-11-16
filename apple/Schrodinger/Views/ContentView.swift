@@ -5,8 +5,9 @@ enum Panel: String, CaseIterable, Identifiable {
     case outline, batch, review, inbox, calendar, digest, activity, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
-    /// Panels kept in code but not shown in navigation. Calendar is hidden pending a decision to remove it.
-    static let hidden: Set<Panel> = [.review, .calendar, .settings]
+    /// Panels kept in code but not shown in navigation. Calendar is hidden pending a decision to remove it; Batch is
+    /// replaced by the filter bar on the outline.
+    static let hidden: Set<Panel> = [.review, .calendar, .settings, .batch]
     static var navItems: [Panel] { allCases.filter { !hidden.contains($0) } }
     var icon: String {
         switch self {

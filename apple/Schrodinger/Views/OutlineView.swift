@@ -68,6 +68,7 @@ struct OutlineView: View {
             }
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
+        .safeAreaInset(edge: .top, spacing: 0) { filterBar }
         .background(Color.canvas)
         .navigationTitle("")
         #if os(iOS)
@@ -101,14 +102,57 @@ struct OutlineView: View {
                     .keyboardShortcut("n", modifiers: .command)
             }
             ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Picker("Show", selection: $filter) { ForEach(Filter.allCases) { Text($0.label).tag($0) } }
-                    Picker("Mode", selection: $modeFilter) { Text("Any mode").tag(Mode?.none); ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) } }
-                    Divider()
-                    Toggle("Show bar legend", isOn: $showLegend)
-                } label: { Image(systemName: filter == .all && modeFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") }
+                Button { withAnimation(.snappy(duration: 0.2)) { showLegend.toggle() } } label: { Image(systemName: showLegend ? "info.circle.fill" : "info.circle") }
+                    .help(showLegend ? "Hide the square legend" : "Show the square legend")
             }
         }
+    }
+
+    /// Filters, always on screen above the outline: who/what status on the first row, mode (with its color) on the second.
+    private var filterBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Filter.allCases) { f in
+                        Button { withAnimation(.snappy(duration: 0.25)) { filter = f } } label: { PillLabel(title: f.label, on: filter == f) }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(filter == f ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Mode.allCases) { m in
+                        let on = modeFilter == m
+                        Button { withAnimation(.snappy(duration: 0.25)) { modeFilter = on ? nil : m } } label: {
+                            HStack(spacing: 5) {
+                                StatusBar(state: .todo, assignee: .human, isProject: false, color: look.color(for: m)).scaleEffect(0.75)
+                                    .frame(width: 12, height: 12)
+                                Text(m.rawValue).font(look.font.font(.caption, weight: .medium))
+                            }
+                            .padding(.horizontal, 9).padding(.vertical, 6)
+                            .frame(minHeight: 28)
+                            .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
+                            .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Mode " + m.rawValue)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                    if filter != .all || modeFilter != nil {
+                        Button { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { PillLabel(systemImage: "xmark", title: "Clear") }
+                            .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.canvas)
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.ink.opacity(0.08)).frame(height: 0.5) }
     }
 
     /// Quick capture: a new item under a top-level "Thoughts" project (created on first use), focused for typing.
