@@ -789,8 +789,8 @@ struct NodeRow: View {
             if old == node.id && new != node.id { commit() }
         }
         if infoOpen {
-            // The item sheet: the action strip and one text field, in the panel frame.
-            ItemPanel(label: node.isProject ? "Project" : "Item") {
+            // The item sheet: the action strip and one text field on a plain black panel.
+            ItemPanel {
                 actionStrip
                 ItemSheetBody(node: node)
             }

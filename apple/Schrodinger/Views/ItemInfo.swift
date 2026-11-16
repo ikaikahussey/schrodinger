@@ -1,9 +1,9 @@
 import SwiftUI
 import SwiftData
 
-// The item sheet: opened by tapping an item's squares. It is the action strip plus one text field, framed in a
-// panel styled after starship computer displays (black field, rounded elbow rail, flat color blocks, capsule
-// buttons, condensed capitals).
+// The item sheet: opened by tapping an item's squares. It is the action strip plus one text field on a plain black
+// panel, with flat colored capsule buttons. The decorative frame (rail, elbows, bars) lives only in the outline's
+// breadcrumb bar and new-item button.
 
 /// Panel palette. Fixed colors on black: the panel looks the same in light and dark mode.
 enum PanelPalette {
@@ -50,49 +50,17 @@ extension EnvironmentValues {
     @Entry var panelStyle = false
 }
 
-/// The frame: a rail down the left with rounded elbows into a header bar and a footer bar; content sits inside.
+/// The sheet's container: a plain black panel. No rail, bars or labels; only the controls and the text field.
 struct ItemPanel<Content: View>: View {
-    let label: String
     @ViewBuilder var content: () -> Content
-    private let rail: CGFloat = 30
-    private let bar: CGFloat = 14
-    private let gap: CGFloat = 3
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Header bar: block · label · end cap
-            HStack(spacing: gap) {
-                Rectangle().fill(PanelPalette.orange).frame(width: 40, height: bar).panelBlink(1)
-                Rectangle().fill(PanelPalette.lavender).frame(height: bar).panelBlink(2)
-                Text(label.uppercased())
-                    .font(PanelPalette.label(.subheadline)).foregroundStyle(PanelPalette.orange)
-                    .lineLimit(1).fixedSize()
-                    .padding(.horizontal, 4)
-                Capsule().fill(PanelPalette.peach).frame(width: 26, height: bar).panelBlink(3)
-            }
-            content()
-            // Footer bar
-            HStack(spacing: gap) {
-                Rectangle().fill(PanelPalette.periwinkle).frame(height: bar / 2).panelBlink(4)
-                Rectangle().fill(PanelPalette.rose).frame(width: 60, height: bar / 2).panelBlink(5)
-                Capsule().fill(PanelPalette.orange).frame(width: 18, height: bar / 2).panelBlink(6)
-            }
-        }
-        .padding(.leading, rail + 10)
-        // The rail takes the content's height: elbow at the top into the header, elbow at the bottom into the footer.
-        .overlay(alignment: .leading) {
-            VStack(spacing: gap) {
-                UnevenRoundedRectangle(topLeadingRadius: rail * 0.8).fill(PanelPalette.orange).frame(height: 40).panelBlink(7)
-                Rectangle().fill(PanelPalette.peach).frame(maxHeight: .infinity).panelBlink(8)
-                Rectangle().fill(PanelPalette.lavender).frame(height: 18).panelBlink(9)
-                UnevenRoundedRectangle(bottomLeadingRadius: rail * 0.8).fill(PanelPalette.periwinkle).frame(height: 28).panelBlink(10)
-            }
-            .frame(width: rail)
-        }
-        .padding(10)
-        .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
-        .environment(\.panelStyle, true)
-        .environment(\.colorScheme, .dark)   // menus and the text cursor read correctly on black
+        VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
+            .environment(\.panelStyle, true)
+            .environment(\.colorScheme, .dark)   // menus and the text cursor read correctly on black
     }
 }
 
