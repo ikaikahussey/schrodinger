@@ -290,7 +290,8 @@ struct OutlineView: View {
                     onDrop: { performDrop(n) },
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
                     swipeBack: zoomID != nil,
-                    runnable: active ? runnable(n, kids: kids) : [])
+                    runnable: active ? runnable(n, kids: kids) : [],
+                    childrenShown: !n.collapsed || n.id == zoomID)
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID {
@@ -587,6 +588,8 @@ struct NodeRow: View {
     var swipeBack = false
     /// Items the AI can work on now, in this item or under it. Non-empty = show the play button.
     var runnable: [UUID] = []
+    /// The item's children are on screen (it is expanded, or it is the item zoomed into).
+    var childrenShown = true
     @Environment(HarnessEngine.self) private var harness
     @State private var runFailure: String? = nil
     @State private var title: String = ""
@@ -756,8 +759,8 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && node.collapsed {
-                // Children are hidden: tap the … to show them.
+            if hasChildren && !childrenShown {
+                // Children are hidden: tap the … to show them. Never shown while the children are on screen.
                 Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
                     Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
                         .frame(width: 36, height: 32)
