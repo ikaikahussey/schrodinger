@@ -860,11 +860,9 @@ struct NodeRow: View {
         return parts.joined(separator: " · ")
     }
 
-    /// Right edge: due date, "your turn", or counts for a parent. The bars carry everything else.
+    /// Right edge: due date and "your turn" for a single item. Parents show nothing here. The bars carry everything else.
     @ViewBuilder private var marker: some View {
-        if hasChildren && !node.isProject {
-            Text("\(leafCount.done)/\(leafCount.total)").font(.caption2.monospacedDigit()).foregroundStyle(Color.ink.opacity(0.4))
-        } else if !node.isProject {
+        if !hasChildren && !node.isProject {
             HStack(spacing: 8) {
                 if let due = node.due, node.state != .done {
                     Text(due.formatted(.dateTime.month(.abbreviated).day())).font(.caption2).foregroundStyle(due < Date() ? Color.red : Color.ink.opacity(0.45))
