@@ -177,12 +177,12 @@ struct OutlineView: View {
             Button { finishTyping(); sel.panel = .settings } label: { Label("Settings", systemImage: "gear") }
             #endif
         } label: {
-            // The header's right end: a block with a rounded right edge. Peach while a filter is on.
+            // The header's right end: a circle (like the + button). It takes the "on" color while a filter is on.
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .heavy)).foregroundStyle(PanelPalette.text(on: filtering ? PanelPalette.peach : PanelPalette.orange))
-                .padding(.leading, 10).padding(.trailing, 13).frame(height: Self.headerHeight)
-                .background { UnevenRoundedRectangle(bottomTrailingRadius: Self.headerHeight / 2, topTrailingRadius: Self.headerHeight / 2).fill(filtering ? PanelPalette.peach : PanelPalette.orange) }
-                .contentShape(Rectangle())
+                .frame(width: Self.headerHeight + 4, height: Self.headerHeight + 4)
+                .background(filtering ? PanelPalette.peach : PanelPalette.orange, in: Circle())
+                .contentShape(Circle())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .help(filtering ? "Filters (on)" : "Filters")
