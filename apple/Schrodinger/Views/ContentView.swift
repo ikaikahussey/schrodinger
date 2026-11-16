@@ -40,7 +40,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             #if os(macOS)
-            // Sidebar + one panel. An item's details open inline in the outline (the ⓘ button), not in a separate column.
+            // Sidebar + one panel. An item's details open inline in the outline (tap its squares), not in a separate column.
             NavigationSplitView {
                 List(selection: Binding(get: { sel.panel }, set: { if let p = $0 { sel.panel = p } })) {
                     ForEach(Panel.navItems) { p in
@@ -77,7 +77,7 @@ struct ContentView: View {
         let s = Store(ctx)
         switch p {
         case .inbox: return openProposals.count
-        // Drafts to review and shared items waiting on you; open their ⓘ in the outline (or filter by Review).
+        // Drafts to review and shared items waiting on you; tap their squares in the outline (or filter by Review).
         case .outline: return s.allNodes().filter { $0.state == .review || $0.isYourTurn }.count
         default: return 0
         }
