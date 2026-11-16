@@ -624,6 +624,8 @@ struct DepthBars: View {
                 Rectangle().fill(i < trail.count ? trail[i] : Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
             }
             StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
+                // Top level: the circle sits half off the left edge of the screen, so only its right half shows.
+                .offset(x: depth == 0 ? -StatusBar.w / 2 : 0)
         }
         .frame(minWidth: CGFloat(depth + 1) * StatusBar.step, alignment: .leading)
         .contentShape(Rectangle())
