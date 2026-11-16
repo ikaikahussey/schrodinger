@@ -73,6 +73,21 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(s.inbox().contains { $0.type == .new_task && $0.projectID == empty.id }, "dismissed proposals are not re-raised")
     }
 
+    /// An item's play button runs only that item's AI work.
+    func testRunScopedToOneItem() async throws {
+        AppSettings.shared.provider = .mock
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P"); p.goal = "ship"
+        let a = s.create(title: "one", parentID: p.id, assignee: .ai)
+        let b = s.create(title: "two", parentID: p.id, assignee: .ai)
+        s.save()
+        XCTAssertTrue(ProjectAgent.aiTurn(a)); XCTAssertTrue(ProjectAgent.aiTurn(b))
+        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider(), only: [a.id]).run()
+        XCTAssertEqual(a.state, .review, "the chosen item was drafted")
+        XCTAssertEqual(b.state, .unset, "other AI items were left alone")
+        XCTAssertFalse(ProjectAgent.aiTurn(a), "nothing left to run on a drafted item")
+    }
+
     func testUndoAndPathJail() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P"); let t = s.create(title: "t", parentID: p.id, assignee: .ai)

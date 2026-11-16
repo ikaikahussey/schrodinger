@@ -1,18 +1,107 @@
 import SwiftUI
 import SwiftData
 
-/// Everything about one item, shown in the outline under its action strip when its squares are tapped:
-/// the AI's draft (approve / redo), the shared "your turn" step, context, due date, project brief,
-/// dependencies and activity. Replaces the separate Review screen.
-struct ItemInfo: View {
+// The item sheet: opened by tapping an item's squares. It is the action strip plus one text field, framed in a
+// panel styled after starship computer displays (black field, rounded elbow rail, flat color blocks, capsule
+// buttons, condensed capitals).
+
+/// Panel palette. Fixed colors on black: the panel looks the same in light and dark mode.
+enum PanelPalette {
+    static let orange = Color(red: 1.00, green: 0.60, blue: 0.20)
+    static let peach = Color(red: 1.00, green: 0.80, blue: 0.60)
+    static let lavender = Color(red: 0.80, green: 0.60, blue: 0.80)
+    static let periwinkle = Color(red: 0.60, green: 0.60, blue: 1.00)
+    static let rose = Color(red: 0.80, green: 0.40, blue: 0.40)
+    static let field = Color.black
+    static let all = [orange, peach, lavender, periwinkle, rose]
+    /// A stable color for a control, picked from what it shows, so neighbours differ but nothing flickers.
+    static func color(for key: String) -> Color {
+        all[Int(key.unicodeScalars.reduce(UInt32(0)) { ($0 &* 31) &+ $1.value } % UInt32(all.count))]
+    }
+    static func label(_ style: Font.TextStyle = .caption) -> Font { .system(style, design: .default, weight: .bold).width(.condensed) }
+}
+
+/// A slow, soft pulse for the panel's color blocks: each block dims slightly and comes back, on its own period, so
+/// the display looks live without flashing. Off when Reduce Motion is on.
+struct PanelBlink: ViewModifier {
+    /// Picks the block's period and phase; neighbours should use different numbers.
+    let seed: Int
+    @State private var dim = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.55 : 1)
+            .onAppear {
+                guard !reduceMotion, !dim else { return }
+                let period = 1.8 + Double(seed % 5) * 0.45          // 1.8 – 3.6 s per half cycle
+                let delay = Double((seed * 7) % 11) * 0.3            // 0 – 3 s before the first dim
+                withAnimation(.easeInOut(duration: period).repeatForever(autoreverses: true).delay(delay)) { dim = true }
+            }
+    }
+}
+extension View {
+    /// Gentle blink for a panel color block. See `PanelBlink`.
+    func panelBlink(_ seed: Int) -> some View { modifier(PanelBlink(seed: seed)) }
+}
+
+extension EnvironmentValues {
+    /// True inside the item sheet: pills draw as flat colored capsules with black glyphs.
+    @Entry var panelStyle = false
+}
+
+/// The frame: a rail down the left with rounded elbows into a header bar and a footer bar; content sits inside.
+struct ItemPanel<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: () -> Content
+    private let rail: CGFloat = 30
+    private let bar: CGFloat = 14
+    private let gap: CGFloat = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header bar: block · label · end cap
+            HStack(spacing: gap) {
+                Rectangle().fill(PanelPalette.orange).frame(width: 40, height: bar).panelBlink(1)
+                Rectangle().fill(PanelPalette.lavender).frame(height: bar).panelBlink(2)
+                Text(label.uppercased())
+                    .font(PanelPalette.label(.subheadline)).foregroundStyle(PanelPalette.orange)
+                    .lineLimit(1).fixedSize()
+                    .padding(.horizontal, 4)
+                Capsule().fill(PanelPalette.peach).frame(width: 26, height: bar).panelBlink(3)
+            }
+            content()
+            // Footer bar
+            HStack(spacing: gap) {
+                Rectangle().fill(PanelPalette.periwinkle).frame(height: bar / 2).panelBlink(4)
+                Rectangle().fill(PanelPalette.rose).frame(width: 60, height: bar / 2).panelBlink(5)
+                Capsule().fill(PanelPalette.orange).frame(width: 18, height: bar / 2).panelBlink(6)
+            }
+        }
+        .padding(.leading, rail + 10)
+        // The rail takes the content's height: elbow at the top into the header, elbow at the bottom into the footer.
+        .overlay(alignment: .leading) {
+            VStack(spacing: gap) {
+                UnevenRoundedRectangle(topLeadingRadius: rail * 0.8).fill(PanelPalette.orange).frame(height: 40).panelBlink(7)
+                Rectangle().fill(PanelPalette.peach).frame(maxHeight: .infinity).panelBlink(8)
+                Rectangle().fill(PanelPalette.lavender).frame(height: 18).panelBlink(9)
+                UnevenRoundedRectangle(bottomLeadingRadius: rail * 0.8).fill(PanelPalette.periwinkle).frame(height: 28).panelBlink(10)
+            }
+            .frame(width: rail)
+        }
+        .padding(10)
+        .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
+        .environment(\.panelStyle, true)
+        .environment(\.colorScheme, .dark)   // menus and the text cursor read correctly on black
+    }
+}
+
+/// The sheet's one text field, and — only when the AI has written one — its draft to read.
+/// Tasks: the field is the item's context. Projects: the field is the goal (what the project's agent works toward).
+struct ItemSheetBody: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var node: Node
-    /// Called before the node is deleted (clears selection / open info).
-    var onDelete: () -> Void = {}
-    @State private var feedback = ""
-    @State private var calendarMessage: String? = nil
     private var store: Store { Store(ctx) }
-    private var font: AppFontFamily { Appearance.shared.font }
 
     var body: some View {
         // Reading a deleted model traps; this view can render once more after Delete.
@@ -20,158 +109,30 @@ struct ItemInfo: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if node.state == .review || (node.artifact.map { !$0.isEmpty } ?? false) { draftSection }
-            if node.isYourTurn { yourTurnSection }
-            if node.isProject { projectSection } else { taskSection }
-            DisclosureGroup("Activity") {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.activity(for: node.id)) { a in ActivityLine(entry: a) }
-                }
-            }
-            .font(font.font(.footnote, weight: .medium))
-            Button(role: .destructive) { onDelete(); store.delete(node); store.save() } label: { Label("Delete", systemImage: "trash") }
-                .font(font.font(.footnote))
-        }
-        .font(font.font(.callout))
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.ink.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    // MARK: Draft (AI output) — approve or send back with a note
-
-    @ViewBuilder private var draftSection: some View {
-        section(node.state == .review ? "Draft for your review" : "Draft") {
-            if let a = node.artifact, !a.isEmpty {
-                ScrollView {
-                    Text(a).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 300)
-                .padding(8)
-                .background(Color.canvas, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.ink.opacity(0.12)))
+        VStack(alignment: .leading, spacing: 10) {
+            if node.isProject {
+                PanelText(placeholder: "GOAL", value: node.goal) { v in store.update(node) { $0.goal = v }; store.save() }
             } else {
-                Text("No draft text yet.").foregroundStyle(Color.ink.opacity(0.5))
+                PanelText(placeholder: "NOTES", value: node.notes) { v in store.update(node) { $0.notes = v }; store.save() }
             }
-            if node.state == .review {
-                noteField("Note for the AI (what to change)")
-                HStack(spacing: 10) {
-                    Button("Approve") { try? store.approve(node); store.save() }.buttonStyle(.borderedProminent)
-                    Button("Redo") { try? store.reject(node, note: feedback); store.save(); feedback = "" }.buttonStyle(.bordered)
-                    Spacer()
-                    if let a = node.artifact, !a.isEmpty { copyButton(a) }
-                }
-            } else if let a = node.artifact, !a.isEmpty {
-                HStack { Spacer(); copyButton(a) }
-            }
-        }
-    }
-
-    // MARK: Shared task: AI part done, the human finishes
-
-    @ViewBuilder private var yourTurnSection: some View {
-        section("Your turn — the AI part is done") {
-            noteField("Note for the AI (if sending back)")
-            HStack(spacing: 10) {
-                Button("Done") { store.update(node) { $0.state = .done }; store.save() }.buttonStyle(.borderedProminent)
-                Button("Send back to AI") { try? store.sendBackToAI(node, note: feedback); store.save(); feedback = "" }.buttonStyle(.bordered)
-            }
-        }
-    }
-
-    // MARK: Task details
-
-    @ViewBuilder private var taskSection: some View {
-        section("Context") {
-            InfoText(placeholder: "Background, links, anything the AI should know", value: node.notes) { v in store.update(node) { $0.notes = v }; store.save() }
-        }
-        section("Due") {
-            HStack {
-                Toggle("Due date", isOn: Binding(get: { node.due != nil }, set: { on in store.update(node) { $0.due = on ? Date() : nil }; store.save() }))
-                    .labelsHidden()
-                if node.due != nil {
-                    DatePicker("", selection: Binding(get: { node.due ?? Date() }, set: { v in store.update(node) { $0.due = v }; store.save() }), displayedComponents: .date)
-                        .labelsHidden()
-                    Spacer()
-                    Button("Add to calendar") { addToCalendar() }.font(font.font(.footnote))
-                } else {
-                    Text("None").foregroundStyle(Color.ink.opacity(0.5))
+            if let a = node.artifact, !a.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(node.state == .review ? "DRAFT · AWAITING REVIEW" : "DRAFT")
+                        .font(PanelPalette.label(.caption2)).foregroundStyle(PanelPalette.periwinkle)
+                    ScrollView {
+                        Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(PanelPalette.peach)
+                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 260)
                 }
             }
-            if let m = calendarMessage { Text(m).font(font.font(.caption)).foregroundStyle(Color.ink.opacity(0.6)) }
-        }
-        if !node.acceptanceNote.isEmpty {
-            section("Review feedback") {
-                InfoText(placeholder: "", value: node.acceptanceNote) { v in store.update(node) { $0.acceptanceNote = v }; store.save() }
-            }
-        }
-        DepsPicker(node: node).font(font.font(.footnote, weight: .medium))
-    }
-
-    // MARK: Project brief (what the project's agent works from)
-
-    @ViewBuilder private var projectSection: some View {
-        section("Goal") {
-            InfoText(placeholder: "What done looks like", value: node.goal) { v in store.update(node) { $0.goal = v }; store.save() }
-        }
-        section("Success criteria") {
-            InfoText(placeholder: "Checkable criteria", value: node.successCriteria) { v in store.update(node) { $0.successCriteria = v }; store.save() }
-        }
-        section("Constraints for the AI") {
-            InfoText(placeholder: "What the AI must or must not do", value: node.constraints) { v in store.update(node) { $0.constraints = v }; store.save() }
-        }
-        section("Project") {
-            Picker("Status", selection: Binding(get: { node.projectStatus }, set: { v in store.update(node) { $0.projectStatus = v }; store.save() })) {
-                ForEach(ProjectStatus.allCases) { Text($0.rawValue).tag($0) }
-            }
-            CalendarLinkPicker(node: node)
-        }
-    }
-
-    // MARK: Pieces
-
-    private func section<C: View>(_ title: String, @ViewBuilder _ rows: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased()).font(font.font(.caption2, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.55))
-            rows()
-        }
-    }
-
-    private func noteField(_ placeholder: String) -> some View {
-        TextField(placeholder, text: $feedback, axis: .vertical)
-            .textFieldStyle(.plain)
-            .padding(8)
-            .background(Color.canvas, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.ink.opacity(0.12)))
-    }
-
-    private func copyButton(_ s: String) -> some View {
-        Button { copy(s) } label: { Label("Copy", systemImage: "doc.on.doc") }.font(font.font(.footnote))
-    }
-
-    private func copy(_ s: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string)
-        #else
-        UIPasteboard.general.string = s
-        #endif
-    }
-
-    private func addToCalendar() {
-        guard let due = node.due else { return }
-        let title = node.title, project = store.project(of: node).title
-        Task {
-            do { _ = try await CalendarService.shared.addTask(title: title, due: due, notes: "Schrodinger · \(project)"); calendarMessage = "Added to your calendar." }
-            catch { calendarMessage = error.localizedDescription }
         }
     }
 }
 
 /// Multi-line text that saves when editing ends (Return, focus leaves, or the view goes away) rather than on every
 /// keystroke, so one edit is one undo step and one activity entry.
-struct InfoText: View {
+struct PanelText: View {
     let placeholder: String
     let value: String
     let commit: (String) -> Void
@@ -179,12 +140,15 @@ struct InfoText: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField(placeholder, text: $text, axis: .vertical)
+        TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(PanelPalette.orange.opacity(0.45)), axis: .vertical)
             .textFieldStyle(.plain)
+            .font(.system(.body, design: .default, weight: .medium).width(.condensed))
+            .foregroundStyle(PanelPalette.orange)
+            .tint(PanelPalette.peach)
+            .lineLimit(2...12)
             .focused($focused)
-            .padding(8)
-            .background(Color.canvas, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.ink.opacity(focused ? 0.35 : 0.12)))
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .overlay(alignment: .leading) { Rectangle().fill(focused ? PanelPalette.peach : PanelPalette.orange.opacity(0.6)).frame(width: 3) }
             .onAppear { text = value }
             .onChange(of: value) { _, v in if !focused { text = v } }
             .onChange(of: focused) { _, f in if !f { save() } }

@@ -34,25 +34,17 @@ struct OutlineView: View {
         ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if let z = zoomed { breadcrumb(z) }
                 VStack(alignment: .leading, spacing: 0) {
                     if let z = zoomed {
-                        nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)))
+                        nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)), active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i)) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
                 .transition(.asymmetric(
                     insertion: .scale(scale: zoomingIn ? 0.94 : 1.06, anchor: .top).combined(with: .opacity),
                     removal: .opacity))
-                Button {
-                    let n = zoomed.map { store.create(parentID: $0.id, position: (kids[$0.id] ?? []).count) } ?? store.create()
-                    store.save(); beginEdit(n.id)
-                } label: {
-                    HStack(spacing: 10) { Image(systemName: "plus").font(.caption.weight(.semibold)); Text("New item").font(look.font.font(.callout)) }
-                }
-                .buttonStyle(.plain).foregroundStyle(.tertiary).padding(.vertical, 10).padding(.leading, 16)
                 if showLegend { BarLegend().padding(.top, 24) }
             }
             // Squares start at the first pixel on the left; text keeps its margin on the right.
@@ -69,6 +61,22 @@ struct OutlineView: View {
             }
         }
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
+        // Always present, fixed height: the outline's top edge does not move when zooming in or out.
+        .safeAreaInset(edge: .top, spacing: 0) { breadcrumbBar(zoomed) }
+        // New item: fixed at the bottom right, over the list. Hidden while typing (the keyboard is up).
+        .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+            if focused == nil && editRequest == nil {
+                newItemButton {
+                    let n = zoomed.map { store.create(parentID: $0.id, position: (kids[$0.id] ?? []).count) } ?? store.create()
+                    store.save(); beginEdit(n.id)
+                    // The new item goes at the end of the list: bring it into view.
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(150))
+                        withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(n.id, anchor: .center) }
+                    }
+                }
+            }
+        }
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
@@ -196,26 +204,75 @@ struct OutlineView: View {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
         return roots.firstIndex { $0.id == r.id } ?? 0
     }
-    /// Path back out: All › ancestors. The zoomed item itself is the first row below.
-    private func breadcrumb(_ z: Node) -> some View {
-        var path: [Node] = []
-        var p = z.parentID
-        while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                Button { zoom(to: nil) } label: { Label("All", systemImage: "chevron.left").labelStyle(.titleAndIcon) }
-                    .keyboardShortcut("[", modifiers: .command)
-                ForEach(path) { a in
-                    Text("›").foregroundStyle(Color.ink.opacity(0.3))
-                    Button(a.title.isEmpty ? "Untitled" : a.title) { zoom(to: a.id) }.lineLimit(1)
+    /// "+ NEW ITEM" in the panel style: two small color blocks leading into a labeled block with a rounded right end.
+    private func newItemButton(_ action: @escaping () -> Void) -> some View {
+        let h: CGFloat = 34
+        return Button(action: action) {
+            HStack(spacing: 3) {
+                Rectangle().fill(PanelPalette.periwinkle).frame(width: 10, height: h).panelBlink(21)
+                Rectangle().fill(PanelPalette.lavender).frame(width: 18, height: h).panelBlink(22)
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 13, weight: .heavy))
+                    Text("NEW ITEM").font(PanelPalette.label(.subheadline))
                 }
+                .foregroundStyle(.black)
+                .padding(.leading, 10).padding(.trailing, 16).frame(height: h)
+                .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(PanelPalette.orange).panelBlink(23) }
             }
-            .buttonStyle(.plain)
-            .font(look.font.font(.footnote, weight: .medium))
-            .foregroundStyle(Color.ink.opacity(0.6))
-            .padding(.leading, 16).padding(.vertical, 8)
+            .padding(4)
+            .background(PanelPalette.field, in: UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6, bottomTrailingRadius: h / 2 + 4, topTrailingRadius: h / 2 + 4))
+            .contentShape(Rectangle())
         }
-        .transition(.opacity)
+        .buttonStyle(.plain)
+        .padding(.trailing, 14).padding(.bottom, 10)
+        .help("New item at the end of the list")
+        .accessibilityLabel("New item")
+    }
+
+    /// Where you are, as a row of flat color blocks: ALL, then the path down to the zoomed item. Tap a block to go
+    /// there. Shown whether or not the outline is zoomed, at a fixed height.
+    private func breadcrumbBar(_ z: Node?) -> some View {
+        var path: [Node] = []
+        var p = z
+        while let x = p { path.insert(x, at: 0); p = x.parentID.flatMap { store.node($0) } }
+        let shown = Array(path.suffix(3))            // deepest three levels; earlier ones fold into "…"
+        let h: CGFloat = 24
+        return HStack(spacing: 3) {
+            Button { zoom(to: nil) } label: {
+                Text("ALL").font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                    .padding(.leading, 14).padding(.trailing, 8).frame(height: h)
+                    .background { UnevenRoundedRectangle(topLeadingRadius: h / 2, bottomLeadingRadius: h / 2).fill(PanelPalette.orange).panelBlink(11) }
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .allowsHitTesting(z != nil)   // not dimmed at the top level: the block is part of the frame
+            .accessibilityLabel("All items")
+            if path.count > shown.count {
+                Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                    .padding(.horizontal, 8).frame(height: h).background { PanelPalette.rose.panelBlink(12) }
+            }
+            ForEach(Array(shown.enumerated()), id: \.element.id) { i, a in
+                let current = a.id == z?.id
+                Button { zoom(to: a.id) } label: {
+                    Text((a.title.isEmpty ? "Untitled" : a.title).uppercased())
+                        .font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                        .lineLimit(1).truncationMode(.tail)
+                        .padding(.horizontal, 8).frame(maxWidth: current ? 180 : 110).frame(height: h)
+                        .fixedSize(horizontal: !current, vertical: false)
+                        // Only the block's color pulses; its label stays steady and readable.
+                        .background { (current ? PanelPalette.peach : [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3]).panelBlink(13 + i) }
+                }
+                .allowsHitTesting(!current)
+                .layoutPriority(current ? 1 : 0)
+            }
+            // Filler bar and end cap: the row always spans the full width.
+            Rectangle().fill(z == nil ? PanelPalette.lavender : PanelPalette.periwinkle).frame(minWidth: 8).frame(height: h).panelBlink(17)
+            Capsule().fill(PanelPalette.orange).frame(width: 22, height: h).panelBlink(18)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(Color.canvas)
+        .animation(.snappy(duration: 0.25), value: zoomID)
     }
     private func beginEdit(_ id: UUID) { sel.nodeID = id; editRequest = id }
     private func endEdit() { editRequest = nil; focused = nil }
@@ -234,7 +291,15 @@ struct OutlineView: View {
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
 
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], trail: [Color], context: Color) -> AnyView {
+    /// Items under `n` (or `n` itself) the AI can work on right now. Empty = nothing to run, no play button.
+    private func runnable(_ n: Node, kids: [UUID?: [Node]]) -> [UUID] {
+        let c = kids[n.id] ?? []
+        if c.isEmpty { return !n.isProject && ProjectAgent.aiTurn(n) && store.depsSatisfied(n) ? [n.id] : [] }
+        return c.flatMap { runnable($0, kids: kids) }
+    }
+
+    /// `active`: the item's project is active (paused and archived projects don't run).
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
@@ -246,11 +311,12 @@ struct OutlineView: View {
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) },
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
-                    swipeBack: zoomID != nil)
+                    swipeBack: zoomID != nil,
+                    runnable: active ? runnable(n, kids: kids) : [])
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID {
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context, active: active) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
         })
@@ -533,6 +599,10 @@ struct NodeRow: View {
     var onZoom: () -> Void = {}
     /// The page handles a quick right swipe as "back" (zoomed in), so the row must not also indent on it.
     var swipeBack = false
+    /// Items the AI can work on now, in this item or under it. Non-empty = show the play button.
+    var runnable: [UUID] = []
+    @Environment(HarnessEngine.self) private var harness
+    @State private var runFailure: String? = nil
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
     /// A long press lifted this item during the current touch; the tap that its release completes must not zoom.
@@ -571,6 +641,42 @@ struct NodeRow: View {
     }
     private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
     private var infoOpen: Bool { sel.infoID == node.id }
+
+    /// This row's work is part of the run in progress.
+    private var runningHere: Bool {
+        guard harness.running else { return false }
+        guard let scope = harness.runningScope else { return true }
+        return runnable.contains { scope.contains($0) }
+    }
+    /// Play: have the AI do its work on this item (for a parent, on the ready items under it). Shown only when
+    /// there is something to run.
+    @ViewBuilder private var runButton: some View {
+        if runningHere {
+            ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Running")
+        } else {
+            Button { run() } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(harness.running)
+            .opacity(harness.running ? 0.3 : 1)
+            .help(runnable.count == 1 ? "Run: have the AI work on this" : "Run: have the AI work on \(runnable.count) items here")
+            .accessibilityLabel(runnable.count == 1 ? "Run" : "Run \(runnable.count) items")
+        }
+    }
+    private func run() {
+        commit()
+        let ids = Set(runnable), project = store.project(of: node).id
+        Task { @MainActor in
+            let out = await harness.runOnce(projectID: project, only: ids)
+            let bad = out.flatMap { $0.components(separatedBy: "\n") }.filter { $0.hasPrefix("failed:") || $0.contains(": error") }
+            if !bad.isEmpty { runFailure = bad.joined(separator: "\n") }
+        }
+    }
     /// Tap on the squares: show the action strip with the item's drafts, context and details under it; again hides both.
     private func toggleInfo() {
         withAnimation(.snappy(duration: 0.22)) {
@@ -610,7 +716,8 @@ struct NodeRow: View {
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // Tap zooms into the item; hold shows the action strip (again hides it), hold and move drags; double-tap edits the text.
+            // Tap shows/hides the item's children; hold zooms in (again on the zoomed item zooms out); hold and move drags;
+            // double-tap edits the text.
             if !editing {
                 Text(title.isEmpty ? "New item" : title)
                     .font(titleFont)
@@ -662,18 +769,12 @@ struct NodeRow: View {
             .alignmentGuide(.rowLine) { d in d[.firstTextBaseline] * 0.65 }
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-            if hasChildren {
-                Button { commit(); toggleChildren() } label: {
-                    Image(systemName: node.collapsed ? "plus.square" : "minus.square")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                .help(node.collapsed ? "Show children" : "Hide children")
-                .accessibilityLabel(node.collapsed ? "Show children" : "Hide children")
+            if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
+            if hasChildren && node.collapsed {
+                // No button: tapping the item shows its children. This only marks that some are hidden.
+                Text("\u{2026}").font(.callout.weight(.bold)).foregroundStyle(Color.ink.opacity(0.5))
+                    .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+                    .accessibilityLabel("Children hidden")
             }
         }
         .padding(.vertical, 6)
@@ -682,15 +783,21 @@ struct NodeRow: View {
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
+        .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }
         }
-        if sel.nodeID == node.id || editing || infoOpen { actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity) }
         if infoOpen {
-            ItemInfo(node: node, onDelete: { if sel.infoID == node.id { sel.infoID = nil }; if sel.nodeID == node.id { sel.nodeID = nil } })
-                .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            // The item sheet: the action strip and one text field, in the panel frame.
+            ItemPanel(label: node.isProject ? "Project" : "Item") {
+                actionStrip
+                ItemSheetBody(node: node)
+            }
+            .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if sel.nodeID == node.id || editing {
+            actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity)
         }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -739,7 +846,7 @@ struct NodeRow: View {
     }
 
     #if os(iOS)
-    /// Hold 0.25 s to lift (release without moving = show/hide the action strip), then move to drag.
+    /// Hold 0.25 s to lift (release without moving = zoom in), then move to drag.
     private var holdDrag: HoldDragGesture {
         HoldDragGesture(onBegan: { lift() }, onChanged: { t in
             guard drag.id == node.id else { return }
@@ -753,11 +860,12 @@ struct NodeRow: View {
         holdFired = true
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
-    /// Single tap zooms in. Releasing a long press also completes a tap; that tap is ignored, so a long press only
-    /// shows the action strip (or drops a dragged item) and never zooms.
+    /// Single tap on the text shows or hides the item's children. Releasing a long press also completes a tap; that
+    /// tap is ignored, so a long press only zooms (or drops a dragged item).
     private func tapped() {
         if holdFired { holdFired = false; return }
-        commit(); onZoom()
+        commit()
+        if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
     }
     /// Tap on the squares: the item's sheet. Same hold guard as `tapped()`.
     private func squareTapped() {
@@ -784,12 +892,12 @@ struct NodeRow: View {
     /// run on cancel, which used to leave the row stuck lifted).
     private func finishDrag() {
         guard drag.id == node.id else { return }
-        // Held and released without moving: a long-tap, which shows the action strip instead of moving the item.
+        // Held and released without moving: a long press, which zooms into the item instead of moving it.
         let still = abs(drag.dx) < 6 && abs(drag.dy) < 6
         drag.dx = 0; drag.dy = 0
         // The release's tap (if any) arrives about now; stop ignoring taps shortly after.
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); holdFired = false }
-        if still { drag.target = nil; onDrop(); toggleSelect(); return }
+        if still { drag.target = nil; onDrop(); onZoom(); return }
         withAnimation(.snappy(duration: 0.22)) { onDrop() }
     }
 
@@ -811,11 +919,9 @@ struct NodeRow: View {
         return parts.joined(separator: " · ")
     }
 
-    /// Right edge: due date, "your turn", or counts for a parent. The bars carry everything else.
+    /// Right edge: due date and "your turn" for a single item. Parents show nothing here. The bars carry everything else.
     @ViewBuilder private var marker: some View {
-        if hasChildren && !node.isProject {
-            Text("\(leafCount.done)/\(leafCount.total)").font(.caption2.monospacedDigit()).foregroundStyle(Color.ink.opacity(0.4))
-        } else if !node.isProject {
+        if !hasChildren && !node.isProject {
             HStack(spacing: 8) {
                 if let due = node.due, node.state != .done {
                     Text(due.formatted(.dateTime.month(.abbreviated).day())).font(.caption2).foregroundStyle(due < Date() ? Color.red : Color.ink.opacity(0.45))
@@ -855,9 +961,16 @@ struct NodeRow: View {
                     }
                 }.help("Move").accessibilityLabel("Move")
                 Pill(systemImage: "plus") { onKey(.enter) }.help("Add item below").accessibilityLabel("Add item below")
+                if node.state == .review {
+                    // An AI draft is waiting: approve it, or send it back to be redone.
+                    Pill(systemImage: "checkmark.seal", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
+                    Pill(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+                }
                 PillMenu(systemImage: "ellipsis", title: nil) {
-                    if !node.isProject { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
-                    Button { toggleInfo() } label: { Label(infoOpen ? "Hide info" : "Info", systemImage: "info.circle") }
+                    if hasChildren { Button { toggleChildren() } label: { Label(node.collapsed ? "Show children" : "Hide children", systemImage: node.collapsed ? "chevron.down" : "chevron.up") } }
+                    if node.isYourTurn { Button { try? store.sendBackToAI(node, note: ""); store.save() } label: { Label("Send back to AI", systemImage: "sparkles") } }
+                    if !node.isProject && !infoOpen { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
+                    Button { toggleInfo() } label: { Label(infoOpen ? "Close sheet" : "Open sheet", systemImage: "rectangle.and.text.magnifyingglass") }
                     Divider()
                     Button(role: .destructive) { deleteItem() } label: { Label("Delete", systemImage: "trash") }
                 }.help("More").accessibilityLabel("More")
@@ -961,17 +1074,23 @@ struct PillLabel: View {
     var title: String? = nil
     var on = false
     var chevron = false
+    @Environment(\.panelStyle) private var panelStyle
     var body: some View {
         HStack(spacing: 4) {
-            if let i = systemImage { Image(systemName: i).font(.system(size: 11, weight: .semibold)) }
+            if let i = systemImage { Image(systemName: i).font(.system(size: panelStyle ? 13 : 11, weight: panelStyle ? .bold : .semibold)) }
             if let t = title { Text(t).font(.caption.weight(.medium)).lineLimit(1) }
             if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.5) }
         }
-        .padding(.horizontal, title == nil ? 8 : 10).padding(.vertical, 6)
-        .frame(minWidth: 30, minHeight: 28)
-        .background(on ? Color.ink : Color.ink.opacity(0.06), in: Capsule())
-        .foregroundStyle(on ? Color.canvas : Color.ink.opacity(0.8))
+        .padding(.horizontal, panelStyle ? 14 : (title == nil ? 8 : 10)).padding(.vertical, 6)
+        .frame(minWidth: panelStyle ? 46 : 30, minHeight: panelStyle ? 32 : 28)
+        .background(fill, in: Capsule())
+        .foregroundStyle(panelStyle ? Color.black : (on ? Color.canvas : Color.ink.opacity(0.8)))
         .contentShape(Capsule())
+    }
+    /// In the item sheet: flat colored capsules (peach when on); elsewhere: ink on canvas.
+    private var fill: Color {
+        if panelStyle { return on ? PanelPalette.peach : PanelPalette.color(for: (systemImage ?? "") + (title ?? "")) }
+        return on ? Color.ink : Color.ink.opacity(0.06)
     }
 }
 

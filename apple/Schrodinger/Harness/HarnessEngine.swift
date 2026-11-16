@@ -10,6 +10,8 @@ import BackgroundTasks
 final class HarnessEngine {
     let container: ModelContainer
     private(set) var running = false
+    /// Items the current run is limited to (nil = everything). Rows use it to show which play button is working.
+    private(set) var runningScope: Set<UUID>? = nil
     private(set) var lastRun: Date? = nil
     private(set) var lastResults: [String] = []
     private var timer: Timer? = nil
@@ -19,11 +21,11 @@ final class HarnessEngine {
     // MARK: Scheduling
     /// Runs one project's agent and records the run. Static and MainActor-isolated so the task group captures only Sendable values.
     @MainActor
-    static func runProject(container: ModelContainer, projectID: UUID, title: String, provider: any LanguageModelProvider) async -> String {
+    static func runProject(container: ModelContainer, projectID: UUID, title: String, provider: any LanguageModelProvider, only: Set<UUID>? = nil) async -> String {
         let store = Store(container.mainContext)
         let run = store.startRun(projectID: projectID)
         do {
-            let out = try await ProjectAgent(container: container, projectID: projectID, provider: provider).run()
+            let out = try await ProjectAgent(container: container, projectID: projectID, provider: provider, only: only).run()
             run.status = "ok"; run.log = out.joined(separator: "\n")
         } catch { run.status = "error"; run.log = error.localizedDescription }
         run.finishedAt = Date()
@@ -52,9 +54,10 @@ final class HarnessEngine {
 
     // MARK: Run
     @discardableResult
-    func runOnce(projectID: UUID? = nil) async -> [String] {
+    func runOnce(projectID: UUID? = nil, only: Set<UUID>? = nil) async -> [String] {
         if running { return ["already running"] }
-        running = true; defer { running = false }
+        running = true; runningScope = only
+        defer { running = false; runningScope = nil }
         let store = Store(container.mainContext)
         let projects = store.projects().filter { $0.projectStatus == .active && (projectID == nil || $0.id == projectID) }
         let provider = AppSettings.shared.makeProvider()
@@ -63,7 +66,7 @@ final class HarnessEngine {
         var results: [String] = []
         await withTaskGroup(of: String.self) { group in
             for (pid, title) in ids {
-                group.addTask { await HarnessEngine.runProject(container: container, projectID: pid, title: title, provider: provider) }
+                group.addTask { await HarnessEngine.runProject(container: container, projectID: pid, title: title, provider: provider, only: only) }
             }
             for await r in group { results.append(r) }
         }
@@ -79,6 +82,13 @@ struct ProjectAgent {
     let container: ModelContainer
     let projectID: UUID
     let provider: any LanguageModelProvider
+    /// When set, only these items' AI work is executed (an item's play button). Proposals and the digest still run.
+    var only: Set<UUID>? = nil
+
+    /// The AI has something to do on this item now: an AI item not yet started, or the AI's part of a shared item.
+    static func aiTurn(_ t: Node) -> Bool {
+        (t.assignee == .ai && t.state.notStarted) || (t.assignee == .shared && t.aiStatus == .pending && (t.state.notStarted || t.state == .in_progress))
+    }
 
     func run() async throws -> [String] {
         let s = Store(container.mainContext)
@@ -93,10 +103,7 @@ struct ProjectAgent {
         let stateBefore = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.state) })
 
         // 1. Execute ready AI work.
-        func aiTurn(_ t: Node) -> Bool {
-            (t.assignee == .ai && t.state.notStarted) || (t.assignee == .shared && t.aiStatus == .pending && (t.state.notStarted || t.state == .in_progress))
-        }
-        let ready = leaves.filter { aiTurn($0) && s.depsSatisfied($0) }
+        let ready = leaves.filter { Self.aiTurn($0) && s.depsSatisfied($0) && (only?.contains($0.id) ?? true) }
             .sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
             .prefix(settings.maxTasksPerRun)
         for t in ready {
