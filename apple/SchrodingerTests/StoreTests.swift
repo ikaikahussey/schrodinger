@@ -88,6 +88,17 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(ProjectAgent.aiTurn(a), "nothing left to run on a drafted item")
     }
 
+    func testTagsAreDetected() throws {
+        XCTAssertEqual(Tags.hashtags(in: "Call the #Funder about #q3-budget, then #done."), ["funder", "q3-budget", "done"])
+        XCTAssertEqual(Tags.hashtags(in: "no tags here # alone"), [])
+        XCTAssertEqual(Tags.hashtags(in: "#a#b"), ["a", "b"])
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P #client"); p.goal = "ship #Q3"
+        let t = s.create(title: "Draft letter #urgent", parentID: p.id, mode: .write); t.notes = "see #legal"
+        XCTAssertEqual(p.tags, ["client", "q3"])
+        XCTAssertEqual(t.tags, ["urgent", "legal", "write"])
+    }
+
     func testUndoAndPathJail() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P"); let t = s.create(title: "t", parentID: p.id, assignee: .ai)
