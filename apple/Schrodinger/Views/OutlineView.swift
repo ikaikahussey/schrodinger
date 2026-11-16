@@ -215,6 +215,8 @@ struct OutlineView: View {
             guard (kids[n.id] ?? []).isEmpty else { return }
             let siblings = kids[n.parentID] ?? []
             let idx = siblings.firstIndex(where: { $0.id == n.id }) ?? 0
+            editRequest = nil; focused = nil
+            if sel.nodeID == n.id { sel.nodeID = nil }
             s.delete(n); s.save()
             if idx > 0 { beginEdit(siblings[idx - 1].id) }
         case .altUp: try? s.move(n, to: n.parentID, position: max(0, n.position - 1)); s.save(); keep()
@@ -428,7 +430,15 @@ struct NodeRow: View {
     private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
     private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
+    /// SwiftData traps when a deleted model's attributes are read, and a row can be re-rendered once more after its node
+    /// is deleted (before @Query drops it). Render nothing for a deleted node.
+    private var gone: Bool { node.isDeleted || node.modelContext == nil }
+
     var body: some View {
+        if gone { EmptyView() } else { content }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 10) {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren)
@@ -647,7 +657,7 @@ struct NodeRow: View {
                     if !node.isProject { Button { openNote() } label: { Label(showNote ? "Edit context" : "Add context", systemImage: "text.alignleft") } }
                     Button { sel.nodeID = node.id; sel.panel = .review } label: { Label("Details", systemImage: "info.circle") }
                     Divider()
-                    Button(role: .destructive) { store.delete(node); store.save() } label: { Label("Delete", systemImage: "trash") }
+                    Button(role: .destructive) { deleteItem() } label: { Label("Delete", systemImage: "trash") }
                 }.help("More").accessibilityLabel("More")
             }
             .padding(.vertical, 2)
@@ -692,11 +702,18 @@ struct NodeRow: View {
         if !node.isProject { Button(showNote ? "Edit context" : "Add context") { openNote() } }
         Divider()
         Button("Details") { sel.nodeID = node.id; sel.panel = .review }
-        Button("Delete", role: .destructive) { store.delete(node); store.save() }
+        Button("Delete", role: .destructive) { deleteItem() }
     }
 
     private func openNote() { showNote = true; DispatchQueue.main.async { noteFocused = true } }
+    /// Clear focus and selection first so nothing reads the node after it is gone, then delete.
+    private func deleteItem() {
+        endEdit(); noteFocused = false
+        if sel.nodeID == node.id { sel.nodeID = nil }
+        store.delete(node); store.save()
+    }
     private func commitNote() {
+        guard !gone else { return }
         let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
         if n != node.notes { store.update(node) { $0.notes = n }; store.save() }
         note = n
@@ -704,6 +721,7 @@ struct NodeRow: View {
     }
 
     private func commit() {
+        guard !gone else { return }
         var t = title.trimmingCharacters(in: .whitespaces)
         var assignee: Assignee? = nil, mode: Mode? = nil, clearMode = false
         if let r = t.range(of: "\\s*@(ai|me|human|both|shared|none)\\b", options: [.regularExpression, .caseInsensitive]) {
