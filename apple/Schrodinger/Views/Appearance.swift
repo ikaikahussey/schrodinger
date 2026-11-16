@@ -1,13 +1,13 @@
 import SwiftUI
 
 /// Color schemes for the outline squares. Each scheme gives one color per mode and a rotating set of context colors
-/// (one per top-level project). "Mono" keeps the original black-on-white look.
+/// (one per top-level project). "Retro 70s" is the default; "Mono" keeps the original black-on-white look.
 enum PaletteKind: String, CaseIterable, Identifiable {
-    case mono, lcars, okabeIto, reef, custom
+    case retro70s, mono, lcars, okabeIto, reef, custom
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .mono: "Mono"; case .lcars: "LCARS"; case .okabeIto: "Color-blind safe"; case .reef: "Reef"; case .custom: "Custom"
+        case .retro70s: "Retro 70s"; case .mono: "Mono"; case .lcars: "LCARS"; case .okabeIto: "Color-blind safe"; case .reef: "Reef"; case .custom: "Custom"
         }
     }
 }
@@ -22,6 +22,10 @@ struct Palette {
     static let contextCount = 6
 
     static let mono = Palette(modes: Array(repeating: .primary, count: modeCount), contexts: Array(repeating: .primary, count: contextCount))
+    /// Earth tones of 1970s interiors and print: burnt orange, rust, teal, mustard, avocado, plum, tan, brown.
+    static let retro70s = Palette(
+        modes: ["CC5803", "A63D40", "2A7F86", "E3A72F", "7A8B3C", "7B3F61", "C9A66B", "6F4E37"].map(Color.init(hex:)),
+        contexts: ["CC5803", "E3A72F", "7A8B3C", "2A7F86", "A63D40", "6F4E37"].map(Color.init(hex:)))
     static let lcars = Palette(
         modes: ["FF9900", "CC6666", "9999FF", "FFCC99", "99CCFF", "CC99CC", "FFCC00", "A0A0A0"].map(Color.init(hex:)),
         contexts: ["FF9966", "CC99CC", "9999CC", "FFAA00", "6688CC", "DD8866"].map(Color.init(hex:)))
@@ -33,7 +37,7 @@ struct Palette {
         contexts: ["0B6E99", "1BA39C", "4D9078", "F2C14E", "F78154", "8E7DBE"].map(Color.init(hex:)))
 
     static func preset(_ k: PaletteKind) -> Palette {
-        switch k { case .mono: .mono; case .lcars: .lcars; case .okabeIto: .okabeIto; case .reef: .reef; case .custom: .lcars }
+        switch k { case .retro70s: .retro70s; case .mono: .mono; case .lcars: .lcars; case .okabeIto: .okabeIto; case .reef: .reef; case .custom: .retro70s }
     }
 }
 
@@ -84,12 +88,12 @@ final class Appearance {
     var customContexts: [Color.Resolved] { didSet { store(customContexts, "customContextColors") } }
 
     private init() {
-        palette = PaletteKind(rawValue: d.string(forKey: "palette") ?? "") ?? .lcars
+        palette = PaletteKind(rawValue: d.string(forKey: "palette") ?? "") ?? .retro70s   // default scheme
         font = AppFontFamily(rawValue: d.string(forKey: "fontFamily") ?? "") ?? .helveticaNeue
         sounds = d.object(forKey: "outlineSounds") as? Bool ?? true
         let env = EnvironmentValues()
-        customModes = Self.load("customModeColors", count: Palette.modeCount) ?? Palette.lcars.modes.map { $0.resolve(in: env) }
-        customContexts = Self.load("customContextColors", count: Palette.contextCount) ?? Palette.lcars.contexts.map { $0.resolve(in: env) }
+        customModes = Self.load("customModeColors", count: Palette.modeCount) ?? Palette.retro70s.modes.map { $0.resolve(in: env) }
+        customContexts = Self.load("customContextColors", count: Palette.contextCount) ?? Palette.retro70s.contexts.map { $0.resolve(in: env) }
     }
 
     var current: Palette {
