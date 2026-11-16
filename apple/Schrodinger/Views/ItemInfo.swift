@@ -79,7 +79,8 @@ struct ItemSheetBody: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             if node.isProject {
-                PanelText(placeholder: "GOAL", value: node.goal) { v in store.update(node) { $0.goal = v }; store.save() }
+                // Labeled like every other item's field. What is typed here is what the project's agent works toward.
+                PanelText(placeholder: "NOTES", value: node.goal) { v in store.update(node) { $0.goal = v }; store.save() }
             } else {
                 PanelText(placeholder: "NOTES", value: node.notes) { v in store.update(node) { $0.notes = v }; store.save() }
             }

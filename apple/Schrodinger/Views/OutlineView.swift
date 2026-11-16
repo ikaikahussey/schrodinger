@@ -290,7 +290,8 @@ struct OutlineView: View {
                     onDrop: { performDrop(n) },
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
                     swipeBack: zoomID != nil,
-                    runnable: active ? runnable(n, kids: kids) : [])
+                    runnable: active ? runnable(n, kids: kids) : [],
+                    childrenShown: !n.collapsed || n.id == zoomID)
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID {
@@ -440,9 +441,9 @@ struct ProjectLine: View {
 // MARK: - Squares
 
 /// The item's own square: the rightmost square in the row, with rounded top-right and bottom-right corners.
-/// Color = the item's mode (or, with no mode, its project's context color). Fill encodes state, inner gaps encode who holds it:
-///   state:    todo/in progress/done = solid · review = hollow · blocked = dashed outline
-///   assignee: human = whole square · ai = horizontal gap · shared = vertical gap · unassigned = lower half empty
+/// Every item's square has this same shape. Color = the item's mode (or, with no mode, its project's context color).
+///   who holds it: mine or unassigned = blank · AI = sparkles glyph · both = a single sparkle
+///   state:        todo/in progress/done = solid · review = hollow · blocked = dashed outline
 struct StatusBar: View {
     let state: TaskState
     let assignee: Assignee
@@ -457,6 +458,9 @@ struct StatusBar: View {
         UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: h / 2, topTrailingRadius: h / 2, style: .continuous)
     }
 
+    /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
+    private var solid: Bool { isProject || (state != .review && state != .blocked) }
+
     var body: some View {
         let shape = Self.ownShape
         ZStack {
@@ -468,11 +472,12 @@ struct StatusBar: View {
                 case .blocked: shape.strokeBorder(color, style: StrokeStyle(lineWidth: 2, dash: [3, 2]))
                 default:       shape.fill(color)
                 }
-                switch assignee {
-                case .human: EmptyView()
-                case .ai: Rectangle().fill(Color.canvas).frame(height: 1.5).offset(y: -Self.h * 0.1)
-                case .shared: Rectangle().fill(Color.canvas).frame(width: 1.5)
-                case .unassigned: Rectangle().fill(Color.canvas).frame(height: Self.h / 2).frame(maxHeight: .infinity, alignment: .bottom)
+                // AI involvement is a glyph inside the square; the square itself never changes shape.
+                if let glyph = assignee.squareGlyph {
+                    Image(systemName: glyph)
+                        .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
+                        .foregroundStyle(solid ? Color.canvas : color)
+                        .offset(x: -0.5)   // optical center: the right side is rounded
                 }
             }
         }
@@ -508,6 +513,11 @@ extension VerticalAlignment {
 }
 
 extension Assignee {
+    /// Glyph drawn inside the item's square: sparkles when the AI holds it, one sparkle when it is shared, nothing
+    /// when it is mine or unassigned.
+    var squareGlyph: String? {
+        switch self { case .ai: "sparkles"; case .shared: "sparkle"; case .human, .unassigned: nil }
+    }
     /// Strip icon for who holds the item.
     var icon: String {
         switch self { case .human: "person.fill"; case .ai: "sparkles"; case .shared: "person.2.fill"; case .unassigned: "person.slash" }
@@ -539,10 +549,9 @@ struct BarLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Squares").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
-            row(StatusBar(state: .todo, assignee: .human, isProject: false), "me")
+            row(StatusBar(state: .todo, assignee: .human, isProject: false), "me, or unassigned")
             row(StatusBar(state: .todo, assignee: .ai, isProject: false), "ai")
             row(StatusBar(state: .todo, assignee: .shared, isProject: false), "both")
-            row(StatusBar(state: .todo, assignee: .unassigned, isProject: false), "unassigned")
             row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
             row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
             Text("Color is the mode; items without a mode take their project's color.").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
@@ -579,6 +588,8 @@ struct NodeRow: View {
     var swipeBack = false
     /// Items the AI can work on now, in this item or under it. Non-empty = show the play button.
     var runnable: [UUID] = []
+    /// The item's children are on screen (it is expanded, or it is the item zoomed into).
+    var childrenShown = true
     @Environment(HarnessEngine.self) private var harness
     @State private var runFailure: String? = nil
     @State private var title: String = ""
@@ -748,11 +759,17 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && node.collapsed {
-                // No button: tapping the item shows its children. This only marks that some are hidden.
-                Text("\u{2026}").font(.callout.weight(.bold)).foregroundStyle(Color.ink.opacity(0.5))
-                    .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                    .accessibilityLabel("Children hidden")
+            if hasChildren && !childrenShown {
+                // Children are hidden: tap the … to show them. Never shown while the children are on screen.
+                Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
+                    Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
+                        .frame(width: 36, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+                .help("Show children")
+                .accessibilityLabel("Show children")
             }
         }
         .padding(.vertical, 6)
