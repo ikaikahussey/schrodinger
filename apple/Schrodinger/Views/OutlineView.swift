@@ -90,39 +90,22 @@ struct OutlineView: View {
         .background(Color.canvas)
         .navigationTitle("")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        // The breadcrumb bar is the header (logo, path, filter): the system navigation bar is not shown.
+        .toolbar(.hidden, for: .navigationBar)
         #endif
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                CatLogo().frame(width: 26, height: 26)
-                    .accessibilityElement().accessibilityLabel("Schrodinger").accessibilityAddTraits(.isHeader)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { ctx.undoManager?.undo(); store.save() } label: { Image(systemName: "arrow.uturn.backward") }.help("Undo")
-            }
-            ToolbarItem(placement: .secondaryAction) {
-                Button { ctx.undoManager?.redo(); store.save() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
-            }
+            // Only while typing: Done (Escape on the Mac; above the keyboard on iPhone/iPad).
             if focused != nil || editRequest != nil {
+                #if os(macOS)
                 ToolbarItem(placement: .primaryAction) {
                     Button("Done") { endEdit() }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
                 }
-                #if os(iOS)
+                #else
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button("Done") { endEdit() }.fontWeight(.semibold)
                 }
                 #endif
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { captureThought(roots: roots) } label: { Image(systemName: "plus") }
-                    .help("New thought (goes under “Thoughts”)")
-                    .keyboardShortcut("n", modifiers: .command)
-            }
-            ToolbarItem(placement: .primaryAction) { filterMenu }
-            ToolbarItem(placement: .primaryAction) {
-                Button { withAnimation(.snappy(duration: 0.2)) { showLegend.toggle() } } label: { Image(systemName: showLegend ? "questionmark.circle.fill" : "questionmark.circle") }
-                    .help(showLegend ? "Hide the square legend" : "Show the square legend")
             }
         }
         // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
@@ -148,6 +131,7 @@ struct OutlineView: View {
     private var filtering: Bool { filter != .all || modeFilter != nil }
 
     /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
+    private static let headerHeight: CGFloat = 28
     private var filterMenu: some View {
         Menu {
             Picker("Show", selection: Binding(get: { filter }, set: { v in withAnimation(.snappy(duration: 0.25)) { filter = v } })) {
@@ -163,9 +147,17 @@ struct OutlineView: View {
                 Divider()
                 Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
             }
+            Divider()
+            Toggle("Show square legend", isOn: Binding(get: { showLegend }, set: { v in withAnimation(.snappy(duration: 0.2)) { showLegend = v } }))
         } label: {
-            Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            // The header's right end: a block with a rounded right edge. Peach while a filter is on.
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 13, weight: .heavy)).foregroundStyle(.black)
+                .padding(.leading, 10).padding(.trailing, 13).frame(height: Self.headerHeight)
+                .background { UnevenRoundedRectangle(bottomTrailingRadius: Self.headerHeight / 2, topTrailingRadius: Self.headerHeight / 2).fill(filtering ? PanelPalette.peach : PanelPalette.orange) }
+                .contentShape(Rectangle())
         }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .help(filtering ? "Filters (on)" : "Filters")
         .accessibilityLabel(filtering ? "Filters, on" : "Filters")
     }
@@ -180,20 +172,6 @@ struct OutlineView: View {
         dx > 60 && abs(dy) < max(50, dx * 0.5) && vx > 300
     }
 
-    /// Quick capture: a new item under a top-level "Thoughts" project (created on first use), focused for typing.
-    private func captureThought(roots: [Node]) {
-        let s = store
-        let inbox = roots.first { $0.title.caseInsensitiveCompare("Thoughts") == .orderedSame } ?? {
-            let p = s.create(title: "Thoughts", position: 0)
-            s.update(p) { $0.goal = "Loose thoughts to sort into projects later." }
-            return p
-        }()
-        if inbox.collapsed { s.update(inbox) { $0.collapsed = false } }
-        let n = s.create(parentID: inbox.id, assignee: .human, position: 0)
-        s.save()
-        if zoomID != nil && zoomID != inbox.id { zoom(to: nil) }
-        beginEdit(n.id)
-    }
     /// Zoom into an item (nil = whole outline), animated.
     private func zoom(to id: UUID?) {
         endEdit()
@@ -229,23 +207,23 @@ struct OutlineView: View {
         .accessibilityLabel("New item")
     }
 
-    /// Where you are, as a row of flat color blocks: ALL, then the path down to the zoomed item. Tap a block to go
-    /// there. Shown whether or not the outline is zoomed, at a fixed height.
+    /// The header: logo (tap = all items), the path down to the zoomed item as flat color blocks (tap one to go
+    /// there), and the filter menu at the right end. Always shown, at a fixed height.
     private func breadcrumbBar(_ z: Node?) -> some View {
         var path: [Node] = []
         var p = z
         while let x = p { path.insert(x, at: 0); p = x.parentID.flatMap { store.node($0) } }
         let shown = Array(path.suffix(3))            // deepest three levels; earlier ones fold into "…"
-        let h: CGFloat = 24
+        let h = Self.headerHeight
         return HStack(spacing: 3) {
+            // Branding: the logo. It is also "all items": tap it to leave a zoom.
             Button { zoom(to: nil) } label: {
-                Text("ALL").font(PanelPalette.label(.caption)).foregroundStyle(.black)
-                    .padding(.leading, 14).padding(.trailing, 8).frame(height: h)
-                    .background { UnevenRoundedRectangle(topLeadingRadius: h / 2, bottomLeadingRadius: h / 2).fill(PanelPalette.orange).panelBlink(11) }
+                CatLogo().frame(width: h + 4, height: h + 4).padding(.trailing, 5).contentShape(Rectangle())
             }
             .keyboardShortcut("[", modifiers: .command)
-            .allowsHitTesting(z != nil)   // not dimmed at the top level: the block is part of the frame
-            .accessibilityLabel("All items")
+            .allowsHitTesting(z != nil)
+            .accessibilityLabel(z == nil ? "Schrodinger" : "Schrodinger. All items")
+            .accessibilityAddTraits(.isHeader)
             if path.count > shown.count {
                 Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(.black)
                     .padding(.horizontal, 8).frame(height: h).background { PanelPalette.rose.panelBlink(12) }
@@ -266,7 +244,7 @@ struct OutlineView: View {
             }
             // Filler bar and end cap: the row always spans the full width.
             Rectangle().fill(z == nil ? PanelPalette.lavender : PanelPalette.periwinkle).frame(minWidth: 8).frame(height: h).panelBlink(17)
-            Capsule().fill(PanelPalette.orange).frame(width: 22, height: h).panelBlink(18)
+            filterMenu
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 12).padding(.vertical, 6)
