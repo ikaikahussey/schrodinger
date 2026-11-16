@@ -22,11 +22,16 @@ struct SchrodingerApp: App {
         _harness = State(initialValue: HarnessEngine(container: c))
         #if os(iOS)
         let engine = HarnessEngine(container: c)
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: HarnessEngine.bgIdentifier, using: nil) { task in
+        // The handler is written in this main-actor context, so Swift checks at run time that it runs on the main actor.
+        // With `using: nil` iOS called it on a background queue, which trapped (EXC_BREAKPOINT in
+        // _dispatch_assert_queue_fail via swift_task_isCurrentExecutor) whenever iOS woke the app for a background
+        // refresh. Deliver it on the main queue instead.
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: HarnessEngine.bgIdentifier, using: DispatchQueue.main) { task in
             Task { @MainActor in
                 engine.scheduleBackgroundRefresh()
                 let work = Task { await engine.runOnce() }
-                task.expirationHandler = { work.cancel() }
+                // iOS calls the expiration handler on a queue of its choosing: keep it free of actor isolation.
+                task.expirationHandler = { @Sendable in work.cancel() }
                 _ = await work.value
                 task.setTaskCompleted(success: true)
             }
