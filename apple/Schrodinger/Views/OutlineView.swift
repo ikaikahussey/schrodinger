@@ -16,6 +16,9 @@ struct OutlineView: View {
     /// so the row shows its field first, then claims focus (see NodeRow.claimEdit).
     @State private var editRequest: UUID?
     @State private var drag = OutlineDrag()
+    /// Item the outline is zoomed into (shown at the top with its children), or nil for the whole outline.
+    @State private var zoomID: UUID? = nil
+    @State private var zoomingIn = true
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
@@ -27,10 +30,25 @@ struct OutlineView: View {
     var body: some View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
+        let zoomed = zoomID.flatMap { store.node($0) }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i)) }
-                Button { let n = store.create(); store.save(); beginEdit(n.id) } label: {
+                if let z = zoomed { breadcrumb(z) }
+                VStack(alignment: .leading, spacing: 0) {
+                    if let z = zoomed {
+                        nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)))
+                    } else {
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i)) }
+                    }
+                }
+                .id(zoomID)
+                .transition(.asymmetric(
+                    insertion: .scale(scale: zoomingIn ? 0.94 : 1.06, anchor: .top).combined(with: .opacity),
+                    removal: .opacity))
+                Button {
+                    let n = zoomed.map { store.create(parentID: $0.id, position: (kids[$0.id] ?? []).count) } ?? store.create()
+                    store.save(); beginEdit(n.id)
+                } label: {
                     HStack(spacing: 10) { Image(systemName: "plus").font(.caption.weight(.semibold)); Text("New item").font(look.font.font(.callout)) }
                 }
                 .buttonStyle(.plain).foregroundStyle(.tertiary).padding(.vertical, 10).padding(.leading, 16)
@@ -43,7 +61,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
+                        .padding(.leading, CGFloat(t.depth - (zoomed.map(depthOf) ?? 0)) * StatusBar.step).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -104,7 +122,39 @@ struct OutlineView: View {
         if inbox.collapsed { s.update(inbox) { $0.collapsed = false } }
         let n = s.create(parentID: inbox.id, assignee: .human, position: 0)
         s.save()
+        if zoomID != nil && zoomID != inbox.id { zoom(to: nil) }
         beginEdit(n.id)
+    }
+    /// Zoom into an item (nil = whole outline), animated.
+    private func zoom(to id: UUID?) {
+        endEdit()
+        zoomingIn = id.map { target in zoomID.map { isInSubtree(target, of: $0) && target != $0 } ?? true } ?? false
+        withAnimation(.snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil }
+    }
+    private func rootIndex(_ n: Node, roots: [Node]) -> Int {
+        var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
+        return roots.firstIndex { $0.id == r.id } ?? 0
+    }
+    /// Path back out: All › ancestors. The zoomed item itself is the first row below.
+    private func breadcrumb(_ z: Node) -> some View {
+        var path: [Node] = []
+        var p = z.parentID
+        while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Button { zoom(to: nil) } label: { Label("All", systemImage: "chevron.left").labelStyle(.titleAndIcon) }
+                    .keyboardShortcut("[", modifiers: .command)
+                ForEach(path) { a in
+                    Text("›").foregroundStyle(Color.ink.opacity(0.3))
+                    Button(a.title.isEmpty ? "Untitled" : a.title) { zoom(to: a.id) }.lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .font(look.font.font(.footnote, weight: .medium))
+            .foregroundStyle(Color.ink.opacity(0.6))
+            .padding(.leading, 16).padding(.vertical, 8)
+        }
+        .transition(.opacity)
     }
     private func beginEdit(_ id: UUID) { sel.nodeID = id; editRequest = id }
     private func endEdit() { editRequest = nil; focused = nil }
@@ -133,9 +183,10 @@ struct OutlineView: View {
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
-                    onDrop: { performDrop(n) })
+                    onDrop: { performDrop(n) },
+                    onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) })
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
-            if !n.collapsed {
+            if !n.collapsed || n.id == zoomID {
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
@@ -162,18 +213,21 @@ struct OutlineView: View {
     }
 
     private func updateDropTarget(_ n: Node, dx: CGFloat, dy: CGFloat) {
+        if n.id == zoomID { drag.target = nil; return }   // the zoomed item stays put
         guard let own = drag.origin ?? drag.frames[n.id] else { return }
         let y = own.midY + dy
         let rows = visibleOrder(excluding: n.id)
         // Insertion point: before the first row whose middle is below the finger.
-        let idx = rows.firstIndex { $0.frame.midY > y } ?? rows.count
-        let above = idx > 0 ? rows[idx - 1] : nil
+        var idx = rows.firstIndex { $0.frame.midY > y } ?? rows.count
+        if zoomID != nil { idx = max(idx, 1) }   // zoomed: nothing can go above the zoomed item
+        let above = idx > 0 && idx <= rows.count ? rows[idx - 1] : nil
         let below = idx < rows.count ? rows[idx] : nil
         let lineY = above.map { $0.frame.maxY } ?? below.map { $0.frame.minY } ?? own.minY
         let maxD = (above?.depth ?? -1) + 1
         let minD = below?.depth ?? 0
         let want = (above?.depth ?? 0) + Int((dx / 44).rounded())
-        let depth = max(min(minD, maxD), min(maxD, want))
+        var depth = max(min(minD, maxD), min(maxD, want))
+        if let z = zoomID.flatMap({ store.node($0) }) { depth = max(depth, depthOf(z) + 1) }
         let target = OutlineDrag.Target(y: lineY, depth: depth, aboveID: above?.node.id)
         if let old = drag.target {
             if old.depth != depth { Xylophone.shared.play(OutlinePitch.depth(depth)) }
@@ -210,7 +264,7 @@ struct OutlineView: View {
         switch key {
         case .enter:
             let created: Node
-            if !(kids[n.id] ?? []).isEmpty && !n.collapsed { created = s.create(parentID: n.id, position: 0) }
+            if n.id == zoomID || (!(kids[n.id] ?? []).isEmpty && !n.collapsed) { created = s.create(parentID: n.id, position: 0) }
             else { created = s.create(parentID: n.parentID, assignee: n.isProject ? nil : n.assignee, position: n.position + 1) }
             s.save(); beginEdit(created.id)
         case .tab:
@@ -409,6 +463,7 @@ struct NodeRow: View {
     let onKey: (OutlineView.Key) -> Void
     let onDragChanged: (CGFloat, CGFloat) -> Void
     let onDrop: () -> Void
+    var onZoom: () -> Void = {}
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
     @GestureState private var handleActive = false
@@ -450,17 +505,18 @@ struct NodeRow: View {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
                 .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
-                .onTapGesture { commit(); toggleSelect() }
+                .onTapGesture { commit(); onZoom() }
                 .gesture(handleGesture)
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + " · tap for actions, tap again to hide · hold and drag to move")
+                .help(summary + " · tap to zoom in · long-press for actions · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityAction { commit(); toggleSelect() }
+                .accessibilityAction { commit(); onZoom() }
+                .accessibilityAction(named: "Actions") { commit(); toggleSelect() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // Tap selects (shows the action strip), tap again deselects (hides it); long press (or double-tap) edits the text.
+            // Tap zooms into the item; long press shows the action strip (again hides it); double-tap edits the text.
             if !editing {
                 Text(title.isEmpty ? "New item" : title)
                     .font(titleFont)
@@ -469,8 +525,8 @@ struct NodeRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { startEdit() }
-                    .onTapGesture { commit(); toggleSelect() }
-                    .onLongPressGesture(minimumDuration: 0.35) { startEdit() }
+                    .onTapGesture { commit(); onZoom() }
+                    .onLongPressGesture(minimumDuration: 0.35) { commit(); toggleSelect() }
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -592,7 +648,10 @@ struct NodeRow: View {
     /// run on cancel, which used to leave the row stuck lifted).
     private func finishDrag() {
         guard drag.id == node.id else { return }
+        // Held and released without moving: a long-tap, which shows the action strip instead of moving the item.
+        let still = abs(drag.dx) < 6 && abs(drag.dy) < 6
         drag.dx = 0; drag.dy = 0
+        if still { drag.target = nil; onDrop(); toggleSelect(); return }
         withAnimation(.snappy(duration: 0.22)) { onDrop() }
     }
 
