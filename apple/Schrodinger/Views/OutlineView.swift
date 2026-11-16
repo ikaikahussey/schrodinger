@@ -14,6 +14,8 @@ struct OutlineView: View {
     /// Header search: words match an item's text; `#tag` words match its tags.
     @State private var search = ""
     @FocusState private var searchFocused: Bool
+    /// The on-screen keyboard is showing (iPhone/iPad).
+    @State private var keyboardUp = false
     @FocusState private var focused: UUID?
     /// Row that should switch to its text field and take focus. Focus can't be set on a field that isn't on screen yet,
     /// so the row shows its field first, then claims focus (see NodeRow.claimEdit).
@@ -69,9 +71,18 @@ struct OutlineView: View {
         .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
         .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) { breadcrumbBar(zoomed); tagBar } }
-        // New item: fixed at the bottom right, over the list. Hidden while typing (the keyboard is up).
+        // Dragging the list also puts the keyboard away (which ends editing).
+        .scrollDismissesKeyboard(.interactively)
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        #endif
+        // Bottom right, over the list: "+ NEW ITEM"; while the keyboard is up it becomes "DONE", which ends editing
+        // (title, notes or search) and puts the keyboard away.
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
-            if focused == nil && editRequest == nil && !searchFocused {
+            if keyboardUp {
+                cornerButton("DONE", systemImage: "checkmark", fill: PanelPalette.peach, help: "Finish editing") { finishTyping() }
+            } else if focused == nil && editRequest == nil && !searchFocused {
                 newItemButton {
                     let n = zoomed.map { store.create(parentID: $0.id, position: (kids[$0.id] ?? []).count) } ?? store.create()
                     store.save(); beginEdit(n.id)
@@ -195,20 +206,35 @@ struct OutlineView: View {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
         return roots.firstIndex { $0.id == r.id } ?? 0
     }
-    /// "+ NEW ITEM" in the panel style: two small color blocks leading into a labeled block with a rounded right end.
+    /// "+ NEW ITEM" in the panel style.
     private func newItemButton(_ action: @escaping () -> Void) -> some View {
+        cornerButton("NEW ITEM", systemImage: "plus", fill: PanelPalette.orange, help: "New item at the end of the list", action: action)
+    }
+
+    /// Ends whatever is being typed and puts the keyboard away.
+    private func finishTyping() {
+        endEdit(); searchFocused = false
+        #if os(iOS)
+        // Also covers fields this view does not track (an item's notes).
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+
+    /// The bottom-right button in the panel style: two small color blocks leading into a labeled block with a rounded
+    /// right end.
+    private func cornerButton(_ title: String, systemImage: String, fill: Color, help: String, action: @escaping () -> Void) -> some View {
         let h: CGFloat = 34
         return Button(action: action) {
             HStack(spacing: 3) {
                 Rectangle().fill(PanelPalette.periwinkle).frame(width: 10, height: h).panelBlink(21)
                 Rectangle().fill(PanelPalette.lavender).frame(width: 18, height: h).panelBlink(22)
                 HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 13, weight: .heavy))
-                    Text("NEW ITEM").font(PanelPalette.label(.subheadline))
+                    Image(systemName: systemImage).font(.system(size: 13, weight: .heavy))
+                    Text(title).font(PanelPalette.label(.subheadline))
                 }
                 .foregroundStyle(.black)
                 .padding(.leading, 10).padding(.trailing, 16).frame(height: h)
-                .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(PanelPalette.orange).panelBlink(23) }
+                .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(23) }
             }
             .padding(4)
             .background(PanelPalette.field, in: UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6, bottomTrailingRadius: h / 2 + 4, topTrailingRadius: h / 2 + 4))
@@ -216,8 +242,8 @@ struct OutlineView: View {
         }
         .buttonStyle(.plain)
         .padding(.trailing, 14).padding(.bottom, 10)
-        .help("New item at the end of the list")
-        .accessibilityLabel("New item")
+        .help(help)
+        .accessibilityLabel(title.capitalized)
     }
 
     /// The header: logo (tap = all items), the path down to the zoomed item as flat color blocks (tap one to go
@@ -690,6 +716,8 @@ struct NodeRow: View {
     @State private var pull: CGFloat = 0
     /// A long press lifted this item during the current touch; the tap that its release completes must not zoom.
     @State private var holdFired = false
+    /// The current hold began on the text (true) or on the squares (false).
+    @State private var heldText = false
     @GestureState private var handleActive = false
     private var lifting: Bool { drag.id == node.id }
     @State private var note: String = ""
@@ -778,19 +806,20 @@ struct NodeRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-        HStack(alignment: .rowLine, spacing: 10) {
+        HStack(alignment: .rowLine, spacing: 2) {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
-                .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
+                .padding(.vertical, 4).padding(.trailing, 12)   // wider grab area (the squares are a touch target)
                 .contentShape(Rectangle())
-                // Tap the squares: open/close the item's sheet (action strip + drafts, context, details).
+                // The squares are about structure. Tap: the item's sheet. Hold: zoom in (on the zoomed item: zoom
+                // out). Hold and move: drag.
                 .onTapGesture { squareTapped() }
                 #if os(iOS)
-                .gesture(holdDrag)
+                .gesture(holdDrag(onText: false))
                 #else
-                .simultaneousGesture(handleGesture)
+                .simultaneousGesture(handleGesture(onText: false))
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + " · tap for the item's details and actions · hold and drag to move")
+                .help(summary + " · tap for the AI selector · hold to zoom in · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
                 .accessibilityHint(infoOpen ? "Hides details" : "Shows details and actions")
@@ -799,8 +828,7 @@ struct NodeRow: View {
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // Tap shows/hides the item's children; hold zooms in (again on the zoomed item zooms out); hold and move drags;
-            // double-tap edits the text.
+            // The text is about text. Tap: show/hide the item's children. Hold: edit the text. Hold and move: drag.
             if !editing {
                 Text(title.isEmpty ? "New item" : title)
                     .font(titleFont)
@@ -808,15 +836,13 @@ struct NodeRow: View {
                     .foregroundStyle(title.isEmpty ? Color.ink.opacity(0.3) : done ? Color.ink.opacity(0.4) : Color.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { startEdit() }
                     .onTapGesture { tapped() }
-                    // Same as the bars: hold and release shows/hides the action strip; hold and move drags the item.
                     // iPhone/iPad: a UIKit long press (see TouchGestures.swift); SwiftUI drag gestures here stop the list from
                     // scrolling on iOS 18+. A swipe fails the hold and scrolls; once lifted, scrolling is disabled.
                     #if os(iOS)
-                    .gesture(holdDrag)
+                    .gesture(holdDrag(onText: true))
                     #else
-                    .simultaneousGesture(handleGesture)
+                    .simultaneousGesture(handleGesture(onText: true))
                     #endif
             } else {
             TextField("", text: $title, axis: .vertical)
@@ -941,26 +967,28 @@ struct NodeRow: View {
     }
 
     #if os(iOS)
-    /// Hold 0.25 s to lift (release without moving = zoom in), then move to drag.
-    private var holdDrag: HoldDragGesture {
-        HoldDragGesture(onBegan: { lift() }, onChanged: { t in
+    /// Hold 0.25 s to lift (release without moving = edit on the text, zoom on the squares), then move to drag.
+    private func holdDrag(onText: Bool) -> HoldDragGesture {
+        HoldDragGesture(onBegan: { lift(onText: onText) }, onChanged: { t in
             guard drag.id == node.id else { return }
             drag.dx = t.width; drag.dy = t.height
             onDragChanged(drag.dx, drag.dy)
         }, onEnded: { finishDrag() })
     }
     #endif
-    private func lift() {
+    /// `onText`: the hold began on the item's text (release without moving = edit) rather than on its squares
+    /// (release without moving = zoom).
+    private func lift(onText: Bool) {
         guard drag.id == nil else { return }
-        holdFired = true
+        holdFired = true; heldText = onText
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
-    /// Single tap on the text shows or hides the item's children; on an item with no text it starts editing. Releasing a long press also completes a tap; that
-    /// tap is ignored, so a long press only zooms (or drops a dragged item).
+    /// Single tap on the text shows or hides the item's children; on an item with no text it starts editing.
+    /// Releasing a long press also completes a tap; that tap is ignored.
     private func tapped() {
         if holdFired { holdFired = false; return }
-        // An item with no text yet ("New item"), or the selected item: a tap starts typing.
-        if title.trimmingCharacters(in: .whitespaces).isEmpty || sel.nodeID == node.id { startEdit(); return }
+        // An item with no text yet ("New item"): a tap starts typing.
+        if title.trimmingCharacters(in: .whitespaces).isEmpty { startEdit(); return }
         commit()
         if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
     }
@@ -973,13 +1001,13 @@ struct NodeRow: View {
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
     /// position while dragging picks the depth at the drop point. The hold keeps ordinary swipes scrolling the list, and
     /// movement is measured in global coordinates so the lifted row's own offset doesn't feed back into the drag.
-    private var handleGesture: some Gesture {
+    private func handleGesture(onText: Bool) -> some Gesture {
         LongPressGesture(minimumDuration: 0.25)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
             .updating($handleActive) { v, active, _ in if case .second(true, _) = v { active = true } }
             .onChanged { v in
                 guard case .second(true, let d) = v else { return }
-                lift()
+                lift(onText: onText)
                 guard let d else { return }
                 drag.dx = d.translation.width; drag.dy = d.translation.height
                 onDragChanged(drag.dx, drag.dy)
@@ -989,12 +1017,16 @@ struct NodeRow: View {
     /// run on cancel, which used to leave the row stuck lifted).
     private func finishDrag() {
         guard drag.id == node.id else { return }
-        // Held and released without moving: a long press, which zooms into the item instead of moving it.
+        // Held and released without moving: on the text this edits it; on the squares it zooms into the item.
         let still = abs(drag.dx) < 6 && abs(drag.dy) < 6
         drag.dx = 0; drag.dy = 0
         // The release's tap (if any) arrives about now; stop ignoring taps shortly after.
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); holdFired = false }
-        if still { drag.target = nil; onDrop(); onZoom(); return }
+        if still {
+            drag.target = nil; onDrop()
+            if heldText { startEdit() } else { onZoom() }
+            return
+        }
         withAnimation(.snappy(duration: 0.22)) { onDrop() }
     }
 
