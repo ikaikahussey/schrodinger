@@ -322,7 +322,8 @@ struct OutlineView: View {
             guard let idx = siblings.firstIndex(where: { $0.id == n.id }) else { return }
             let to = key == .altUp ? idx - 1 : idx + 1
             guard to >= 0, to < siblings.count else { return }
-            try? s.move(n, to: n.parentID, position: max(0, n.position + (key == .altUp ? -1 : 1))); s.save(); keep()
+            // Target index among the on-screen siblings (stored positions can have gaps or duplicates).
+            try? s.move(n, to: n.parentID, position: to); s.save(); keep()
             Xylophone.shared.play(OutlinePitch.position(to, depth: depthOf(n)))
         }
     }
@@ -654,7 +655,11 @@ struct NodeRow: View {
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: 4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
         .simultaneousGesture(pullGesture)
+        #if os(macOS)
+        // Right-click menu on the Mac. On iPhone/iPad a long-press context menu would take over the touch and cancel
+        // the hold-and-drag on the bars (and the long press that opens the action strip), so the strip is used there.
         .contextMenu { menu }
+        #endif
     }
 
     /// Pull to move: drag the row left to outdent (←), right to indent (→). The text moves the way it will land.
