@@ -179,7 +179,7 @@ struct OutlineView: View {
         } label: {
             // The header's right end: a block with a rounded right edge. Peach while a filter is on.
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 13, weight: .heavy)).foregroundStyle(.black)
+                .font(.system(size: 13, weight: .heavy)).foregroundStyle(PanelPalette.text(on: filtering ? PanelPalette.peach : PanelPalette.orange))
                 .padding(.leading, 10).padding(.trailing, 13).frame(height: Self.headerHeight)
                 .background { UnevenRoundedRectangle(bottomTrailingRadius: Self.headerHeight / 2, topTrailingRadius: Self.headerHeight / 2).fill(filtering ? PanelPalette.peach : PanelPalette.orange) }
                 .contentShape(Rectangle())
@@ -235,7 +235,7 @@ struct OutlineView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.black)
+                .foregroundStyle(PanelPalette.text(on: fill))
                 .frame(width: 54, height: 54)
                 .background(fill, in: Circle())
                 .contentShape(Circle())
@@ -265,19 +265,20 @@ struct OutlineView: View {
             .accessibilityLabel(z == nil ? "Schrodinger" : "Schrodinger. All items")
             .accessibilityAddTraits(.isHeader)
             if path.count > shown.count {
-                Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: PanelPalette.rose))
                     .padding(.horizontal, 8).frame(height: h).background { PanelPalette.rose.panelBlink(12) }
             }
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, a in
                 let current = a.id == z?.id
+                let fill = current ? PanelPalette.peach : [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3]
                 Button { zoom(to: a.id) } label: {
                     Text((a.title.isEmpty ? "Untitled" : a.title).uppercased())
-                        .font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                        .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
                         .lineLimit(1).truncationMode(.tail)
                         .padding(.horizontal, 8).frame(maxWidth: current ? 180 : 110).frame(height: h)
                         .fixedSize(horizontal: !current, vertical: false)
                         // Only the block's color pulses; its label stays steady and readable.
-                        .background { (current ? PanelPalette.peach : [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3]).panelBlink(13 + i) }
+                        .background { fill.panelBlink(13 + i) }
                 }
                 .allowsHitTesting(!current)
                 .layoutPriority(current ? 1 : 0)
@@ -295,11 +296,13 @@ struct OutlineView: View {
 
     /// Search, inside the header's middle block. Type words to match text; tap a tag button (or type #tag) to match tags.
     private func searchField(_ h: CGFloat, tint: Color) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .heavy)).foregroundStyle(.black.opacity(0.7))
-            TextField("", text: $search, prompt: Text("SEARCH").foregroundStyle(.black.opacity(0.45)))
+        let fill = searching ? PanelPalette.peach : tint
+        let ink = PanelPalette.text(on: fill)
+        return HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .heavy)).foregroundStyle(ink.opacity(0.7))
+            TextField("", text: $search, prompt: Text("SEARCH").foregroundStyle(ink.opacity(0.5)))
                 .textFieldStyle(.plain)
-                .font(PanelPalette.label(.subheadline)).foregroundStyle(.black).tint(.black)
+                .font(PanelPalette.label(.subheadline)).foregroundStyle(ink).tint(ink)
                 .focused($searchFocused)
                 .submitLabel(.search)
                 .onSubmit { searchFocused = false }
@@ -309,7 +312,7 @@ struct OutlineView: View {
                 #endif
             if !search.isEmpty || searchFocused {
                 Button { withAnimation(.snappy(duration: 0.25)) { search = "" }; searchFocused = false } label: {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .heavy)).foregroundStyle(.black.opacity(0.7))
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .heavy)).foregroundStyle(ink.opacity(0.7))
                         .frame(width: 24, height: h).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Clear search")
@@ -317,7 +320,7 @@ struct OutlineView: View {
         }
         .padding(.leading, 8).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
-        .background(searching ? PanelPalette.peach : tint)
+        .background(fill)
         .contentShape(Rectangle())
         .onTapGesture { searchFocused = true }
         .accessibilityLabel("Search")
@@ -332,11 +335,13 @@ struct OutlineView: View {
                 HStack(spacing: 3) {
                     ForEach(tags, id: \.self) { t in
                         let on = active.contains(t)
+                        let fill = on ? PanelPalette.peach : PanelPalette.color(for: t)
                         Button { toggleTag(t) } label: {
-                            Text("#" + t.uppercased())
-                                .font(PanelPalette.label(.caption)).foregroundStyle(.black)
+                            // A selected tag also gets a check: in a two-color scheme the fill alone may not differ.
+                            Text((on ? "\u{2713} #" : "#") + t.uppercased())
+                                .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
                                 .padding(.horizontal, 9).frame(height: 24)
-                                .background(on ? PanelPalette.peach : PanelPalette.color(for: t))
+                                .background(fill)
                         }
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
@@ -1196,7 +1201,7 @@ struct PillLabel: View {
         .padding(.horizontal, panelStyle ? 14 : (title == nil ? 8 : 10)).padding(.vertical, 6)
         .frame(minWidth: panelStyle ? 46 : 30, minHeight: panelStyle ? 32 : 28)
         .background(fill, in: Capsule())
-        .foregroundStyle(panelStyle ? Color.black : (on ? Color.canvas : Color.ink.opacity(0.8)))
+        .foregroundStyle(panelStyle ? PanelPalette.text(on: fill) : (on ? Color.canvas : Color.ink.opacity(0.8)))
         .contentShape(Capsule())
     }
     /// In the item sheet: flat colored capsules (peach when on); elsewhere: ink on canvas.

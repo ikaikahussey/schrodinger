@@ -2,21 +2,38 @@ import SwiftUI
 import SwiftData
 
 // The item sheet: opened by tapping an item's squares. It is the action strip (flat colored capsule buttons) on a
-// plain black panel, plus the AI's draft when there is one. Notes are edited inline in the row, not here. The decorative frame (rail, elbows, bars) lives only in the outline's
+// plain panel, plus the AI's draft when there is one. Notes are edited inline in the row, not here. The decorative frame (rail, elbows, bars) lives only in the outline's
 // breadcrumb bar and new-item button.
 
-/// Panel palette. Fixed colors on black: the panel looks the same in light and dark mode.
+/// Colors for the app's own controls (header blocks, search field, filter button, tag buttons, the + button, the
+/// item sheet). They come from the color scheme chosen in Settings, so every control follows the scheme.
+/// The five names are slots, kept from the first design; each maps to one of the scheme's project colors.
+@MainActor
 enum PanelPalette {
-    static let orange = Color(red: 1.00, green: 0.60, blue: 0.20)
-    static let peach = Color(red: 1.00, green: 0.80, blue: 0.60)
-    static let lavender = Color(red: 0.80, green: 0.60, blue: 0.80)
-    static let periwinkle = Color(red: 0.60, green: 0.60, blue: 1.00)
-    static let rose = Color(red: 0.80, green: 0.40, blue: 0.40)
-    static let field = Color.black
-    static let all = [orange, peach, lavender, periwinkle, rose]
+    private static var scheme: [Color] { let c = Appearance.shared.current.contexts; return c.isEmpty ? [.primary] : c }
+    private static func slot(_ i: Int) -> Color { let c = scheme; return c[i % c.count] }
+    /// Main accent (the + button, the filter button).
+    static var orange: Color { slot(0) }
+    /// "On" state (active search, active filter, the current breadcrumb, a selected pill).
+    static var peach: Color { slot(1) }
+    static var lavender: Color { slot(2) }
+    static var periwinkle: Color { slot(3) }
+    static var rose: Color { slot(4) }
+    /// Backing for the item sheet: a light wash of the text color.
+    static var field: Color { Color.ink.opacity(0.07) }
+    static var all: [Color] { (0..<5).map(slot) }
     /// A stable color for a control, picked from what it shows, so neighbours differ but nothing flickers.
     static func color(for key: String) -> Color {
-        all[Int(key.unicodeScalars.reduce(UInt32(0)) { ($0 &* 31) &+ $1.value } % UInt32(all.count))]
+        let a = all
+        return a[Int(key.unicodeScalars.reduce(UInt32(0)) { ($0 &* 31) &+ $1.value } % UInt32(a.count))]
+    }
+    /// Text or glyph color that reads on `fill`: the background color on a text-colored block, otherwise black or
+    /// white by the fill's brightness.
+    static func text(on fill: Color) -> Color {
+        if fill == Color.primary { return Color.canvas }
+        let r = fill.resolve(in: EnvironmentValues())
+        let luminance = 0.2126 * Double(r.linearRed) + 0.7152 * Double(r.linearGreen) + 0.0722 * Double(r.linearBlue)
+        return luminance > 0.30 ? .black : .white
     }
     static func label(_ style: Font.TextStyle = .caption) -> Font { .system(style, design: .default, weight: .bold).width(.condensed) }
 }
@@ -46,11 +63,11 @@ extension View {
 }
 
 extension EnvironmentValues {
-    /// True inside the item sheet: pills draw as flat colored capsules with black glyphs.
+    /// True inside the item sheet: pills draw as flat capsules in the scheme's colors.
     @Entry var panelStyle = false
 }
 
-/// The sheet's container: a plain black panel. No rail, bars or labels; only the controls and the text field.
+/// The sheet's container: a plain panel. No rail, bars or labels; only the controls and the text field.
 struct ItemPanel<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
@@ -60,7 +77,6 @@ struct ItemPanel<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
             .environment(\.panelStyle, true)
-            .environment(\.colorScheme, .dark)   // menus and the text cursor read correctly on black
     }
 }
 
@@ -78,9 +94,9 @@ struct ItemSheetBody: View {
         if let a = node.artifact, !a.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text(node.state == .review ? "DRAFT · AWAITING REVIEW" : "DRAFT")
-                    .font(PanelPalette.label(.caption2)).foregroundStyle(PanelPalette.periwinkle)
+                    .font(PanelPalette.label(.caption2)).foregroundStyle(Color.ink.opacity(0.55))
                 ScrollView {
-                    Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(PanelPalette.peach)
+                    Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(Color.ink)
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 260)
