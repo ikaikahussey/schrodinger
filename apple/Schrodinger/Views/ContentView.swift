@@ -2,16 +2,16 @@ import SwiftUI
 import SwiftData
 
 enum Panel: String, CaseIterable, Identifiable {
-    case outline, batch, review, inbox, calendar, digest, activity, settings
+    case outline, batch, inbox, calendar, digest, activity, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
     /// Panels kept in code but not shown in navigation. Calendar is hidden pending a decision to remove it; Batch is
     /// replaced by the filter bar on the outline.
-    static let hidden: Set<Panel> = [.review, .calendar, .settings, .batch]
+    static let hidden: Set<Panel> = [.calendar, .settings, .batch]
     static var navItems: [Panel] { allCases.filter { !hidden.contains($0) } }
     var icon: String {
         switch self {
-        case .outline: "list.bullet.indent"; case .batch: "square.stack.3d.up"; case .review: "checkmark.rectangle.stack"
+        case .outline: "list.bullet.indent"; case .batch: "square.stack.3d.up"
         case .inbox: "tray"; case .calendar: "calendar"; case .digest: "doc.text"; case .activity: "clock"; case .settings: "gear"
         }
     }
@@ -22,6 +22,12 @@ enum Panel: String, CaseIterable, Identifiable {
 final class Selection {
     var nodeID: UUID? = nil
     var panel: Panel = .outline
+    /// Item whose info (action strip + drafts, context, details) is open under its row in the outline.
+    var infoID: UUID? = nil
+    /// Set when another screen asks the outline to show an item: the outline expands its parents and scrolls to it.
+    var revealID: UUID? = nil
+    /// Show an item from anywhere in the app: switch to the outline and open its info.
+    func open(_ id: UUID) { panel = .outline; nodeID = id; infoID = id; revealID = id }
 }
 
 struct ContentView: View {
@@ -34,6 +40,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             #if os(macOS)
+            // Sidebar + one panel. An item's details open inline in the outline (the ⓘ button), not in a separate column.
             NavigationSplitView {
                 List(selection: Binding(get: { sel.panel }, set: { if let p = $0 { sel.panel = p } })) {
                     ForEach(Panel.navItems) { p in
@@ -41,21 +48,13 @@ struct ContentView: View {
                     }
                 }
                 .navigationSplitViewColumnWidth(min: 160, ideal: 190)
-            } content: {
-                OutlineView(sel: sel).navigationSplitViewColumnWidth(min: 420, ideal: 620)
             } detail: {
-                panelView(sel.panel == .outline ? .review : sel.panel).navigationSplitViewColumnWidth(min: 320, ideal: 420)
+                NavigationStack { panelView(sel.panel) }.navigationSplitViewColumnWidth(min: 420, ideal: 760)
             }
             #else
-            // Review is not a tab: it is pushed over the outline when an item is opened.
-            TabView(selection: Binding(get: { sel.panel == .review ? .outline : sel.panel }, set: { sel.panel = $0 })) {
+            TabView(selection: Binding(get: { sel.panel }, set: { sel.panel = $0 })) {
                 ForEach([Panel.outline, .batch, .inbox, .settings].filter { !Panel.hidden.contains($0) || $0 == .settings }) { p in
-                    NavigationStack {
-                        if p == .outline {
-                            OutlineView(sel: sel)
-                                .navigationDestination(isPresented: Binding(get: { sel.panel == .review }, set: { if !$0 { sel.panel = .outline } })) { ReviewView(sel: sel) }
-                        } else { panelView(p) }
-                    }
+                    NavigationStack { panelView(p) }
                     .tabItem { Label(p.label, systemImage: p.icon) }.badge(badge(p)).tag(p)
                 }
             }
@@ -78,7 +77,8 @@ struct ContentView: View {
         let s = Store(ctx)
         switch p {
         case .inbox: return openProposals.count
-        case .review: return s.allNodes().filter { $0.state == .review || $0.isYourTurn }.count
+        // Drafts to review and shared items waiting on you; open their ⓘ in the outline (or filter by Review).
+        case .outline: return s.allNodes().filter { $0.state == .review || $0.isYourTurn }.count
         default: return 0
         }
     }
@@ -88,7 +88,6 @@ struct ContentView: View {
         switch p {
         case .outline: OutlineView(sel: sel)
         case .batch: BatchView(sel: sel)
-        case .review: ReviewView(sel: sel)
         case .inbox: InboxView(sel: sel)
         case .calendar: CalendarView(sel: sel)
         case .digest: DigestView(sel: sel)
