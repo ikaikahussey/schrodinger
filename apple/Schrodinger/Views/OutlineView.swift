@@ -8,6 +8,8 @@ struct OutlineView: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var sel: Selection
     @Query(sort: [SortDescriptor(\Node.position), SortDescriptor(\Node.createdAt)]) private var all: [Node]
+    /// AI proposals waiting in the Inbox (shown as a count in the header menu).
+    @Query(filter: #Predicate<Proposal> { $0.statusRaw == "open" }) private var openProposals: [Proposal]
     @State private var filter: Filter = .all
     @State private var modeFilter: Mode? = nil
     @State private var showLegend = false
@@ -166,6 +168,14 @@ struct OutlineView: View {
             }
             Divider()
             Toggle("Show square legend", isOn: Binding(get: { showLegend }, set: { v in withAnimation(.snappy(duration: 0.2)) { showLegend = v } }))
+            #if os(iOS)
+            // The rest of the app (there is no tab bar): each opens as a sheet over the outline.
+            Divider()
+            Button { finishTyping(); sel.panel = .inbox } label: {
+                Label(openProposals.isEmpty ? "Inbox" : "Inbox (\(openProposals.count))", systemImage: "tray")
+            }
+            Button { finishTyping(); sel.panel = .settings } label: { Label("Settings", systemImage: "gear") }
+            #endif
         } label: {
             // The header's right end: a block with a rounded right edge. Peach while a filter is on.
             Image(systemName: "line.3.horizontal.decrease")
