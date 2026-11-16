@@ -37,9 +37,9 @@ struct OutlineView: View {
                 if let z = zoomed { breadcrumb(z) }
                 VStack(alignment: .leading, spacing: 0) {
                     if let z = zoomed {
-                        nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)))
+                        nodeTree(z, depth: 0, kids: kids, trail: [], context: look.contextColor(rootIndex(z, roots: roots)), active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i)) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
@@ -234,7 +234,15 @@ struct OutlineView: View {
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
 
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], trail: [Color], context: Color) -> AnyView {
+    /// Items under `n` (or `n` itself) the AI can work on right now. Empty = nothing to run, no play button.
+    private func runnable(_ n: Node, kids: [UUID?: [Node]]) -> [UUID] {
+        let c = kids[n.id] ?? []
+        if c.isEmpty { return !n.isProject && ProjectAgent.aiTurn(n) && store.depsSatisfied(n) ? [n.id] : [] }
+        return c.flatMap { runnable($0, kids: kids) }
+    }
+
+    /// `active`: the item's project is active (paused and archived projects don't run).
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
@@ -246,11 +254,12 @@ struct OutlineView: View {
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) },
                     onZoom: { zoom(to: n.id == zoomID ? n.parentID : n.id) },
-                    swipeBack: zoomID != nil)
+                    swipeBack: zoomID != nil,
+                    runnable: active ? runnable(n, kids: kids) : [])
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID {
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context, active: active) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
         })
@@ -533,6 +542,10 @@ struct NodeRow: View {
     var onZoom: () -> Void = {}
     /// The page handles a quick right swipe as "back" (zoomed in), so the row must not also indent on it.
     var swipeBack = false
+    /// Items the AI can work on now, in this item or under it. Non-empty = show the play button.
+    var runnable: [UUID] = []
+    @Environment(HarnessEngine.self) private var harness
+    @State private var runFailure: String? = nil
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
     /// A long press lifted this item during the current touch; the tap that its release completes must not zoom.
@@ -571,6 +584,42 @@ struct NodeRow: View {
     }
     private func endEdit() { editRequest = nil; focused.wrappedValue = nil }
     private var infoOpen: Bool { sel.infoID == node.id }
+
+    /// This row's work is part of the run in progress.
+    private var runningHere: Bool {
+        guard harness.running else { return false }
+        guard let scope = harness.runningScope else { return true }
+        return runnable.contains { scope.contains($0) }
+    }
+    /// Play: have the AI do its work on this item (for a parent, on the ready items under it). Shown only when
+    /// there is something to run.
+    @ViewBuilder private var runButton: some View {
+        if runningHere {
+            ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Running")
+        } else {
+            Button { run() } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(harness.running)
+            .opacity(harness.running ? 0.3 : 1)
+            .help(runnable.count == 1 ? "Run: have the AI work on this" : "Run: have the AI work on \(runnable.count) items here")
+            .accessibilityLabel(runnable.count == 1 ? "Run" : "Run \(runnable.count) items")
+        }
+    }
+    private func run() {
+        commit()
+        let ids = Set(runnable), project = store.project(of: node).id
+        Task { @MainActor in
+            let out = await harness.runOnce(projectID: project, only: ids)
+            let bad = out.flatMap { $0.components(separatedBy: "\n") }.filter { $0.hasPrefix("failed:") || $0.contains(": error") }
+            if !bad.isEmpty { runFailure = bad.joined(separator: "\n") }
+        }
+    }
     /// Tap on the squares: show the action strip with the item's drafts, context and details under it; again hides both.
     private func toggleInfo() {
         withAnimation(.snappy(duration: 0.22)) {
@@ -662,6 +711,7 @@ struct NodeRow: View {
             .alignmentGuide(.rowLine) { d in d[.firstTextBaseline] * 0.65 }
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
+            if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
             if hasChildren && node.collapsed {
                 // No button: tapping the item zooms in and shows its children. This only marks that some are hidden.
                 Text("\u{2026}").font(.callout.weight(.bold)).foregroundStyle(Color.ink.opacity(0.5))
@@ -675,6 +725,7 @@ struct NodeRow: View {
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
+        .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }

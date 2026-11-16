@@ -34,7 +34,6 @@ struct ContentView: View {
     @Environment(HarnessEngine.self) private var harness
     @Environment(\.modelContext) private var ctx
     @State private var sel = Selection()
-    @State private var runMessage: String? = nil
     @Query(filter: #Predicate<Proposal> { $0.statusRaw == "open" }) private var openProposals: [Proposal]
 
     var body: some View {
@@ -62,15 +61,7 @@ struct ContentView: View {
         }
         .environment(sel)
         .font(Appearance.shared.font.font(.body))
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    Task { let r = await harness.runOnce(); runMessage = r.joined(separator: "\n\n") }
-                } label: { Label(harness.running ? "Running…" : "Run harness", systemImage: "play.circle") }
-                .disabled(harness.running)
-            }
-        }
-        .alert("Harness run", isPresented: Binding(get: { runMessage != nil }, set: { if !$0 { runMessage = nil } })) { Button("OK") {} } message: { Text(runMessage ?? "") }
+        // No global Run button: an item shows a play button when the AI has something to run on it (see NodeRow).
     }
 
     private func badge(_ p: Panel) -> Int {
