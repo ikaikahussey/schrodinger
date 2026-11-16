@@ -216,7 +216,7 @@ struct OutlineView: View {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
         return roots.firstIndex { $0.id == r.id } ?? 0
     }
-    /// "+ NEW ITEM" in the panel style.
+    /// New item: a circle with a plus.
     private func newItemButton(_ action: @escaping () -> Void) -> some View {
         cornerButton("NEW ITEM", systemImage: "plus", fill: PanelPalette.orange, help: "New item at the end of the list", action: action)
     }
@@ -230,28 +230,19 @@ struct OutlineView: View {
         #endif
     }
 
-    /// The bottom-right button in the panel style: two small color blocks leading into a labeled block with a rounded
-    /// right end.
+    /// The bottom-right button: a plain filled circle with one glyph.
     private func cornerButton(_ title: String, systemImage: String, fill: Color, help: String, action: @escaping () -> Void) -> some View {
-        let h: CGFloat = 34
-        return Button(action: action) {
-            HStack(spacing: 3) {
-                Rectangle().fill(PanelPalette.periwinkle).frame(width: 10, height: h).panelBlink(21)
-                Rectangle().fill(PanelPalette.lavender).frame(width: 18, height: h).panelBlink(22)
-                HStack(spacing: 6) {
-                    Image(systemName: systemImage).font(.system(size: 13, weight: .heavy))
-                    Text(title).font(PanelPalette.label(.subheadline))
-                }
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.black)
-                .padding(.leading, 10).padding(.trailing, 16).frame(height: h)
-                .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(23) }
-            }
-            .padding(4)
-            .background(PanelPalette.field, in: UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6, bottomTrailingRadius: h / 2 + 4, topTrailingRadius: h / 2 + 4))
-            .contentShape(Rectangle())
+                .frame(width: 54, height: 54)
+                .background(fill, in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .padding(.trailing, 14).padding(.bottom, 10)
+        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        .padding(.trailing, 16).padding(.bottom, 12)
         .help(help)
         .accessibilityLabel(title.capitalized)
     }
@@ -570,7 +561,7 @@ struct ProjectLine: View {
 
 // MARK: - Squares
 
-/// The item's own square: the rightmost square in the row, with rounded top-right and bottom-right corners.
+/// The item's own mark: the rightmost one in the row, a circle the size of the squares.
 /// Every item's square has this same shape. Color = the item's mode (or, with no mode, its project's context color).
 ///   who holds it: mine or unassigned = blank · AI = sparkles glyph · both = a single sparkle
 ///   state:        todo/in progress/done = solid · review = hollow · blocked = dashed outline
@@ -584,9 +575,8 @@ struct StatusBar: View {
     static let w: CGFloat = 16
     /// Horizontal distance from one depth square to the next (side + 1 px gap).
     static let step: CGFloat = w + 1
-    static var ownShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: h / 2, topTrailingRadius: h / 2, style: .continuous)
-    }
+    /// The item's own mark is a circle (its ancestors' marks stay square).
+    static var ownShape: Circle { Circle() }
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
     private var solid: Bool { isProject || (state != .review && state != .blocked) }
@@ -607,7 +597,6 @@ struct StatusBar: View {
                     Image(systemName: glyph)
                         .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
                         .foregroundStyle(solid ? Color.canvas : color)
-                        .offset(x: -0.5)   // optical center: the right side is rounded
                 }
             }
         }
