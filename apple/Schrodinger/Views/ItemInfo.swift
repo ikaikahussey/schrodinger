@@ -21,6 +21,30 @@ enum PanelPalette {
     static func label(_ style: Font.TextStyle = .caption) -> Font { .system(style, design: .default, weight: .bold).width(.condensed) }
 }
 
+/// A slow, soft pulse for the panel's color blocks: each block dims slightly and comes back, on its own period, so
+/// the display looks live without flashing. Off when Reduce Motion is on.
+struct PanelBlink: ViewModifier {
+    /// Picks the block's period and phase; neighbours should use different numbers.
+    let seed: Int
+    @State private var dim = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.55 : 1)
+            .onAppear {
+                guard !reduceMotion, !dim else { return }
+                let period = 1.8 + Double(seed % 5) * 0.45          // 1.8 – 3.6 s per half cycle
+                let delay = Double((seed * 7) % 11) * 0.3            // 0 – 3 s before the first dim
+                withAnimation(.easeInOut(duration: period).repeatForever(autoreverses: true).delay(delay)) { dim = true }
+            }
+    }
+}
+extension View {
+    /// Gentle blink for a panel color block. See `PanelBlink`.
+    func panelBlink(_ seed: Int) -> some View { modifier(PanelBlink(seed: seed)) }
+}
+
 extension EnvironmentValues {
     /// True inside the item sheet: pills draw as flat colored capsules with black glyphs.
     @Entry var panelStyle = false
@@ -38,30 +62,30 @@ struct ItemPanel<Content: View>: View {
         VStack(alignment: .leading, spacing: 10) {
             // Header bar: block · label · end cap
             HStack(spacing: gap) {
-                Rectangle().fill(PanelPalette.orange).frame(width: 40, height: bar)
-                Rectangle().fill(PanelPalette.lavender).frame(height: bar)
+                Rectangle().fill(PanelPalette.orange).frame(width: 40, height: bar).panelBlink(1)
+                Rectangle().fill(PanelPalette.lavender).frame(height: bar).panelBlink(2)
                 Text(label.uppercased())
                     .font(PanelPalette.label(.subheadline)).foregroundStyle(PanelPalette.orange)
                     .lineLimit(1).fixedSize()
                     .padding(.horizontal, 4)
-                Capsule().fill(PanelPalette.peach).frame(width: 26, height: bar)
+                Capsule().fill(PanelPalette.peach).frame(width: 26, height: bar).panelBlink(3)
             }
             content()
             // Footer bar
             HStack(spacing: gap) {
-                Rectangle().fill(PanelPalette.periwinkle).frame(height: bar / 2)
-                Rectangle().fill(PanelPalette.rose).frame(width: 60, height: bar / 2)
-                Capsule().fill(PanelPalette.orange).frame(width: 18, height: bar / 2)
+                Rectangle().fill(PanelPalette.periwinkle).frame(height: bar / 2).panelBlink(4)
+                Rectangle().fill(PanelPalette.rose).frame(width: 60, height: bar / 2).panelBlink(5)
+                Capsule().fill(PanelPalette.orange).frame(width: 18, height: bar / 2).panelBlink(6)
             }
         }
         .padding(.leading, rail + 10)
         // The rail takes the content's height: elbow at the top into the header, elbow at the bottom into the footer.
         .overlay(alignment: .leading) {
             VStack(spacing: gap) {
-                UnevenRoundedRectangle(topLeadingRadius: rail * 0.8).fill(PanelPalette.orange).frame(height: 40)
-                Rectangle().fill(PanelPalette.peach).frame(maxHeight: .infinity)
-                Rectangle().fill(PanelPalette.lavender).frame(height: 18)
-                UnevenRoundedRectangle(bottomLeadingRadius: rail * 0.8).fill(PanelPalette.periwinkle).frame(height: 28)
+                UnevenRoundedRectangle(topLeadingRadius: rail * 0.8).fill(PanelPalette.orange).frame(height: 40).panelBlink(7)
+                Rectangle().fill(PanelPalette.peach).frame(maxHeight: .infinity).panelBlink(8)
+                Rectangle().fill(PanelPalette.lavender).frame(height: 18).panelBlink(9)
+                UnevenRoundedRectangle(bottomLeadingRadius: rail * 0.8).fill(PanelPalette.periwinkle).frame(height: 28).panelBlink(10)
             }
             .frame(width: rail)
         }

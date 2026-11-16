@@ -209,14 +209,14 @@ struct OutlineView: View {
             Button { zoom(to: nil) } label: {
                 Text("ALL").font(PanelPalette.label(.caption)).foregroundStyle(.black)
                     .padding(.leading, 14).padding(.trailing, 8).frame(height: h)
-                    .background(PanelPalette.orange, in: UnevenRoundedRectangle(topLeadingRadius: h / 2, bottomLeadingRadius: h / 2))
+                    .background { UnevenRoundedRectangle(topLeadingRadius: h / 2, bottomLeadingRadius: h / 2).fill(PanelPalette.orange).panelBlink(11) }
             }
             .keyboardShortcut("[", modifiers: .command)
             .allowsHitTesting(z != nil)   // not dimmed at the top level: the block is part of the frame
             .accessibilityLabel("All items")
             if path.count > shown.count {
                 Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(.black)
-                    .padding(.horizontal, 8).frame(height: h).background(PanelPalette.rose)
+                    .padding(.horizontal, 8).frame(height: h).background { PanelPalette.rose.panelBlink(12) }
             }
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, a in
                 let current = a.id == z?.id
@@ -226,14 +226,15 @@ struct OutlineView: View {
                         .lineLimit(1).truncationMode(.tail)
                         .padding(.horizontal, 8).frame(maxWidth: current ? 180 : 110).frame(height: h)
                         .fixedSize(horizontal: !current, vertical: false)
-                        .background(current ? PanelPalette.peach : [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3])
+                        // Only the block's color pulses; its label stays steady and readable.
+                        .background { (current ? PanelPalette.peach : [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3]).panelBlink(13 + i) }
                 }
                 .allowsHitTesting(!current)
                 .layoutPriority(current ? 1 : 0)
             }
             // Filler bar and end cap: the row always spans the full width.
-            Rectangle().fill(z == nil ? PanelPalette.lavender : PanelPalette.periwinkle).frame(minWidth: 8).frame(height: h)
-            Capsule().fill(PanelPalette.orange).frame(width: 22, height: h)
+            Rectangle().fill(z == nil ? PanelPalette.lavender : PanelPalette.periwinkle).frame(minWidth: 8).frame(height: h).panelBlink(17)
+            Capsule().fill(PanelPalette.orange).frame(width: 22, height: h).panelBlink(18)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 12).padding(.vertical, 6)
