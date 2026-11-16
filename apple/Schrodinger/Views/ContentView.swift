@@ -51,12 +51,17 @@ struct ContentView: View {
                 NavigationStack { panelView(sel.panel) }.navigationSplitViewColumnWidth(min: 420, ideal: 760)
             }
             #else
-            TabView(selection: Binding(get: { sel.panel }, set: { sel.panel = $0 })) {
-                ForEach([Panel.outline, .batch, .inbox, .settings].filter { !Panel.hidden.contains($0) || $0 == .settings }) { p in
-                    NavigationStack { panelView(p) }
-                    .tabItem { Label(p.label, systemImage: p.icon) }.badge(badge(p)).tag(p)
+            // No tab bar: the outline is the app. Inbox and Settings open from the header's menu as a sheet.
+            NavigationStack { OutlineView(sel: sel) }
+                .sheet(item: Binding(get: { sel.panel == .outline ? nil : sel.panel }, set: { sel.panel = $0 ?? .outline })) { p in
+                    NavigationStack {
+                        panelView(p)
+                            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sel.panel = .outline }.fontWeight(.semibold) } }
+                    }
+                    .environment(sel)
+                    .environment(harness)
+                    .font(Appearance.shared.font.font(.body))
                 }
-            }
             #endif
         }
         .environment(sel)

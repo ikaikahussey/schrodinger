@@ -3,11 +3,12 @@ import SwiftUI
 /// Color schemes for the outline squares. Each scheme gives one color per mode and a rotating set of context colors
 /// (one per top-level project). "Retro 70s" is the default; "Mono" keeps the original black-on-white look.
 enum PaletteKind: String, CaseIterable, Identifiable {
-    case retro70s, mono, lcars, okabeIto, reef, custom
+    // "pastel" keeps its original stored value so a saved choice of this scheme still loads.
+    case retro70s, swiss, mono, pastel = "lcars", okabeIto, reef, custom
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .retro70s: "Retro 70s"; case .mono: "Mono"; case .lcars: "LCARS"; case .okabeIto: "Color-blind safe"; case .reef: "Reef"; case .custom: "Custom"
+        case .retro70s: "Retro 70s"; case .swiss: "Swiss"; case .mono: "Mono"; case .pastel: "Pastel"; case .okabeIto: "Color-blind safe"; case .reef: "Reef"; case .custom: "Custom"
         }
     }
 }
@@ -26,7 +27,13 @@ struct Palette {
     static let retro70s = Palette(
         modes: ["CC5803", "A63D40", "2A7F86", "E3A72F", "7A8B3C", "7B3F61", "C9A66B", "6F4E37"].map(Color.init(hex:)),
         contexts: ["CC5803", "E3A72F", "7A8B3C", "2A7F86", "A63D40", "6F4E37"].map(Color.init(hex:)))
-    static let lcars = Palette(
+    /// Swiss poster style: signal red and black on white, nothing else. "Black" is the text color, so in dark mode
+    /// the scheme reads as red and white on black. Modes and projects alternate between the two.
+    static let swiss: Palette = {
+        let red = Color(hex: "E30613"), ink = Color.primary
+        return Palette(modes: [red, ink, red, ink, red, ink, red, ink], contexts: [red, ink, red, ink, red, ink])
+    }()
+    static let pastel = Palette(
         modes: ["FF9900", "CC6666", "9999FF", "FFCC99", "99CCFF", "CC99CC", "FFCC00", "A0A0A0"].map(Color.init(hex:)),
         contexts: ["FF9966", "CC99CC", "9999CC", "FFAA00", "6688CC", "DD8866"].map(Color.init(hex:)))
     static let okabeIto = Palette(
@@ -37,7 +44,7 @@ struct Palette {
         contexts: ["0B6E99", "1BA39C", "4D9078", "F2C14E", "F78154", "8E7DBE"].map(Color.init(hex:)))
 
     static func preset(_ k: PaletteKind) -> Palette {
-        switch k { case .retro70s: .retro70s; case .mono: .mono; case .lcars: .lcars; case .okabeIto: .okabeIto; case .reef: .reef; case .custom: .retro70s }
+        switch k { case .retro70s: .retro70s; case .swiss: .swiss; case .mono: .mono; case .pastel: .pastel; case .okabeIto: .okabeIto; case .reef: .reef; case .custom: .retro70s }
     }
 }
 
