@@ -10,7 +10,7 @@ struct SchrodingerApp: App {
     @State private var harness: HarnessEngine
 
     init() {
-        let schema = Schema([Node.self, Proposal.self, ActivityEntry.self, Digest.self, WorkspaceFile.self, HarnessRun.self])
+        let schema = Schema([Node.self, Proposal.self, ActivityEntry.self, Digest.self, WorkspaceFile.self, HarnessRun.self, Attachment.self])
         // All data is on device. iCloud (CloudKit private database) sync is opt-in and only between the user's own devices.
         let sync = UserDefaults.standard.bool(forKey: "iCloudSync")
         let config = ModelConfiguration("Schrodinger", schema: schema, cloudKitDatabase: sync ? .private("iCloud.org.schrodinger.app") : .none)

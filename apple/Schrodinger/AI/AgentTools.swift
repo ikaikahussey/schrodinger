@@ -23,6 +23,8 @@ enum AgentTools {
                         if let due = t.due { d["due"] = due.dayString }
                         if !t.acceptanceNote.isEmpty { d["acceptance_note"] = t.acceptanceNote }
                         if !t.notes.isEmpty { d["notes"] = t.notes }
+                        let links = s.attachments(for: t.id).filter { $0.kind == .link }.map(\.urlString)
+                        if !links.isEmpty { d["links"] = links }
                         if let a = t.artifact { d["artifact"] = String(a.prefix(1500)) }
                         if t.parentID != p.id { d["parent_id"] = t.parentID?.uuidString }
                         return d

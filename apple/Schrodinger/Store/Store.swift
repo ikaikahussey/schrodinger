@@ -22,6 +22,26 @@ struct Store {
         return (try? ctx.fetch(d)) ?? []
     }
     func projects() -> [Node] { children(of: nil) }
+
+    // MARK: - Attachments (photos and links on an item)
+    func attachments(for nodeID: UUID) -> [Attachment] {
+        (try? ctx.fetch(FetchDescriptor<Attachment>(predicate: #Predicate { $0.nodeID == nodeID }, sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+    }
+    @discardableResult
+    func addPhoto(_ data: Data, to nodeID: UUID) -> Attachment {
+        let a = Attachment(nodeID: nodeID, kind: .photo, data: data)
+        ctx.insert(a)
+        return a
+    }
+    /// Adds a link from typed or pasted text. Returns nil (and adds nothing) if the text is not a web address.
+    @discardableResult
+    func addLink(_ text: String, to nodeID: UUID) -> Attachment? {
+        guard let url = Attachment.normalizedURL(text) else { return nil }
+        let a = Attachment(nodeID: nodeID, kind: .link, urlString: url.absoluteString)
+        ctx.insert(a)
+        return a
+    }
+    func deleteAttachment(_ a: Attachment) { ctx.delete(a) }
     func descendants(of id: UUID) -> [Node] {
         var out: [Node] = []
         var queue = children(of: id)
@@ -134,7 +154,8 @@ struct Store {
     }
 
     func delete(_ n: Node) {
-        for d in descendants(of: n.id) { ctx.delete(d) }
+        for d in descendants(of: n.id) { for f in attachments(for: d.id) { ctx.delete(f) }; ctx.delete(d) }
+        for f in attachments(for: n.id) { ctx.delete(f) }
         for a in activity(for: n.id, limit: 10_000) { ctx.delete(a) }
         let parent = n.parentID
         ctx.delete(n)

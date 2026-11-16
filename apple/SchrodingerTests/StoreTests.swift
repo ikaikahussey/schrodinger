@@ -5,7 +5,7 @@ import SwiftData
 @MainActor
 final class StoreTests: XCTestCase {
     func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Node.self, Proposal.self, ActivityEntry.self, Digest.self, WorkspaceFile.self, HarnessRun.self])
+        let schema = Schema([Node.self, Proposal.self, ActivityEntry.self, Digest.self, WorkspaceFile.self, HarnessRun.self, Attachment.self])
         return try ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
     }
 
@@ -97,6 +97,24 @@ final class StoreTests: XCTestCase {
         let t = s.create(title: "Draft letter #urgent", parentID: p.id, mode: .write); t.notes = "see #legal"
         XCTAssertEqual(p.tags, ["client", "q3"])
         XCTAssertEqual(t.tags, ["urgent", "legal", "write"])
+    }
+
+    func testAttachments() throws {
+        XCTAssertEqual(Attachment.normalizedURL(" example.com/page ")?.absoluteString, "https://example.com/page")
+        XCTAssertEqual(Attachment.normalizedURL("http://www.capitol.hawaii.gov/x?y=1")?.absoluteString, "http://www.capitol.hawaii.gov/x?y=1")
+        XCTAssertNil(Attachment.normalizedURL("not a link"))
+        XCTAssertNil(Attachment.normalizedURL("localhost"))
+        XCTAssertNil(Attachment.normalizedURL("ftp://example.com/file"))
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P"); let t = s.create(title: "t", parentID: p.id)
+        XCTAssertNil(s.addLink("nope", to: t.id))
+        let link = try XCTUnwrap(s.addLink("www.example.org/a", to: t.id))
+        XCTAssertEqual(link.displayTitle, "example.org")
+        s.addPhoto(Data([1, 2, 3]), to: t.id)
+        s.save()
+        XCTAssertEqual(s.attachments(for: t.id).map(\.kind), [.link, .photo])
+        s.delete(p); s.save()   // deleting an item removes the attachments of everything under it
+        XCTAssertTrue(s.attachments(for: t.id).isEmpty)
     }
 
     func testUndoAndPathJail() throws {

@@ -133,6 +133,40 @@ final class Proposal {
     var isInformational: Bool { [.stale, .blocked_chain, .no_path].contains(type) }
 }
 
+/// A photo or a link attached to an item. Photos are kept outside the database file (external storage); with iCloud
+/// sync on they sync with the rest of the item's data.
+@Model
+final class Attachment {
+    enum Kind: String { case photo, link }
+    var id: UUID = UUID()
+    var nodeID: UUID = UUID()
+    var kindRaw: String = Kind.link.rawValue
+    /// Links: the address. Photos: empty.
+    var urlString: String = ""
+    @Attribute(.externalStorage) var data: Data? = nil
+    var createdAt: Date = Date()
+    init(nodeID: UUID, kind: Kind, urlString: String = "", data: Data? = nil) {
+        self.nodeID = nodeID; self.kindRaw = kind.rawValue; self.urlString = urlString; self.data = data
+    }
+    var kind: Kind { Kind(rawValue: kindRaw) ?? .link }
+    var url: URL? { URL(string: urlString) }
+    /// What a link chip shows: the site's name without "www.".
+    var displayTitle: String {
+        guard let host = url?.host() else { return urlString }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+    /// Turns what someone typed or pasted into a web address: trims it, adds https:// when no scheme was given, and
+    /// rejects text that has no host (so "not a link" is refused, "example.com/page" is accepted).
+    static func normalizedURL(_ text: String) -> URL? {
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !t.contains(" ") else { return nil }
+        if !t.contains("://") { t = "https://" + t }
+        guard let u = URL(string: t), let scheme = u.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = u.host(), host.contains(".") else { return nil }
+        return u
+    }
+}
+
 @Model
 final class ActivityEntry {
     var id: UUID = UUID()
