@@ -756,12 +756,6 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && node.collapsed {
-                // No button: tapping the item shows its children. This only marks that some are hidden.
-                Text("\u{2026}").font(.callout.weight(.bold)).foregroundStyle(Color.ink.opacity(0.5))
-                    .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                    .accessibilityLabel("Children hidden")
-            }
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
