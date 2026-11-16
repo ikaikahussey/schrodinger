@@ -61,6 +61,7 @@ struct ContentView: View {
             #endif
         }
         .environment(sel)
+        .font(Appearance.shared.font.font(.body))
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

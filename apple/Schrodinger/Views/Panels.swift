@@ -322,6 +322,7 @@ struct SettingsView: View {
                 Stepper("Agent max turns: \(settings.agentMaxTurns)", value: $settings.agentMaxTurns, in: 2...30)
                 if let last = harness.lastRun { Text("Last run \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
+            AppearanceSection()
             Section("Data") {
                 Toggle("Sync between my devices via iCloud", isOn: $settings.iCloudSync)
                 Text("All data is stored on this device. With iCloud sync on, it is also stored in your private iCloud database (Apple's CloudKit) and nowhere else. Changing this takes effect at next launch.").font(.caption).foregroundStyle(.secondary)
@@ -330,5 +331,47 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .frame(minWidth: 420)
+    }
+}
+
+/// Color scheme, typeface and outline sounds.
+struct AppearanceSection: View {
+    @State private var look = Appearance.shared
+    var body: some View {
+        Section("Appearance") {
+            Picker("Colors", selection: $look.palette) { ForEach(PaletteKind.allCases) { Text($0.label).tag($0) } }
+            swatches
+            if look.palette == .custom {
+                Menu("Start from preset") {
+                    ForEach(PaletteKind.allCases.filter { $0 != .custom }) { k in Button(k.label) { look.copyToCustom(k) } }
+                }
+                ForEach(Array(Mode.allCases.enumerated()), id: \.element.id) { i, m in
+                    ColorPicker(m.label, selection: modeBinding(i), supportsOpacity: false)
+                }
+                ForEach(0..<Palette.contextCount, id: \.self) { i in
+                    ColorPicker("Project color \(i + 1)", selection: contextBinding(i), supportsOpacity: false)
+                }
+            }
+            Picker("Font", selection: $look.font) {
+                ForEach(AppFontFamily.allCases) { f in Text(f.label).font(f.font(.body)).tag(f) }
+            }
+            Text("The quick brown fox jumps over the lazy dog.").font(look.font.font(.body))
+            Toggle("Xylophone sounds when moving items", isOn: $look.sounds)
+            Text("Indent and outdent step along a major scale; moving up and down steps by semitones.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var swatches: some View {
+        let p = look.current
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 1) { ForEach(0..<p.modes.count, id: \.self) { i in Rectangle().fill(p.modes[i]).frame(width: 16, height: 16) } }
+            HStack(spacing: 1) { ForEach(0..<p.contexts.count, id: \.self) { i in Rectangle().fill(p.contexts[i]).frame(width: 16, height: 16) } }
+        }
+        .accessibilityHidden(true)
+    }
+    private func modeBinding(_ i: Int) -> Binding<Color> {
+        Binding(get: { Color(look.customModes[i]) }, set: { look.customModes[i] = $0.resolve(in: EnvironmentValues()) })
+    }
+    private func contextBinding(_ i: Int) -> Binding<Color> {
+        Binding(get: { Color(look.customContexts[i]) }, set: { look.customContexts[i] = $0.resolve(in: EnvironmentValues()) })
     }
 }

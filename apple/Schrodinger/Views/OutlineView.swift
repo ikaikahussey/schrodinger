@@ -21,6 +21,7 @@ struct OutlineView: View {
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
 
     private var store: Store { Store(ctx) }
+    private var look: Appearance { Appearance.shared }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     var body: some View {
@@ -28,20 +29,21 @@ struct OutlineView: View {
         let roots = kids[nil] ?? []
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(roots) { p in nodeTree(p, depth: 0, kids: kids) }
+                ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i)) }
                 Button { let n = store.create(); store.save(); beginEdit(n.id) } label: {
-                    HStack(spacing: 10) { Image(systemName: "plus").font(.caption.weight(.semibold)); Text("New item").font(.callout) }
+                    HStack(spacing: 10) { Image(systemName: "plus").font(.caption.weight(.semibold)); Text("New item").font(look.font.font(.callout)) }
                 }
-                .buttonStyle(.plain).foregroundStyle(.tertiary).padding(.vertical, 10).padding(.leading, 6)
+                .buttonStyle(.plain).foregroundStyle(.tertiary).padding(.vertical, 10).padding(.leading, 16)
                 if showLegend { BarLegend().padding(.top, 24) }
             }
-            .padding(.horizontal, 16).padding(.top, 8)
+            // Squares start at the first pixel on the left; text keeps its margin on the right.
+            .padding(.trailing, 16).padding(.top, 8)
             .coordinateSpace(name: "outline")
             .onPreferenceChange(RowFrameKey.self) { v in Task { @MainActor in drag.frames = v } }
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, 16 + CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
+                        .padding(.leading, CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -121,18 +123,20 @@ struct OutlineView: View {
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
 
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]]) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], trail: [Color], context: Color) -> AnyView {
         let children = kids[n.id] ?? []
+        // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
+        let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
         let hidden = (filter != .all || modeFilter != nil) && depth > 0 && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
-            NodeRow(node: n, depth: depth, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
+            NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) })
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed {
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
         })
@@ -170,7 +174,12 @@ struct OutlineView: View {
         let minD = below?.depth ?? 0
         let want = (above?.depth ?? 0) + Int((dx / 44).rounded())
         let depth = max(min(minD, maxD), min(maxD, want))
-        drag.target = OutlineDrag.Target(y: lineY, depth: depth, aboveID: above?.node.id)
+        let target = OutlineDrag.Target(y: lineY, depth: depth, aboveID: above?.node.id)
+        if let old = drag.target {
+            if old.depth != depth { Xylophone.shared.play(OutlinePitch.depth(depth)) }
+            else if old.aboveID != target.aboveID { Xylophone.shared.play(OutlinePitch.row(idx)) }
+        }
+        drag.target = target
     }
 
     private func performDrop(_ n: Node) {
@@ -208,17 +217,24 @@ struct OutlineView: View {
             let siblings = kids[n.parentID] ?? []
             guard let idx = siblings.firstIndex(where: { $0.id == n.id }), idx > 0 else { return }
             try? s.move(n, to: siblings[idx - 1].id, position: 999); s.save(); keep()
+            Xylophone.shared.play(OutlinePitch.depth(depthOf(n)))
         case .shiftTab:
             guard let pid = n.parentID, let parent = s.node(pid) else { return }
             try? s.move(n, to: parent.parentID, position: parent.position + 1); s.save(); keep()
+            Xylophone.shared.play(OutlinePitch.depth(depthOf(n)))
         case .backspaceEmpty:
             guard (kids[n.id] ?? []).isEmpty else { return }
             let siblings = kids[n.parentID] ?? []
             let idx = siblings.firstIndex(where: { $0.id == n.id }) ?? 0
             s.delete(n); s.save()
             if idx > 0 { beginEdit(siblings[idx - 1].id) }
-        case .altUp: try? s.move(n, to: n.parentID, position: max(0, n.position - 1)); s.save(); keep()
-        case .altDown: try? s.move(n, to: n.parentID, position: n.position + 1); s.save(); keep()
+        case .altUp, .altDown:
+            let siblings = kids[n.parentID] ?? []
+            guard let idx = siblings.firstIndex(where: { $0.id == n.id }) else { return }
+            let to = key == .altUp ? idx - 1 : idx + 1
+            guard to >= 0, to < siblings.count else { return }
+            try? s.move(n, to: n.parentID, position: max(0, n.position + (key == .altUp ? -1 : 1))); s.save(); keep()
+            Xylophone.shared.play(OutlinePitch.position(to, depth: depthOf(n)))
         }
     }
 }
@@ -251,75 +267,71 @@ struct ProjectLine: View {
             }
         }
         .frame(height: 1.5)
-        .padding(.leading, 24).padding(.trailing, 4).padding(.bottom, 4)
+        .padding(.leading, StatusBar.step + 8).padding(.trailing, 4).padding(.bottom, 4)
         .opacity(progress.total == 0 ? 0 : 1)
     }
 }
 
-// MARK: - Bars
+// MARK: - Squares
 
-/// The item's own bar. Encodes state (fill), assignee (shape) and nothing else.
-///   state:    todo/in progress = solid · review = hollow · blocked = dashed · done = solid (the text is struck through)
-///   assignee: human = one bar · ai = bar with a gap · shared = two thin bars side by side · unassigned = half-height bar
-/// Every bar is full ink (black in light mode, white in dark mode), never gray, and fits the same w × h footprint.
+/// The item's own square: the rightmost square in the row, with rounded top-right and bottom-right corners.
+/// Color = the item's mode (or, with no mode, its project's context color). Fill encodes state, inner gaps encode who holds it:
+///   state:    todo/in progress/done = solid · review = hollow · blocked = dashed outline
+///   assignee: human = whole square · ai = horizontal gap · shared = vertical gap · unassigned = lower half empty
 struct StatusBar: View {
     let state: TaskState
     let assignee: Assignee
     let isProject: Bool
+    var color: Color = .ink
+    /// Side of each square.
     static let h: CGFloat = 16
-    static let w: CGFloat = 6
-    /// Horizontal distance from one depth bar to the next (bar width + gap).
-    static let step: CGFloat = w + 3
+    static let w: CGFloat = 16
+    /// Horizontal distance from one depth square to the next (side + 1 px gap).
+    static let step: CGFloat = w + 1
+    static var ownShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: h / 2, topTrailingRadius: h / 2, style: .continuous)
+    }
 
     var body: some View {
-        let h = Self.h
-        Group {
+        let shape = Self.ownShape
+        ZStack {
             if isProject {
-                RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: Self.w, height: h)
+                shape.fill(color)
             } else {
+                switch state {
+                case .review:  shape.strokeBorder(color, lineWidth: 2)
+                case .blocked: shape.strokeBorder(color, style: StrokeStyle(lineWidth: 2, dash: [3, 2]))
+                default:       shape.fill(color)
+                }
                 switch assignee {
-                case .ai:
-                    VStack(spacing: 3) { styled.frame(height: (h - 3) * 0.4); styled.frame(height: (h - 3) * 0.6) }.frame(width: Self.w, height: h)
-                case .shared:
-                    HStack(spacing: 2) { styled.frame(width: (Self.w - 2) / 2, height: h); styled.frame(width: (Self.w - 2) / 2, height: h) }
-                case .human:
-                    styled.frame(width: Self.w, height: h)
-                case .unassigned:
-                    styled.frame(width: Self.w, height: h / 2).frame(width: Self.w, height: h, alignment: .top)
+                case .human: EmptyView()
+                case .ai: Rectangle().fill(Color.canvas).frame(height: 1.5).offset(y: -Self.h * 0.1)
+                case .shared: Rectangle().fill(Color.canvas).frame(width: 1.5)
+                case .unassigned: Rectangle().fill(Color.canvas).frame(height: Self.h / 2).frame(maxHeight: .infinity, alignment: .bottom)
                 }
             }
         }
-    }
-
-    @ViewBuilder private var styled: some View {
-        let shape = RoundedRectangle(cornerRadius: 1)
-        switch state {
-        case .review:  shape.strokeBorder(Color.ink, lineWidth: 1.5)
-        case .blocked: shape.strokeBorder(Color.ink, style: StrokeStyle(lineWidth: 1.5, dash: [2, 2]))
-        default:       shape.fill(Color.ink)
-        }
+        .frame(width: Self.w, height: Self.h)
+        .clipShape(shape)
     }
 }
 
-/// One bar per depth level: ancestors solid, the item's own bar styled by StatusBar, mode emoji beneath. Tap = menu.
+/// One square per depth level, flush with the left edge and 1 px apart: each ancestor's square in that ancestor's color,
+/// then the item's own square (StatusBar). Tap = actions.
 struct DepthBars: View {
     let node: Node
     let depth: Int
     let hasChildren: Bool
+    var trail: [Color] = []
+    var color: Color = .ink
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .top, spacing: 3) {
-                ForEach(0..<max(depth, 0), id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1).fill(Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
-                }
-                StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject)
+        HStack(alignment: .top, spacing: 1) {
+            ForEach(0..<max(depth, 0), id: \.self) { i in
+                Rectangle().fill(i < trail.count ? trail[i] : Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
             }
-            if let m = node.mode, !node.isProject {
-                Text(m.emoji).font(.system(size: 10)).fixedSize()
-                    .padding(.leading, CGFloat(depth) * StatusBar.step)
-            }
+            StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
         }
-        .frame(minWidth: CGFloat(depth) * StatusBar.step + 14, alignment: .leading)
+        .frame(minWidth: CGFloat(depth + 1) * StatusBar.step, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -360,22 +372,23 @@ extension Mode {
 
 struct BarLegend: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Bars").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Squares").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
             row(StatusBar(state: .todo, assignee: .human, isProject: false), "me")
             row(StatusBar(state: .todo, assignee: .ai, isProject: false), "ai")
             row(StatusBar(state: .todo, assignee: .shared, isProject: false), "both")
             row(StatusBar(state: .todo, assignee: .unassigned, isProject: false), "unassigned")
             row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
             row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
-            row(StatusBar(state: .done, assignee: .human, isProject: false), "done")
-            Text("Emoji under the bar is the mode: " + Mode.allCases.map(\.label).joined(separator: " · "))
-                .font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
+            Text("Color is the mode; items without a mode take their project's color.").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
+            ForEach(Mode.allCases) { m in
+                row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.color(for: m)), m.label)
+            }
         }
-        .padding(.leading, 6)
+        .padding(.leading, 16)
     }
     private func row(_ bar: StatusBar, _ label: String) -> some View {
-        HStack(spacing: 10) { bar.frame(width: 10, alignment: .leading); Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6)) }
+        HStack(spacing: 10) { bar; Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6)) }
     }
 }
 
@@ -385,6 +398,8 @@ struct NodeRow: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var node: Node
     let depth: Int
+    var trail: [Color] = []
+    var color: Color = .ink
     let hasChildren: Bool
     let leafCount: (done: Int, total: Int)
     var sel: Selection
@@ -404,6 +419,7 @@ struct NodeRow: View {
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
+    private var titleFont: Font { Appearance.shared.font.font(node.isProject ? .title3 : .body, weight: node.isProject ? .semibold : .regular) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
     private func toggleSelect() {
@@ -431,8 +447,8 @@ struct NodeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 10) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren)
-                .padding(.vertical, 4).padding(.trailing, 6)   // wider grab area
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
+                .padding(.vertical, 4).padding(.trailing, 4)   // wider grab area
                 .contentShape(Rectangle())
                 .onTapGesture { commit(); toggleSelect() }
                 .gesture(handleGesture)
@@ -447,7 +463,7 @@ struct NodeRow: View {
             // Tap selects (shows the action strip), tap again deselects (hides it); long press (or double-tap) edits the text.
             if !editing {
                 Text(title.isEmpty ? "New item" : title)
-                    .font(node.isProject ? .title3.weight(.semibold) : .body)
+                    .font(titleFont)
                     .strikethrough(done)
                     .foregroundStyle(title.isEmpty ? Color.ink.opacity(0.3) : done ? Color.ink.opacity(0.4) : Color.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -458,7 +474,7 @@ struct NodeRow: View {
             } else {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(node.isProject ? .title3.weight(.semibold) : .body)
+                .font(titleFont)
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
@@ -478,7 +494,7 @@ struct NodeRow: View {
             if showNote && !node.isProject {
                 TextField("Add context…", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.callout)
+                    .font(Appearance.shared.font.font(.callout))
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .focused($noteFocused)
                     .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
@@ -515,7 +531,6 @@ struct NodeRow: View {
             .accessibilityLabel("Details")
         }
         .padding(.vertical, 6)
-        .padding(.leading, 6)
         .onAppear { title = node.title; note = node.notes; showNote = !node.notes.isEmpty }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
         .onChange(of: node.notes) { _, v in if v != note { note = v; if !v.isEmpty { showNote = true } } }
@@ -525,7 +540,7 @@ struct NodeRow: View {
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id { commit() }
         }
-        if sel.nodeID == node.id || editing { actionStrip.padding(.leading, 6 + CGFloat(depth) * StatusBar.step).padding(.bottom, 8).transition(.opacity) }
+        if sel.nodeID == node.id || editing { actionStrip.padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 8).transition(.opacity) }
         }
         .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
@@ -535,7 +550,7 @@ struct NodeRow: View {
         .opacity(lifting ? 0.92 : 1)
         .zIndex(lifting ? 1 : 0)
         // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
-        .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: -4) }
+        .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: 4) }
         .overlay(alignment: .trailing) { pullArrow("arrow.right", active: pull > pullThreshold, show: pull > 8).offset(x: 4) }
         .simultaneousGesture(pullGesture)
         .contextMenu { menu }
