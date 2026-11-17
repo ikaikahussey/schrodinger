@@ -320,7 +320,9 @@ struct OutlineView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(.leading, 12).padding(.trailing, 2)
+        // The logo's ink starts where a top-level item's text starts: the circle's column, the squares' grab padding
+        // (12) and the row's spacing (2), less the drawing's own margin (whisker tips at x = 10 of its 64-unit box).
+        .padding(.leading, StatusBar.step + 12 + 2 - 30 * 10 / 64).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
         .background(fill, in: UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2))
         .contentShape(Rectangle())
