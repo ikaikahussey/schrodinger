@@ -256,14 +256,8 @@ struct OutlineView: View {
         let shown = Array(path.suffix(3))            // deepest three levels; earlier ones fold into "…"
         let h = Self.headerHeight
         return HStack(spacing: 3) {
-            // Branding: the logo. It is also "all items": tap it to leave a zoom.
-            Button { zoom(to: nil) } label: {
-                CatLogo().frame(width: h + 4, height: h + 4).padding(.trailing, 5).contentShape(Rectangle())
-            }
-            .keyboardShortcut("[", modifiers: .command)
-            .allowsHitTesting(z != nil)
-            .accessibilityLabel(z == nil ? "Schrodinger" : "Schrodinger. All items")
-            .accessibilityAddTraits(.isHeader)
+            // The search field comes first and runs to the screen's left edge; the logo sits inside it.
+            searchField(z)
             if path.count > shown.count {
                 Text("\u{2026}").font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: PanelPalette.rose))
                     .padding(.horizontal, 8).frame(height: h).background { PanelPalette.rose.panelBlink(12) }
@@ -283,23 +277,31 @@ struct OutlineView: View {
                 .allowsHitTesting(!current)
                 .layoutPriority(current ? 1 : 0)
             }
-            // The middle block is the search field; it takes the remaining width.
-            searchField(h, tint: z == nil ? PanelPalette.lavender : PanelPalette.periwinkle)
-            filterMenu
+            filterMenu.padding(.leading, 14)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .padding(.trailing, 12).padding(.vertical, 6)
         .frame(maxWidth: .infinity)
         .background(Color.canvas)
         .animation(.snappy(duration: 0.25), value: zoomID)
     }
 
-    /// Search, inside the header's middle block. Type words to match text; tap a tag button (or type #tag) to match tags.
-    private func searchField(_ h: CGFloat, tint: Color) -> some View {
-        let fill = searching ? PanelPalette.peach : tint
-        let ink = PanelPalette.text(on: fill)
-        return HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .heavy)).foregroundStyle(ink.opacity(0.7))
+    /// Search, the header's first block, flush with the left edge. The logo sits at its start (tap it to leave a
+    /// zoom). Type words to match text; tap a tag button (or type #tag) to match tags. No color: a neutral fill.
+    private static let searchHeight: CGFloat = 44
+    private func searchField(_ z: Node?) -> some View {
+        let h = Self.searchHeight
+        let fill = Color.primary.opacity(searching || searchFocused ? 0.12 : 0.07)
+        let ink = Color.primary
+        return HStack(spacing: 8) {
+            // Branding: the logo. It is also "all items": tap it to leave a zoom.
+            Button { zoom(to: nil) } label: {
+                CatLogo().frame(width: 30, height: 30).contentShape(Rectangle())
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .allowsHitTesting(z != nil)
+            .accessibilityLabel(z == nil ? "Schrodinger" : "Schrodinger. All items")
+            .accessibilityAddTraits(.isHeader)
             TextField("", text: $search, prompt: Text("SEARCH").foregroundStyle(ink.opacity(0.5)))
                 .textFieldStyle(.plain)
                 .font(PanelPalette.label(.subheadline)).foregroundStyle(ink).tint(ink)
@@ -318,9 +320,9 @@ struct OutlineView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(.leading, 8).padding(.trailing, 2)
+        .padding(.leading, 12).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
-        .background(fill)
+        .background(fill, in: UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2))
         .contentShape(Rectangle())
         .onTapGesture { searchFocused = true }
         .accessibilityLabel("Search")
