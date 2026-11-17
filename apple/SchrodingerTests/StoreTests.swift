@@ -128,4 +128,50 @@ final class StoreTests: XCTestCase {
         XCTAssertThrowsError(try AgentTools.safePathThrowing("/tmp/x"))
         XCTAssertEqual(try AgentTools.safePathThrowing("notes/./a.md"), "notes/a.md")
     }
+
+    func testListLinesBecomeItems() {
+        XCTAssertEqual(ListText.item("- call the lab"), .init(indent: 0, title: "call the lab"))
+        XCTAssertEqual(ListText.item("  2) [x] order film"), .init(indent: 2, title: "order film", done: true))
+        XCTAssertNil(ListText.item("-5 degrees"))
+        XCTAssertNil(ListText.item("3.5 hours"))
+        XCTAssertNil(ListText.item("- "))
+        // The line still being typed stays; finished list lines come out; other text stays.
+        let live = ListText.extract(from: "thoughts\n- one\n* two\n- thr", includeLastLine: false)
+        XCTAssertEqual(live.items.map(\.title), ["one", "two"])
+        XCTAssertEqual(live.rest, "thoughts\n- thr")
+        // Lines that were already in the notes are not taken.
+        let kept = ListText.extract(from: "- old\n- new\n", includeLastLine: false, keeping: ["- old"])
+        XCTAssertEqual(kept.items.map(\.title), ["new"])
+        XCTAssertEqual(kept.rest, "- old\n")
+    }
+
+    func testLinksComeOutOfText() {
+        let r = LinkText.extract(from: "Read https://example.org/a?b=1, then update README.md and www.example.com.")
+        XCTAssertEqual(r.links, ["https://example.org/a?b=1", "www.example.com"])
+        XCTAssertEqual(r.rest, "Read then update README.md and")
+        XCTAssertEqual(LinkText.extract(from: "no links here").rest, "no links here")
+    }
+
+    func testItemAdvisorFilesSuggestionsAndAcceptApplies() async throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let t = s.create(title: "Book the studio and order film", parentID: p.id, assignee: .human)
+        let added = try await ItemAdvisor.advise(nodeID: t.id, container: c, provider: MockProvider())
+        XCTAssertGreaterThan(added, 0)
+        let split = try XCTUnwrap(s.inbox().first { $0.type == .decompose && $0.nodeID == t.id })
+        try s.accept(split)
+        XCTAssertEqual(s.children(of: t.id).map(\.title), ["Book the studio", "order film"])
+        // Asking again raises nothing that was already raised.
+        let again = try await ItemAdvisor.advise(nodeID: t.id, container: c, provider: MockProvider())
+        XCTAssertEqual(again, 0)
+        // Model output is checked before it is filed; accepting applies it.
+        let (type, summary, payload) = try XCTUnwrap(ItemAdvisor.validated(["type": "retitle", "summary": "Clearer", "payload": ["title": "Book studio"]], for: t))
+        let r = try XCTUnwrap(s.propose(projectID: p.id, nodeID: t.id, type: type, summary: summary, payload: payload))
+        try s.accept(r)
+        XCTAssertEqual(t.title, "Book studio")
+        XCTAssertNil(ItemAdvisor.validated(["type": "retitle", "summary": "Same", "payload": ["title": "Book studio"]], for: t))
+        let note = try XCTUnwrap(s.propose(projectID: p.id, nodeID: t.id, type: .note, summary: "Add", payload: ["text": "Done = confirmed booking"]))
+        try s.accept(note)
+        XCTAssertEqual(t.notes, "Done = confirmed booking")
+    }
 }

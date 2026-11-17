@@ -24,6 +24,39 @@ actor CalendarService {
         return (try? await store.requestFullAccessToEvents()) ?? false
     }
 
+    /// Full calendar access has been granted (asking is done from Settings, never from a sync).
+    nonisolated static var authorized: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil && EKEventStore.authorizationStatus(for: .event) == .fullAccess
+    }
+
+    /// Calendars events can be added to.
+    func writableCalendars() -> [(id: String, title: String)] {
+        store.calendars(for: .event).filter(\.allowsContentModifications).map { ($0.calendarIdentifier, $0.title) }.sorted { $0.title < $1.title }
+    }
+
+    /// Creates the item's event, or brings its existing one up to date. Returns the event's identifier.
+    /// A dated item with no time is an all-day event; with a time it lasts one hour.
+    func upsert(eventID: String, calendarID: String, title: String, notes: String, date: Date, allDay: Bool) throws -> String {
+        guard let cal = store.calendar(withIdentifier: calendarID), cal.allowsContentModifications else { throw CalendarError.denied }
+        let existing = eventID.isEmpty ? nil : store.event(withIdentifier: eventID)
+        let e = existing ?? EKEvent(eventStore: store)
+        let start = allDay ? Calendar.current.startOfDay(for: date) : date
+        let end = allDay ? start : start.addingTimeInterval(3600)
+        if existing != nil, e.title == title, (e.notes ?? "") == notes, e.isAllDay == allDay, e.startDate == start, e.endDate == end,
+           e.calendar.calendarIdentifier == calendarID { return eventID }
+        e.title = title; e.notes = notes.isEmpty ? nil : notes; e.isAllDay = allDay; e.startDate = start; e.endDate = end; e.calendar = cal
+        try store.save(e, span: .thisEvent, commit: true)
+        return e.eventIdentifier
+    }
+
+    /// Removes events this app made (an item was deleted, or its date was taken off).
+    func remove(eventIDs: [String]) {
+        guard Self.authorized else { return }
+        for id in eventIDs where !id.isEmpty {
+            if let e = store.event(withIdentifier: id) { try? store.remove(e, span: .thisEvent, commit: true) }
+        }
+    }
+
     func calendars() -> [(id: String, title: String)] {
         store.calendars(for: .event).map { ($0.calendarIdentifier, $0.title) }.sorted { $0.title < $1.title }
     }

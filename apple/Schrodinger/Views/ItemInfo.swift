@@ -1,9 +1,8 @@
 import SwiftUI
 import SwiftData
 
-// The item sheet: opened by tapping an item's squares. It is the action strip (flat colored capsule buttons) on a
-// plain panel, plus the AI's draft when there is one. Notes are edited inline in the row, not here. The decorative frame (rail, elbows, bars) lives only in the outline's
-// breadcrumb bar and new-item button.
+// The item field: what an open item's row becomes (tap its text or its squares). One rounded block holds the text,
+// the notes, the AI's draft when there is one, and the controls as bare glyphs along the bottom edge.
 
 /// Colors for the app's own controls (header blocks, search field, filter button, tag buttons, the + button, the
 /// item sheet). They come from the color scheme chosen in Settings, so every control follows the scheme.
@@ -67,20 +66,86 @@ extension EnvironmentValues {
     @Entry var panelStyle = false
 }
 
-/// The sheet's container: a plain panel. No rail, bars or labels; only the controls and the text field.
-struct ItemPanel<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+/// Measures of the item field: the rounded block an open item's text sits in, with its controls along the bottom.
+enum ItemField {
+    /// Space between the field's edge and its text, left and right.
+    static let inset: CGFloat = 10
+    static let top: CGFloat = 8
+    /// Width of one control's touch area.
+    static let icon: CGFloat = 40
+}
+
+/// One control on the bottom edge of the item field: a bare glyph, no capsule. `on` draws it at full strength
+/// (a state, or the main action); the rest are quieter so the text stays the loudest thing in the field.
+struct FieldIcon: View {
+    let systemImage: String
+    var on = false
+    var width: CGFloat = ItemField.icon
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) { content() }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
-            .environment(\.panelStyle, true)
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.ink.opacity(!enabled ? 0.2 : on ? 0.9 : 0.5))
+                .frame(width: width, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
-/// Under the strip in the item sheet: the AI's draft, when it has written one. The item's notes are not repeated
+/// One AI suggestion in the item field: what it is, what accepting it would do, and the two buttons that answer it
+/// (accept, dismiss). A remark with nothing to apply has only dismiss.
+struct SuggestionRow: View {
+    let proposal: Proposal
+    let onAccept: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        // Reading a deleted model traps; the row can render once more after it is answered.
+        if proposal.isDeleted || proposal.modelContext == nil { EmptyView() } else { content }
+    }
+
+    private var content: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "sparkle").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.45)).padding(.top, 9)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(proposal.summary).font(Appearance.shared.font.font(.footnote)).foregroundStyle(Color.ink.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let d = detail {
+                    Text(d).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            if !proposal.isInformational {
+                FieldIcon(systemImage: "checkmark", on: true, width: 34, action: onAccept).help("Accept").accessibilityLabel("Accept suggestion")
+            }
+            FieldIcon(systemImage: "xmark", width: 34, action: onDismiss).help("Dismiss").accessibilityLabel("Dismiss suggestion")
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// What accepting would add or change.
+    private var detail: String? {
+        let pl = proposal.payload
+        switch proposal.type {
+        case .decompose:
+            let titles = (pl["subtasks"] as? [[String: Any]] ?? []).compactMap { $0["title"] as? String }
+            return titles.isEmpty ? nil : titles.map { "+ " + $0 }.joined(separator: "\n")
+        case .new_task: return (pl["title"] as? String).map { "+ " + $0 }
+        case .retitle: return (pl["title"] as? String).map { "\u{201C}" + $0 + "\u{201D}" }
+        case .note: return pl["text"] as? String
+        case .reassign: return (pl["assignee"] as? String).flatMap(Assignee.init(rawValue:)).map { "\u{2192} " + $0.label }
+        case .stale, .blocked_chain, .no_path, .feedback: return nil
+        }
+    }
+}
+
+/// In the item field, above its controls: the AI's draft, when it has written one. The item's notes are not repeated
 /// here; they are read and edited inline in the row.
 struct ItemSheetBody: View {
     @Bindable var node: Node

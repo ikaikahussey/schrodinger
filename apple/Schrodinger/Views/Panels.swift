@@ -190,6 +190,7 @@ struct SettingsView: View {
                 Stepper("Agent max turns: \(settings.agentMaxTurns)", value: $settings.agentMaxTurns, in: 2...30)
                 if let last = harness.lastRun { Text("Last run \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
+            CalendarSyncSection()
             AppearanceSection()
             Section("Data") {
                 Toggle("Sync between my devices via iCloud", isOn: $settings.iCloudSync)
@@ -199,6 +200,31 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .frame(minWidth: 420)
+    }
+}
+
+/// Choose the calendar that calendared items are added to. Access is asked for here, when the user connects one.
+struct CalendarSyncSection: View {
+    @State private var settings = AppSettings.shared
+    @State private var calendars: [(id: String, title: String)] = []
+    @State private var connected = CalendarService.authorized
+    @State private var denied = false
+    var body: some View {
+        Section("Calendar") {
+            if connected {
+                Picker("Add calendared items to", selection: $settings.syncCalendarID) {
+                    Text("None").tag("")
+                    ForEach(calendars, id: \.id) { Text($0.title).tag($0.id) }
+                }
+            } else {
+                Button("Connect a calendar\u{2026}") {
+                    Task { if await CalendarService.shared.requestAccess() { connected = true; calendars = await CalendarService.shared.writableCalendars() } else { denied = true } }
+                }
+                if denied { Text("Calendar access was not granted. Allow it in Settings \u{2192} Privacy \u{2192} Calendars.").font(.caption).foregroundStyle(.red) }
+            }
+            Text("An item you give a date (the calendar button in its field) is added to this calendar as an event and kept up to date. Nothing else in your calendar is changed.").font(.caption).foregroundStyle(.secondary)
+        }
+        .task { if connected { calendars = await CalendarService.shared.writableCalendars() } }
     }
 }
 

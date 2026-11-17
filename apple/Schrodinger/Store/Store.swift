@@ -154,6 +154,9 @@ struct Store {
     }
 
     func delete(_ n: Node) {
+        // Events made for the deleted items go with them.
+        let events = ([n] + descendants(of: n.id)).map(\.calendarEventID).filter { !$0.isEmpty }
+        if !events.isEmpty { Task { await CalendarService.shared.remove(eventIDs: events) } }
         for d in descendants(of: n.id) { for f in attachments(for: d.id) { ctx.delete(f) }; ctx.delete(d) }
         for f in attachments(for: n.id) { ctx.delete(f) }
         for a in activity(for: n.id, limit: 10_000) { ctx.delete(a) }
@@ -211,7 +214,16 @@ struct Store {
             }
         case .reassign:
             if let id = p.nodeID, let n = node(id), let a = Assignee(rawValue: pl["assignee"] as? String ?? "") { update(n, actor: .ai, detail: "reassigned (proposal accepted)") { $0.assignee = a } }
-        case .stale, .blocked_chain, .no_path: break
+        case .retitle:
+            if let id = p.nodeID, let n = node(id), let t = pl["title"] as? String, !t.isEmpty { update(n, actor: .ai, detail: "reworded (suggestion accepted)") { $0.title = t } }
+        case .note:
+            if let id = p.nodeID, let n = node(id), let t = pl["text"] as? String, !t.isEmpty {
+                // Same place the row's notes field edits: a task's notes; for a top-level item, its goal.
+                update(n, actor: .ai, detail: "note added (suggestion accepted)") { n in
+                    if n.isProject { n.goal = n.goal.isEmpty ? t : n.goal + "\n" + t } else { n.notes = n.notes.isEmpty ? t : n.notes + "\n" + t }
+                }
+            }
+        case .stale, .blocked_chain, .no_path, .feedback: break
         }
         p.status = .accepted
     }

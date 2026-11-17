@@ -29,18 +29,27 @@ struct OutlineView: View {
     /// Item the outline is zoomed into (shown at the top with its children), or nil for the whole outline.
     @State private var zoomID: UUID? = nil
     @State private var zoomingIn = true
+    /// Calendared items the box at the bottom was dismissed for (item + date). A newly calendared item brings it back.
+    @AppStorage("agendaDismissed") private var agendaDismissed = ""
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
 
     private var store: Store { Store(ctx) }
     private var look: Appearance { Appearance.shared }
+    /// Items with a date that are not done, soonest first.
+    private var calendared: [Node] { all.filter { $0.due != nil && $0.state != .done }.sorted { $0.due! < $1.due! } }
+    private var agendaKeys: [String] { calendared.map { "\($0.id.uuidString):\(Int($0.due!.timeIntervalSince1970))" } }
+    /// The box shows while any calendared item is one it was not dismissed for.
+    private var agendaShown: Bool { !Set(agendaKeys).isSubset(of: Set(agendaDismissed.split(separator: ",").map(String.init))) }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     var body: some View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
         let files = Dictionary(grouping: attachments, by: \.nodeID)
+        // The AI's open suggestions, by the item they are about (shown in that item's field).
+        let advice = Dictionary(grouping: openProposals.filter { $0.nodeID != nil }.sorted { $0.createdAt < $1.createdAt }, by: { $0.nodeID! })
         let zoomed = zoomID.flatMap { store.node($0) }
         ScrollViewReader { proxy in
         ScrollView {
@@ -50,9 +59,9 @@ struct OutlineView: View {
                         // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
                         // reads the same as in the full outline.
                         let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, advice: advice, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, advice: advice, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
@@ -86,6 +95,7 @@ struct OutlineView: View {
         // Bottom right, over the list: "+ NEW ITEM"; while the keyboard is up it becomes "DONE", which ends editing
         // (title, notes or search) and puts the keyboard away.
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+            VStack(alignment: .trailing, spacing: 0) {
             if keyboardUp {
                 cornerButton("DONE", systemImage: "checkmark", fill: PanelPalette.peach, help: "Finish editing") { finishTyping() }
             } else if focused == nil && editRequest == nil && !searchFocused {
@@ -99,7 +109,16 @@ struct OutlineView: View {
                     }
                 }
             }
+            // Calendared items, soonest first, in a box that can be dismissed. Not while typing (the keyboard needs the room).
+            if !keyboardUp && agendaShown {
+                AgendaBox(items: calendared, onOpen: { sel.open($0) }, onDismiss: { withAnimation(.snappy(duration: 0.22)) { agendaDismissed = agendaKeys.joined(separator: ",") } })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            }
+            .animation(.snappy(duration: 0.22), value: agendaShown)
         }
+        // Calendared items are mirrored to the calendar chosen in Settings (if any) whenever one of them changes.
+        .task(id: CalendarSync.signature(all) + AppSettings.shared.syncCalendarID) { await CalendarSync.syncAll(container: ctx.container) }
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
@@ -362,8 +381,10 @@ struct OutlineView: View {
             .transition(.opacity)
         }
     }
-    private func beginEdit(_ id: UUID) { sel.nodeID = id; editRequest = id }
-    private func endEdit() { editRequest = nil; focused = nil }
+    /// Open an item with the keyboard in its text.
+    private func beginEdit(_ id: UUID) { sel.nodeID = id; sel.infoID = id; editRequest = id }
+    /// Done: put the keyboard away and close the open item.
+    private func endEdit() { editRequest = nil; focused = nil; sel.infoID = nil; sel.nodeID = nil }
 
     /// Search terms: lowercase words; a leading # means "has this tag".
     private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" } }
@@ -410,7 +431,7 @@ struct OutlineView: View {
     }
 
     /// `active`: the item's project is active (paused and archived projects don't run).
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], trail: [Color], context: Color, active: Bool) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
@@ -431,11 +452,12 @@ struct OutlineView: View {
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
                     childrenShown: !n.collapsed || n.id == zoomID || searching,
-                    attachments: files[n.id] ?? [])
+                    attachments: files[n.id] ?? [],
+                    suggestions: advice[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, trail: trail + [own], context: context, active: active) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, advice: advice, trail: trail + [own], context: context, active: active) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
         })
@@ -504,7 +526,7 @@ struct OutlineView: View {
         s.save()
     }
 
-    enum Key { case enter, tab, shiftTab, backspaceEmpty, altUp, altDown }
+    enum Key { case enter, child, tab, shiftTab, backspaceEmpty, altUp, altDown }
     private func handleKey(_ key: Key, _ n: Node, kids: [UUID?: [Node]]) {
         let s = store
         // Moves keep editing only if the item was being edited (strip buttons move without opening the keyboard).
@@ -515,6 +537,11 @@ struct OutlineView: View {
             let created: Node
             if n.id == zoomID || (!(kids[n.id] ?? []).isEmpty && !n.collapsed) { created = s.create(parentID: n.id, position: 0) }
             else { created = s.create(parentID: n.parentID, assignee: n.isProject ? nil : n.assignee, position: n.position + 1) }
+            s.save(); beginEdit(created.id)
+        case .child:
+            // New child at the end of this item's children, ready to type.
+            let created = s.create(parentID: n.id, assignee: n.isProject ? nil : n.assignee)
+            if n.collapsed { s.update(n) { $0.collapsed = false } }
             s.save(); beginEdit(created.id)
         case .tab:
             let siblings = kids[n.parentID] ?? []
@@ -531,6 +558,7 @@ struct OutlineView: View {
             let idx = siblings.firstIndex(where: { $0.id == n.id }) ?? 0
             editRequest = nil; focused = nil
             if sel.nodeID == n.id { sel.nodeID = nil }
+            if sel.infoID == n.id { sel.infoID = nil }
             s.delete(n); s.save()
             if idx > 0 { beginEdit(siblings[idx - 1].id) }
         case .altUp, .altDown:
@@ -738,12 +766,19 @@ struct NodeRow: View {
     var childrenShown = true
     /// The item's photos and links.
     var attachments: [Attachment] = []
+    /// The AI's open suggestions about this item, shown in its field with Accept and Dismiss buttons.
+    var suggestions: [Proposal] = []
     @Environment(\.openURL) private var openURL
     @State private var pickedPhotos: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showCalendar = false
     @State private var viewing: Attachment? = nil
-    @State private var showLinkPrompt = false
-    @State private var linkDraft = ""
-    @State private var linkRejected = false
+    /// The AI is working on suggestions for this item (the lightbulb was tapped).
+    @State private var advising = false
+    /// One line under the suggestions: nothing new came back, or why the request failed.
+    @State private var adviceNote: String? = nil
+    /// Children made from list lines typed in this field, innermost last, so an indented line nests under the one above.
+    @State private var listTrail: [(indent: Int, id: UUID)] = []
     @Environment(HarnessEngine.self) private var harness
     @State private var runFailure: String? = nil
     @State private var title: String = ""
@@ -757,6 +792,8 @@ struct NodeRow: View {
     @State private var note: String = ""
     @State private var showNote = false
     @FocusState private var noteFocused: Bool
+    /// Return was just pressed in the notes: the focus it takes away is put back instead of ending the edit.
+    @State private var noteContinuing = false
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -770,9 +807,10 @@ struct NodeRow: View {
     }
     private var done: Bool { node.state == .done && isLeafTask }
     private var editing: Bool { focused.wrappedValue == node.id || editRequest == node.id }
+    /// Open the item with the keyboard in its text.
     private func startEdit() {
-        commit(); sel.nodeID = node.id
-        if editRequest == node.id { claimEdit() } else { editRequest = node.id }   // field appears, then its onAppear claims focus
+        commit(); sel.nodeID = node.id; sel.infoID = node.id
+        editRequest = node.id; claimEdit()   // if the field is not on screen yet, its onAppear claims focus
     }
     /// Called once the text field is on screen: move focus into it (retry once in case the field isn't focusable yet).
     private func claimEdit() {
@@ -791,6 +829,8 @@ struct NodeRow: View {
         if scale > 1.25 { commit(); onPinch(true) } else if scale < 0.8 { commit(); onPinch(false) }
     }
     private var infoOpen: Bool { sel.infoID == node.id }
+    /// The item is open: its row is the item field (text, notes, and the controls along the field's bottom edge).
+    private var open: Bool { infoOpen || editing }
 
     /// This row's work is part of the run in progress.
     private var runningHere: Bool {
@@ -827,12 +867,22 @@ struct NodeRow: View {
             if !bad.isEmpty { runFailure = bad.joined(separator: "\n") }
         }
     }
-    /// Tap on the squares: show the action strip with the item's drafts, context and details under it; again hides both.
-    private func toggleInfo() {
+    /// A tap on the item, on its text or on its squares, opens it: the item field and the children are shown.
+    private func openItem() {
         withAnimation(.snappy(duration: 0.22)) {
-            if infoOpen { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } } else { sel.nodeID = node.id; sel.infoID = node.id }
+            sel.nodeID = node.id; sel.infoID = node.id
+            if hasChildren && node.collapsed { toggleChildren() }
         }
     }
+    /// A tap on an open item's squares closes it: the field goes away and the children are hidden.
+    private func closeItem() {
+        endEdit(); noteFocused = false
+        withAnimation(.snappy(duration: 0.22)) {
+            sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil }
+            if hasChildren && !node.collapsed { toggleChildren() }
+        }
+    }
+    private func toggleInfo() { if open { closeItem() } else { openItem() } }
     private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
     /// SwiftData traps when a deleted model's attributes are read, and a row can be re-rendered once more after its node
@@ -849,8 +899,8 @@ struct NodeRow: View {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
                 .padding(.vertical, 4).padding(.trailing, 12)   // wider grab area (the squares are a touch target)
                 .contentShape(Rectangle())
-                // The squares are about structure. Tap: the item's sheet. Hold: zoom in (on the zoomed item: zoom
-                // out). Hold and move: drag.
+                // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
+                // move: drag.
                 .onTapGesture { squareTapped() }
                 #if os(iOS)
                 .gesture(holdDrag(onText: false))
@@ -858,17 +908,18 @@ struct NodeRow: View {
                 .simultaneousGesture(handleGesture(onText: false))
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + " · tap for the AI selector · hold to zoom in · hold and drag to move")
+                .help(summary + " · tap to open · hold to zoom in · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
-                .accessibilityHint(infoOpen ? "Hides details" : "Shows details and actions")
+                .accessibilityHint(open ? "Closes the item" : "Opens the item")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { commit(); toggleInfo() }
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // The text is about text. Tap: show/hide the item's children. Hold: edit the text. Hold and move: drag.
-            if !editing {
+            // Closed: plain text. Tap: open the item. Hold: open it with the keyboard up. Hold and move: drag.
+            // Open: the text is a field, inside the item field.
+            if !open {
                 Text(title.isEmpty ? "New item" : title)
                     .font(titleFont)
                     .strikethrough(done)
@@ -891,8 +942,18 @@ struct NodeRow: View {
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
                 .onAppear { if editRequest == node.id { claimEdit() } }
+                .onChange(of: editRequest) { _, r in if r == node.id { claimEdit() } }
                 // Return always makes a new item (the field is multi-line, so a typed newline is caught here too).
-                .onChange(of: title) { _, v in if v.contains("\n") { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter) } }
+                // Text with a list under its first line (pasted, usually): the list lines become children instead.
+                .onChange(of: title) { _, v in
+                    guard v.contains("\n") else { return }
+                    let lines = v.components(separatedBy: "\n")
+                    let (rest, items) = ListText.extract(from: lines.dropFirst().joined(separator: "\n"), includeLastLine: true)
+                    if items.isEmpty { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter); return }
+                    let head = ListText.item(lines[0])?.title ?? lines[0]
+                    title = ([head] + rest.components(separatedBy: "\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+                    commit(); addListChildren(items)
+                }
                 .onSubmit { commit(); onKey(.enter) }
                 #if os(macOS)
                 .onKeyPress(.tab) { commit(); onKey(.tab); return .handled }
@@ -903,29 +964,51 @@ struct NodeRow: View {
                 .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
             }
-            // The item's notes, read and edited here in the row (the sheet does not repeat them). The field is there
-            // whenever there are notes, and also while the sheet is open so notes can be added.
-            if showNote || infoOpen {
+            // The item's notes, read and edited here in the row. The field is there whenever there are notes, and
+            // also while the item is open so notes can be added.
+            if showNote || open {
                 TextField("Notes", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(Appearance.shared.font.font(.callout))
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .focused($noteFocused)
-                    .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
-                    .onSubmit { commitNote() }
+                    // A list started here turns into child items, line by line as each is finished.
+                    .onChange(of: note) { _, v in
+                        guard noteFocused else { return }
+                        let (rest, items) = ListText.extract(from: v, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
+                        if !items.isEmpty { note = rest.hasPrefix("\n") ? String(rest.drop { $0 == "\n" }) : rest; addListChildren(items) }
+                    }
+                    // Return ends the field's editing (a text field's rule); here it means "next line", so typing goes on.
+                    .onChange(of: noteFocused) { _, f in
+                        if f { return }
+                        if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote() }
+                    }
+                    .onSubmit { noteReturn() }
             }
             if !attachments.isEmpty {
-                AttachmentStrip(items: attachments, editing: infoOpen,
+                AttachmentStrip(items: attachments, editing: open,
                                 onOpen: { a in if a.kind == .photo { viewing = a } else if let u = a.url { openURL(u) } },
                                 onDelete: { a in store.deleteAttachment(a); store.save() })
             }
+            if open {
+                ItemSheetBody(node: node)   // the AI's draft, when there is one
+                suggestionList
+                controlRow
             }
+            }
+            // Open: the column is the item field, one rounded block holding the text and, along its bottom edge, the
+            // controls. It reaches left by its own inset so the text stays where it was.
+            .padding(.horizontal, open ? ItemField.inset : 0)
+            .padding(.top, open ? ItemField.top : 0)
+            .padding(.bottom, open ? 2 : 0)
+            .background(open ? PanelPalette.field : .clear, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.leading, open ? -ItemField.inset : 0)
             // Middle of the first line of text lines up with the middle of the bars.
-            .alignmentGuide(.rowLine) { d in d[.firstTextBaseline] * 0.65 }
+            .alignmentGuide(.rowLine) { d in let top = open ? ItemField.top : 0; return (d[.firstTextBaseline] - top) * 0.65 + top }
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && !childrenShown {
+            if hasChildren && !childrenShown && !open {
                 // Children are hidden: tap the … to show them. Never shown while the children are on screen.
                 Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
                     Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
@@ -941,46 +1024,31 @@ struct NodeRow: View {
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
-        .onChange(of: infoOpen) { _, open in if !open { commitNote() } }   // closing the sheet saves notes being typed
+        .onChange(of: infoOpen) { _, open in if !open { commitNote(); adviceNote = nil; listTrail = [] } }   // closing the item saves notes being typed
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
+        .sheet(isPresented: $showCalendar) {
+            DateSheet(date: node.due) { d in store.update(node) { $0.due = d }; store.save() }
+        }
+        .photosPicker(isPresented: $showPhotos, selection: $pickedPhotos, maxSelectionCount: 6, matching: .images)
         .onChange(of: pickedPhotos) { _, items in importPhotos(items) }
         .sheet(item: $viewing) { a in
             AttachmentViewer(attachment: a) { viewing = nil; store.deleteAttachment(a); store.save() }
         }
-        .alert("Add link", isPresented: $showLinkPrompt) {
-            TextField("example.com/page", text: $linkDraft)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
-            Button("Add") { addLink() }
-            Button("Cancel", role: .cancel) { linkDraft = "" }
-        } message: { Text("Type or paste a web address.") }
-        .alert("That is not a web address", isPresented: $linkRejected) { Button("OK") {} }
         .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
-            if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
+            if new == node.id { sel.nodeID = node.id; sel.infoID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id {
                 commit()
                 // Left with no text at all: the item is removed (this is how an item is deleted on a touch screen).
-                if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil { deleteItem() }
+                // Not while its photo picker is up (it takes the keyboard away), nor once it holds a file or a child.
+                if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil
+                    && attachments.isEmpty && !showPhotos && !showCalendar && node.due == nil && store.children(of: node.id).isEmpty { deleteItem() }
             }
         }
-        if infoOpen {
-            // The item sheet: the action strip on a plain black panel (plus the AI's draft, if any). Notes are edited
-            // in the row's own notes field above.
-            ItemPanel {
-                actionStrip
-                ItemSheetBody(node: node)
-            }
-            .padding(.leading, CGFloat(depth) * StatusBar.step + 4).padding(.bottom, 10)
-            .transition(.opacity.combined(with: .move(edge: .top)))
         }
-        }
-        .background(sel.nodeID == node.id ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .background(sel.nodeID == node.id && !open ? Color.ink.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .background(GeometryReader { g in Color.clear.preference(key: RowFrameKey.self, value: [node.id: g.frame(in: .named("outline"))]) })
         .offset(x: pull + (lifting ? drag.dx * 0.3 : 0), y: lifting ? drag.dy : 0)
         .background(Color.canvas.opacity(lifting ? 1 : 0), in: RoundedRectangle(cornerRadius: 6))
@@ -1044,16 +1112,15 @@ struct NodeRow: View {
         holdFired = true; heldText = onText
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
-    /// Single tap on the text shows or hides the item's children; on an item with no text it starts editing.
+    /// Single tap on the text opens the item; on an item with no text it also brings up the keyboard.
     /// Releasing a long press also completes a tap; that tap is ignored.
     private func tapped() {
         if holdFired { holdFired = false; return }
         // An item with no text yet ("New item"): a tap starts typing.
         if title.trimmingCharacters(in: .whitespaces).isEmpty { startEdit(); return }
-        commit()
-        if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
+        commit(); openItem()
     }
-    /// Tap on the squares: the item's sheet. Same hold guard as `tapped()`.
+    /// Tap on the squares: open the item, or close it if it is open. Same hold guard as `tapped()`.
     private func squareTapped() {
         if holdFired { holdFired = false; return }
         commit(); toggleInfo()
@@ -1121,27 +1188,45 @@ struct NodeRow: View {
         }
     }
 
-    /// The item sheet's controls: the AI selector (who holds the item), and Approve / Redo while a draft awaits
-    /// review. Everything else is a gesture or a typed tag.
-    @ViewBuilder private var actionStrip: some View {
-        HStack(spacing: 6) {
+    /// The item field's controls, as bare glyphs along its bottom edge: who holds the item (tap to change), add
+    /// photos, calendar (give the item a date), new child, ask the AI for suggestions. Approve / Redo join them at the right while an AI draft awaits
+    /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
+    @ViewBuilder private var controlRow: some View {
+        HStack(spacing: 0) {
             if !node.isProject {
-                // Who holds the item: me, the AI, or both.
-                PillMenu(systemImage: node.assignee.icon, title: node.assignee.label) {
-                    Picker("Responsible", selection: assigneeBinding) { ForEach(Assignee.allCases) { Text($0.label).tag($0) } }.pickerStyle(.inline)
-                }.help("Responsible: " + node.assignee.label).accessibilityLabel("Responsible: " + node.assignee.label)
+                FieldIcon(systemImage: node.assignee.icon, on: true) { cycleAssignee() }
+                    .help("Responsible: " + node.assignee.label + " (tap to change)")
+                    .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
             }
+            FieldIcon(systemImage: "photo") { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
+            FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil) { commit(); showCalendar = true }
+                .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
+                .accessibilityLabel(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
+            // An item with no text is removed when the keyboard leaves it, so it can't take a child yet.
+            FieldIcon(systemImage: "text.badge.plus") { commit(); onKey(.child) }
+                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("New child item").accessibilityLabel("New child item")
+            if advising {
+                ProgressView().controlSize(.small).frame(width: ItemField.icon, height: 34).accessibilityLabel("Thinking")
+            } else {
+                FieldIcon(systemImage: "lightbulb") { advise() }
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .help("Ask the AI for feedback and suggestions").accessibilityLabel("Suggestions")
+            }
+            Spacer(minLength: 0)
             if node.state == .review {
                 // An AI draft is waiting: approve it, or send it back to be redone.
-                Pill(systemImage: "checkmark.seal", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
-                Pill(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+                FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+                FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
-            // Attach to the item: photos from the library, or a link.
-            PhotosPicker(selection: $pickedPhotos, maxSelectionCount: 6, matching: .images) { PillLabel(systemImage: "photo") }
-                .buttonStyle(.plain).help("Add photos").accessibilityLabel("Add photos")
-            Pill(systemImage: "link") { linkDraft = ""; showLinkPrompt = true }.help("Add a link").accessibilityLabel("Add a link")
         }
-        .padding(.vertical, 2)
+        // The first glyph's left edge sits on the text's left edge.
+        .padding(.horizontal, -(ItemField.icon - 18) / 2)
+    }
+    /// Who holds the item: me, then the AI, then both, then me again.
+    private func cycleAssignee() {
+        let next: Assignee = switch node.assignee { case .human, .unassigned: .ai; case .ai: .shared; case .shared: .human }
+        store.update(node) { $0.assignee = next }; store.save()
     }
 
     /// Stores the picked photos on the item, downscaled.
@@ -1158,10 +1243,65 @@ struct NodeRow: View {
             store.save()
         }
     }
-    private func addLink() {
-        let text = linkDraft
-        linkDraft = ""
-        if store.addLink(text, to: node.id) == nil { linkRejected = !text.trimmingCharacters(in: .whitespaces).isEmpty } else { store.save() }
+    /// The AI's feedback on the item, inside its field: each suggestion with a button to accept it and one to
+    /// dismiss it. There is no chat; a suggestion is acted on by tapping.
+    @ViewBuilder private var suggestionList: some View {
+        if !suggestions.isEmpty || adviceNote != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(suggestions) { p in
+                    SuggestionRow(proposal: p,
+                                  onAccept: { withAnimation(.snappy(duration: 0.22)) { accept(p) } },
+                                  onDismiss: { withAnimation(.snappy(duration: 0.22)) { store.dismiss(p); store.save() } })
+                }
+                if let m = adviceNote {
+                    Text(m).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+    private func accept(_ p: Proposal) {
+        try? store.accept(p)
+        if p.type == .decompose && node.collapsed { store.update(node) { $0.collapsed = false } }   // show the new children
+        store.save()
+    }
+    /// Lightbulb: ask the AI to look at this item. What comes back is listed in the field as suggestions.
+    private func advise() {
+        commit(); commitNote()
+        advising = true; adviceNote = nil
+        let id = node.id, container = ctx.container, provider = AppSettings.shared.makeProvider()
+        Task { @MainActor in
+            defer { advising = false }
+            do {
+                let added = try await ItemAdvisor.advise(nodeID: id, container: container, provider: provider)
+                if added == 0 { adviceNote = "Nothing new to suggest." }
+            } catch { adviceNote = "No suggestions: " + error.localizedDescription }
+        }
+    }
+    /// List lines typed in the field become children of the item, in order; an indented line goes under the line above it.
+    private func addListChildren(_ items: [ListText.Item]) {
+        guard !gone, !items.isEmpty else { return }
+        for item in items {
+            while let last = listTrail.last, last.indent >= item.indent || store.node(last.id) == nil { listTrail.removeLast() }
+            let child = store.create(title: item.title, parentID: listTrail.last?.id ?? node.id, assignee: node.isProject ? nil : node.assignee)
+            if item.done { store.update(child) { $0.state = .done } }
+            listTrail.append((item.indent, child.id))
+        }
+        if node.collapsed { store.update(node) { $0.collapsed = false } }
+        store.save()
+    }
+    /// Web addresses typed in the text are taken out of it and kept on the item as links (shown as chips under the text).
+    private func popLinks(from text: String) -> String {
+        let (rest, links) = LinkText.extract(from: text)
+        var kept = rest
+        for link in links {
+            if let a = store.addLink(link, to: node.id) {
+                // Text that was nothing but a link: the site's name stands in for it.
+                if kept.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text == title { kept = a.displayTitle }
+            } else { kept += (kept.isEmpty ? "" : " ") + link }
+        }
+        return kept
     }
     // Bindings for the strip pickers; they write through the store so undo and save work.
     private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
@@ -1205,6 +1345,23 @@ struct NodeRow: View {
         Button("Delete", role: .destructive) { deleteItem() }
     }
 
+    /// Return in the notes: start a new line and keep typing. A list line just finished becomes a child item.
+    private func noteReturn() {
+        // The field may already have put the line break in (and the list line may already be gone as a child).
+        var text = note
+        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+        let (rest, items) = ListText.extract(from: text, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
+        addListChildren(items)
+        // Lines that left as children leave no blank lines behind.
+        var kept = rest
+        if !items.isEmpty {
+            while kept.hasPrefix("\n") { kept.removeFirst() }
+            while kept.hasSuffix("\n\n") { kept.removeLast() }
+        }
+        note = kept
+        noteContinuing = true; noteFocused = true
+        Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); noteContinuing = false }
+    }
     private func openNote() { showNote = true; DispatchQueue.main.async { noteFocused = true } }
     /// Clear focus and selection first so nothing reads the node after it is gone, then delete.
     private func deleteItem() {
@@ -1217,7 +1374,13 @@ struct NodeRow: View {
     private var noteSource: String { node.isProject ? node.goal : node.notes }
     private func commitNote() {
         guard !gone else { return }
-        let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        var n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n != noteSource {
+            // Leaving the notes: a list line still at the end becomes a child too, and links go to the item's chips.
+            let (rest, items) = ListText.extract(from: n, includeLastLine: true, keeping: Set(noteSource.components(separatedBy: "\n")))
+            addListChildren(items)
+            n = popLinks(from: rest).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if n != noteSource { store.update(node) { if $0.isProject { $0.goal = n } else { $0.notes = n } }; store.save() }
         note = n
         showNote = !n.isEmpty
@@ -1242,6 +1405,7 @@ struct NodeRow: View {
             if let r = t.range(of: "\\s*#" + tag + "(?![\\p{L}\\p{N}_-])", options: [.regularExpression, .caseInsensitive]) { t.removeSubrange(r) }
         }
         t = t.trimmingCharacters(in: .whitespaces)
+        if t != node.title { t = popLinks(from: t).trimmingCharacters(in: .whitespaces) }
         if t != node.title || assignee != nil || mode != nil || clearMode || state != nil {
             store.update(node) { n in
                 n.title = t
