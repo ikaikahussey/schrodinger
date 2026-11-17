@@ -1,9 +1,8 @@
 import SwiftUI
 import SwiftData
 
-// The item sheet: opened by tapping an item's squares. It is the action strip (flat colored capsule buttons) on a
-// plain panel, plus the AI's draft when there is one. Notes are edited inline in the row, not here. The decorative frame (rail, elbows, bars) lives only in the outline's
-// breadcrumb bar and new-item button.
+// The item field: what an open item's row becomes (tap its text or its squares). One rounded block holds the text,
+// the notes, the AI's draft when there is one, and the controls as bare glyphs along the bottom edge.
 
 /// Colors for the app's own controls (header blocks, search field, filter button, tag buttons, the + button, the
 /// item sheet). They come from the color scheme chosen in Settings, so every control follows the scheme.
@@ -67,20 +66,36 @@ extension EnvironmentValues {
     @Entry var panelStyle = false
 }
 
-/// The sheet's container: a plain panel. No rail, bars or labels; only the controls and the text field.
-struct ItemPanel<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+/// Measures of the item field: the rounded block an open item's text sits in, with its controls along the bottom.
+enum ItemField {
+    /// Space between the field's edge and its text, left and right.
+    static let inset: CGFloat = 10
+    static let top: CGFloat = 8
+    /// Width of one control's touch area.
+    static let icon: CGFloat = 40
+}
+
+/// One control on the bottom edge of the item field: a bare glyph, no capsule. `on` draws it at full strength
+/// (a state, or the main action); the rest are quieter so the text stays the loudest thing in the field.
+struct FieldIcon: View {
+    let systemImage: String
+    var on = false
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) { content() }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
-            .environment(\.panelStyle, true)
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.ink.opacity(!enabled ? 0.2 : on ? 0.9 : 0.5))
+                .frame(width: ItemField.icon, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
-/// Under the strip in the item sheet: the AI's draft, when it has written one. The item's notes are not repeated
+/// In the item field, above its controls: the AI's draft, when it has written one. The item's notes are not repeated
 /// here; they are read and edited inline in the row.
 struct ItemSheetBody: View {
     @Bindable var node: Node
