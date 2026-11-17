@@ -1223,9 +1223,11 @@ struct NodeRow: View {
                 FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
                 FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
-            // The item has children: the ellipsis says so, at full strength while they are hidden. Tap to show or hide them.
+            // The item has children: the ellipsis says so, at full strength while they are hidden and turned upright
+            // while they are showing. Tap to show or hide them.
             if hasChildren {
                 FieldIcon(systemImage: "ellipsis", on: !childrenShown) { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
+                    .rotationEffect(.degrees(childrenShown ? 90 : 0))   // upright while the children are showing
                     .help(childrenShown ? "Hide children" : "Show children").accessibilityLabel(childrenShown ? "Hide children" : "Show children")
             }
             // New child: a filled circle like the + button, with a down-right arrow. An item with no text is removed
