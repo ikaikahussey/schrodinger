@@ -185,7 +185,7 @@ struct OutlineView: View {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .heavy)).foregroundStyle(PanelPalette.text(on: filtering ? PanelPalette.peach : PanelPalette.orange))
                 .frame(width: Self.headerHeight + 4, height: Self.headerHeight + 4)
-                .background(filtering ? PanelPalette.peach : PanelPalette.orange, in: Circle())
+                .background { Circle().fill(filtering ? PanelPalette.peach : PanelPalette.orange).panelBlink(31) }
                 .contentShape(Circle())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
@@ -241,7 +241,7 @@ struct OutlineView: View {
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(PanelPalette.text(on: fill))
                 .frame(width: 54, height: 54)
-                .background(fill, in: Circle())
+                .background { Circle().fill(fill).panelBlink(32) }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -328,7 +328,7 @@ struct OutlineView: View {
         // (12) and the row's spacing (2), less the drawing's own margin (whisker tips at x = 10 of its 64-unit box).
         .padding(.leading, StatusBar.step + 12 + 2 - 30 * 10 / 64).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
-        .background(fill, in: UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2))
+        .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(33) }
         .contentShape(Rectangle())
         .onTapGesture { searchFocused = true }
         .accessibilityLabel("Search")
@@ -349,7 +349,7 @@ struct OutlineView: View {
                             Text((on ? "\u{2713} #" : "#") + t.uppercased())
                                 .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
                                 .padding(.horizontal, 9).frame(height: 24)
-                                .background(fill)
+                                .background { fill.panelBlink(40 + t.count) }
                         }
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
@@ -632,12 +632,16 @@ struct DepthBars: View {
     let hasChildren: Bool
     var trail: [Color] = []
     var color: Color = .ink
+    /// Each item blinks on its own timing (stable for the item, different from its neighbours).
+    private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
         HStack(alignment: .top, spacing: 1) {
             ForEach(0..<max(depth, 0), id: \.self) { i in
                 Rectangle().fill(i < trail.count ? trail[i] : Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
+                    .panelBlink(seed + i + 1)
             }
             StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
+                .panelBlink(seed)
                 // Top level: the circle sits half off the left edge of the screen, so only its right half shows.
                 .offset(x: depth == 0 ? -StatusBar.w / 2 : 0)
         }
@@ -1277,7 +1281,7 @@ struct PillLabel: View {
         }
         .padding(.horizontal, panelStyle ? 14 : (title == nil ? 8 : 10)).padding(.vertical, 6)
         .frame(minWidth: panelStyle ? 46 : 30, minHeight: panelStyle ? 32 : 28)
-        .background(fill, in: Capsule())
+        .background { Capsule().fill(fill).panelBlink(50 + (title?.count ?? 0)) }
         .foregroundStyle(panelStyle ? PanelPalette.text(on: fill) : (on ? Color.canvas : Color.ink.opacity(0.8)))
         .contentShape(Capsule())
     }
