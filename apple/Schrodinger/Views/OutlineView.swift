@@ -883,6 +883,12 @@ struct NodeRow: View {
         }
     }
     private func toggleInfo() { if open { closeItem() } else { openItem() } }
+    /// The field's Done: save what was typed and close the field. The children stay as they are.
+    private func doneItem() {
+        commit(); commitNote()
+        endEdit(); noteFocused = false
+        withAnimation(.snappy(duration: 0.22)) { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } }
+    }
     private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
     /// SwiftData traps when a deleted model's attributes are read, and a row can be re-rendered once more after its node
@@ -1189,7 +1195,8 @@ struct NodeRow: View {
     }
 
     /// The item field's controls, as bare glyphs along its bottom edge: who holds the item (tap to change), add
-    /// photos, calendar (give the item a date), new child, ask the AI for suggestions. Approve / Redo join them at the right while an AI draft awaits
+    /// photos, calendar (give the item a date), ask the AI for suggestions. At the right: show/hide children (only
+    /// when there are some), new child, and Done. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
         HStack(spacing: 0) {
@@ -1202,10 +1209,6 @@ struct NodeRow: View {
             FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil) { commit(); showCalendar = true }
                 .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
                 .accessibilityLabel(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
-            // An item with no text is removed when the keyboard leaves it, so it can't take a child yet.
-            FieldIcon(systemImage: "text.badge.plus") { commit(); onKey(.child) }
-                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
-                .help("New child item").accessibilityLabel("New child item")
             if advising {
                 ProgressView().controlSize(.small).frame(width: ItemField.icon, height: 34).accessibilityLabel("Thinking")
             } else {
@@ -1219,6 +1222,18 @@ struct NodeRow: View {
                 FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
                 FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
+            // The item has children: the ellipsis says so, at full strength while they are hidden. Tap to show or hide them.
+            if hasChildren {
+                FieldIcon(systemImage: "ellipsis", on: !childrenShown) { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
+                    .help(childrenShown ? "Hide children" : "Show children").accessibilityLabel(childrenShown ? "Hide children" : "Show children")
+            }
+            // New child: a filled circle like the + button, with a down-right arrow. An item with no text is removed
+            // when the keyboard leaves it, so it can't take a child yet.
+            FieldCircle(systemImage: "arrow.turn.down.right", fill: PanelPalette.orange) { commit(); onKey(.child) }
+                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("New child item").accessibilityLabel("New child item")
+            // Done: close the item's field.
+            FieldIcon(systemImage: "checkmark", on: true) { doneItem() }.help("Done").accessibilityLabel("Done")
         }
         // The first glyph's left edge sits on the text's left edge.
         .padding(.horizontal, -(ItemField.icon - 18) / 2)

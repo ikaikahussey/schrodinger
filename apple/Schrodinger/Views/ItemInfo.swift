@@ -96,6 +96,28 @@ struct FieldIcon: View {
     }
 }
 
+/// A filled circle with one glyph, on the item field's bottom edge: the + button's look at the field's size.
+struct FieldCircle: View {
+    let systemImage: String
+    let fill: Color
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(PanelPalette.text(on: fill))
+                .frame(width: 28, height: 28)
+                .background { Circle().fill(fill).panelBlink(34) }
+                .opacity(enabled ? 1 : 0.35)
+                .frame(width: ItemField.icon, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 /// One AI suggestion in the item field: what it is, what accepting it would do, and the two buttons that answer it
 /// (accept, dismiss). A remark with nothing to apply has only dismiss.
 struct SuggestionRow: View {
