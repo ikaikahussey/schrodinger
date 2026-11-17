@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 
 /// One continuous outline. Depth is shown by black bars at the left (one per level). The item's own bar carries
 /// its status, who holds it, and its mode; tapping the bars opens the item's menu. Everything else stays out of the
@@ -10,6 +11,8 @@ struct OutlineView: View {
     @Query(sort: [SortDescriptor(\Node.position), SortDescriptor(\Node.createdAt)]) private var all: [Node]
     /// AI proposals waiting in the Inbox (shown as a count in the header menu).
     @Query(filter: #Predicate<Proposal> { $0.statusRaw == "open" }) private var openProposals: [Proposal]
+    /// Photos and links on items, oldest first; grouped by item in `body`.
+    @Query(sort: [SortDescriptor(\Attachment.createdAt)]) private var attachments: [Attachment]
     @State private var filter: Filter = .all
     @State private var modeFilter: Mode? = nil
     @State private var showLegend = false
@@ -37,6 +40,7 @@ struct OutlineView: View {
     var body: some View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
+        let files = Dictionary(grouping: attachments, by: \.nodeID)
         let zoomed = zoomID.flatMap { store.node($0) }
         ScrollViewReader { proxy in
         ScrollView {
@@ -46,9 +50,9 @@ struct OutlineView: View {
                         // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
                         // reads the same as in the full outline.
                         let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
@@ -406,7 +410,7 @@ struct OutlineView: View {
     }
 
     /// `active`: the item's project is active (paused and archived projects don't run).
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], trail: [Color], context: Color, active: Bool) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
@@ -426,11 +430,12 @@ struct OutlineView: View {
                     },
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
-                    childrenShown: !n.collapsed || n.id == zoomID || searching)
+                    childrenShown: !n.collapsed || n.id == zoomID || searching,
+                    attachments: files[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, trail: trail + [own], context: context, active: active) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, trail: trail + [own], context: context, active: active) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
         })
@@ -727,6 +732,14 @@ struct NodeRow: View {
     var runnable: [UUID] = []
     /// The item's children are on screen (it is expanded, or it is the item zoomed into).
     var childrenShown = true
+    /// The item's photos and links.
+    var attachments: [Attachment] = []
+    @Environment(\.openURL) private var openURL
+    @State private var pickedPhotos: [PhotosPickerItem] = []
+    @State private var viewing: Attachment? = nil
+    @State private var showLinkPrompt = false
+    @State private var linkDraft = ""
+    @State private var linkRejected = false
     @Environment(HarnessEngine.self) private var harness
     @State private var runFailure: String? = nil
     @State private var title: String = ""
@@ -897,6 +910,11 @@ struct NodeRow: View {
                     .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
                     .onSubmit { commitNote() }
             }
+            if !attachments.isEmpty {
+                AttachmentStrip(items: attachments, editing: infoOpen,
+                                onOpen: { a in if a.kind == .photo { viewing = a } else if let u = a.url { openURL(u) } },
+                                onDelete: { a in store.deleteAttachment(a); store.save() })
+            }
             }
             // Middle of the first line of text lines up with the middle of the bars.
             .alignmentGuide(.rowLine) { d in d[.firstTextBaseline] * 0.65 }
@@ -923,6 +941,21 @@ struct NodeRow: View {
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
+        .onChange(of: pickedPhotos) { _, items in importPhotos(items) }
+        .sheet(item: $viewing) { a in
+            AttachmentViewer(attachment: a) { viewing = nil; store.deleteAttachment(a); store.save() }
+        }
+        .alert("Add link", isPresented: $showLinkPrompt) {
+            TextField("example.com/page", text: $linkDraft)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                #endif
+            Button("Add") { addLink() }
+            Button("Cancel", role: .cancel) { linkDraft = "" }
+        } message: { Text("Type or paste a web address.") }
+        .alert("That is not a web address", isPresented: $linkRejected) { Button("OK") {} }
         .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; if editRequest == node.id { editRequest = nil } }
@@ -932,7 +965,7 @@ struct NodeRow: View {
                 if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil { deleteItem() }
             }
         }
-        if infoOpen && (!node.isProject || node.state == .review) {
+        if infoOpen {
             // The item sheet: the action strip on a plain black panel (plus the AI's draft, if any). Notes are edited
             // in the row's own notes field above.
             ItemPanel {
@@ -1099,8 +1132,32 @@ struct NodeRow: View {
                 Pill(systemImage: "checkmark.seal", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
                 Pill(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
             }
+            // Attach to the item: photos from the library, or a link.
+            PhotosPicker(selection: $pickedPhotos, maxSelectionCount: 6, matching: .images) { PillLabel(systemImage: "photo") }
+                .buttonStyle(.plain).help("Add photos").accessibilityLabel("Add photos")
+            Pill(systemImage: "link") { linkDraft = ""; showLinkPrompt = true }.help("Add a link").accessibilityLabel("Add a link")
         }
         .padding(.vertical, 2)
+    }
+
+    /// Stores the picked photos on the item, downscaled.
+    private func importPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        let id = node.id
+        pickedPhotos = []
+        Task { @MainActor in
+            for item in items {
+                if let raw = try? await item.loadTransferable(type: Data.self), let jpeg = AttachmentImage.downscaled(raw) {
+                    store.addPhoto(jpeg, to: id)
+                }
+            }
+            store.save()
+        }
+    }
+    private func addLink() {
+        let text = linkDraft
+        linkDraft = ""
+        if store.addLink(text, to: node.id) == nil { linkRejected = !text.trimmingCharacters(in: .whitespaces).isEmpty } else { store.save() }
     }
     // Bindings for the strip pickers; they write through the store so undo and save work.
     private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
