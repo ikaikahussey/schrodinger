@@ -70,9 +70,17 @@ export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH APPLE_TEAM_ID
     source ~/.schrodinger-asc.env 2>/dev/null || true
     [ -n "${SCHRODINGER_KC_PASS:-}" ] && security unlock-keychain -p "$SCHRODINGER_KC_PASS" ~/Library/Keychains/schrodinger-build.keychain-db 2>/dev/null
     AUTH=(-allowProvisioningUpdates -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -authenticationKeyPath "$ASC_KEY_PATH")
-    BN=$(date +%Y%m%d%H%M)
+    # Build number = the commit's time in UTC, so every machine building the same commit uses the same number,
+    # and a platform App Store Connect already has for it is skipped instead of uploaded again (a duplicate).
+    # Set SCHRODINGER_BUILD_NUMBER to force a fresh number for a rebuild of the same commit.
+    BN=${SCHRODINGER_BUILD_NUMBER:-$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M)}
     source build/profiles.env 2>/dev/null || true
     for P in iOS macOS; do
+      if [ "$P" = iOS ]; then ASCP=IOS; else ASCP=MAC_OS; fi
+      if python3 asc_has_build.py "$BN" "$ASCP"; then
+        echo "--- $P build $BN is already on App Store Connect (uploaded elsewhere); skipping"
+        continue
+      fi
       echo "--- archive $P"
       xcodebuild -project Schrodinger.xcodeproj -scheme Schrodinger_$P -configuration Release -destination "generic/platform=$P" -archivePath "build/$P.xcarchive" archive CURRENT_PROJECT_VERSION=$BN "${AUTH[@]}" 2>&1 | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)|\*\* " | sort -u
       # Export with manual signing: local Apple Distribution cert + the App Store profile asc_prepare.py installed.
