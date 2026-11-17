@@ -53,6 +53,7 @@ struct ContentView: View {
             #else
             // No tab bar: the outline is the app. Inbox and Settings open from the header's menu as a sheet.
             NavigationStack { OutlineView(sel: sel) }
+                .shakeToUndo()
                 .sheet(item: Binding(get: { sel.panel == .outline ? nil : sel.panel }, set: { sel.panel = $0 ?? .outline })) { p in
                     NavigationStack {
                         panelView(p)
