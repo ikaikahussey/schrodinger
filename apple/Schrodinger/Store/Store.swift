@@ -154,6 +154,9 @@ struct Store {
     }
 
     func delete(_ n: Node) {
+        // Events made for the deleted items go with them.
+        let events = ([n] + descendants(of: n.id)).map(\.calendarEventID).filter { !$0.isEmpty }
+        if !events.isEmpty { Task { await CalendarService.shared.remove(eventIDs: events) } }
         for d in descendants(of: n.id) { for f in attachments(for: d.id) { ctx.delete(f) }; ctx.delete(d) }
         for f in attachments(for: n.id) { ctx.delete(f) }
         for a in activity(for: n.id, limit: 10_000) { ctx.delete(a) }

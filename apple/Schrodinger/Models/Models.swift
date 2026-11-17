@@ -77,6 +77,8 @@ final class Node {
     var position: Int = 0
     var collapsed: Bool = false
     var calendarIDs: [String] = []     // projects: EventKit calendars that generate prep proposals
+    /// The calendar event made for this item when it has a date and a calendar is chosen in Settings (else empty).
+    var calendarEventID: String = ""
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var lastActivityAt: Date = Date()

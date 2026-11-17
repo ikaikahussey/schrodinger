@@ -41,6 +41,8 @@ final class AppSettings {
     var maxTasksPerRun: Int { didSet { d.set(maxTasksPerRun, forKey: "maxTasksPerRun") } }
     var agentMaxTurns: Int { didSet { d.set(agentMaxTurns, forKey: "agentMaxTurns") } }
     var iCloudSync: Bool { didSet { d.set(iCloudSync, forKey: "iCloudSync") } }   // takes effect on next launch
+    /// The calendar that calendared items are added to as events; empty = none chosen (no calendar is touched).
+    var syncCalendarID: String { didSet { d.set(syncCalendarID, forKey: "syncCalendarID") } }
     var anthropicKey: String {
         get { Keychain.get("anthropic_api_key") ?? "" }
         set { Keychain.set(newValue, for: "anthropic_api_key") }
@@ -54,6 +56,7 @@ final class AppSettings {
         maxTasksPerRun = d.object(forKey: "maxTasksPerRun") as? Int ?? 3
         agentMaxTurns = d.object(forKey: "agentMaxTurns") as? Int ?? 12
         iCloudSync = d.bool(forKey: "iCloudSync")
+        syncCalendarID = d.string(forKey: "syncCalendarID") ?? ""
     }
 
     func makeProvider() -> any LanguageModelProvider {

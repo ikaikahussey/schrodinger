@@ -29,12 +29,19 @@ struct OutlineView: View {
     /// Item the outline is zoomed into (shown at the top with its children), or nil for the whole outline.
     @State private var zoomID: UUID? = nil
     @State private var zoomingIn = true
+    /// Calendared items the box at the bottom was dismissed for (item + date). A newly calendared item brings it back.
+    @AppStorage("agendaDismissed") private var agendaDismissed = ""
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
 
     private var store: Store { Store(ctx) }
     private var look: Appearance { Appearance.shared }
+    /// Items with a date that are not done, soonest first.
+    private var calendared: [Node] { all.filter { $0.due != nil && $0.state != .done }.sorted { $0.due! < $1.due! } }
+    private var agendaKeys: [String] { calendared.map { "\($0.id.uuidString):\(Int($0.due!.timeIntervalSince1970))" } }
+    /// The box shows while any calendared item is one it was not dismissed for.
+    private var agendaShown: Bool { !Set(agendaKeys).isSubset(of: Set(agendaDismissed.split(separator: ",").map(String.init))) }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     var body: some View {
@@ -88,6 +95,7 @@ struct OutlineView: View {
         // Bottom right, over the list: "+ NEW ITEM"; while the keyboard is up it becomes "DONE", which ends editing
         // (title, notes or search) and puts the keyboard away.
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+            VStack(alignment: .trailing, spacing: 0) {
             if keyboardUp {
                 cornerButton("DONE", systemImage: "checkmark", fill: PanelPalette.peach, help: "Finish editing") { finishTyping() }
             } else if focused == nil && editRequest == nil && !searchFocused {
@@ -101,7 +109,16 @@ struct OutlineView: View {
                     }
                 }
             }
+            // Calendared items, soonest first, in a box that can be dismissed. Not while typing (the keyboard needs the room).
+            if !keyboardUp && agendaShown {
+                AgendaBox(items: calendared, onOpen: { sel.open($0) }, onDismiss: { withAnimation(.snappy(duration: 0.22)) { agendaDismissed = agendaKeys.joined(separator: ",") } })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            }
+            .animation(.snappy(duration: 0.22), value: agendaShown)
         }
+        // Calendared items are mirrored to the calendar chosen in Settings (if any) whenever one of them changes.
+        .task(id: CalendarSync.signature(all) + AppSettings.shared.syncCalendarID) { await CalendarSync.syncAll(container: ctx.container) }
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
@@ -754,6 +771,7 @@ struct NodeRow: View {
     @Environment(\.openURL) private var openURL
     @State private var pickedPhotos: [PhotosPickerItem] = []
     @State private var showPhotos = false
+    @State private var showCalendar = false
     @State private var viewing: Attachment? = nil
     /// The AI is working on suggestions for this item (the lightbulb was tapped).
     @State private var advising = false
@@ -1010,6 +1028,9 @@ struct NodeRow: View {
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
+        .sheet(isPresented: $showCalendar) {
+            DateSheet(date: node.due) { d in store.update(node) { $0.due = d }; store.save() }
+        }
         .photosPicker(isPresented: $showPhotos, selection: $pickedPhotos, maxSelectionCount: 6, matching: .images)
         .onChange(of: pickedPhotos) { _, items in importPhotos(items) }
         .sheet(item: $viewing) { a in
@@ -1023,7 +1044,7 @@ struct NodeRow: View {
                 // Left with no text at all: the item is removed (this is how an item is deleted on a touch screen).
                 // Not while its photo picker is up (it takes the keyboard away), nor once it holds a file or a child.
                 if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil
-                    && attachments.isEmpty && !showPhotos && store.children(of: node.id).isEmpty { deleteItem() }
+                    && attachments.isEmpty && !showPhotos && !showCalendar && node.due == nil && store.children(of: node.id).isEmpty { deleteItem() }
             }
         }
         }
@@ -1168,7 +1189,7 @@ struct NodeRow: View {
     }
 
     /// The item field's controls, as bare glyphs along its bottom edge: who holds the item (tap to change), add
-    /// photos, new child, ask the AI for suggestions. Approve / Redo join them at the right while an AI draft awaits
+    /// photos, calendar (give the item a date), new child, ask the AI for suggestions. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
         HStack(spacing: 0) {
@@ -1178,6 +1199,9 @@ struct NodeRow: View {
                     .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
             }
             FieldIcon(systemImage: "photo") { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
+            FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil) { commit(); showCalendar = true }
+                .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
+                .accessibilityLabel(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
             // An item with no text is removed when the keyboard leaves it, so it can't take a child yet.
             FieldIcon(systemImage: "text.badge.plus") { commit(); onKey(.child) }
                 .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
