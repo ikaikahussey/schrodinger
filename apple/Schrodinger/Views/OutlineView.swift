@@ -986,7 +986,8 @@ struct NodeRow: View {
                     }
                     // Return ends the field's editing (a text field's rule); here it means "next line", so typing goes on.
                     .onChange(of: noteFocused) { _, f in
-                        if f { return }
+                        // Typing in the notes of a closed item opens it, so the controls are there with the text.
+                        if f { if !infoOpen { withAnimation(.snappy(duration: 0.22)) { sel.nodeID = node.id; sel.infoID = node.id } }; return }
                         if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote() }
                     }
                     .onSubmit { noteReturn() }
