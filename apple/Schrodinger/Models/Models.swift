@@ -106,7 +106,8 @@ final class Node {
     var isYourTurn: Bool { assignee == .shared && aiStatus == .done && state != .done }
 }
 
-enum ProposalType: String, Codable { case new_task, decompose, reassign, stale, blocked_chain, no_path }
+/// `retitle`, `note` and `feedback` are made on request for one item (see ItemAdvisor) and shown in its field.
+enum ProposalType: String, Codable { case new_task, decompose, reassign, stale, blocked_chain, no_path, retitle, note, feedback }
 enum ProposalStatus: String, Codable { case open, accepted, dismissed }
 
 @Model
@@ -130,7 +131,7 @@ final class Proposal {
     var type: ProposalType { ProposalType(rawValue: typeRaw) ?? .stale }
     var status: ProposalStatus { get { ProposalStatus(rawValue: statusRaw) ?? .open } set { statusRaw = newValue.rawValue } }
     var payload: [String: Any] { (try? JSONSerialization.jsonObject(with: Data(payloadJSON.utf8))) as? [String: Any] ?? [:] }
-    var isInformational: Bool { [.stale, .blocked_chain, .no_path].contains(type) }
+    var isInformational: Bool { [.stale, .blocked_chain, .no_path, .feedback].contains(type) }
 }
 
 /// A photo or a link attached to an item. Photos are kept outside the database file (external storage); with iCloud

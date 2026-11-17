@@ -41,6 +41,8 @@ struct OutlineView: View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
         let files = Dictionary(grouping: attachments, by: \.nodeID)
+        // The AI's open suggestions, by the item they are about (shown in that item's field).
+        let advice = Dictionary(grouping: openProposals.filter { $0.nodeID != nil }.sorted { $0.createdAt < $1.createdAt }, by: { $0.nodeID! })
         let zoomed = zoomID.flatMap { store.node($0) }
         ScrollViewReader { proxy in
         ScrollView {
@@ -50,9 +52,9 @@ struct OutlineView: View {
                         // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
                         // reads the same as in the full outline.
                         let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, advice: advice, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, advice: advice, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
@@ -412,7 +414,7 @@ struct OutlineView: View {
     }
 
     /// `active`: the item's project is active (paused and archived projects don't run).
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], trail: [Color], context: Color, active: Bool) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
         let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
@@ -433,11 +435,12 @@ struct OutlineView: View {
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
                     childrenShown: !n.collapsed || n.id == zoomID || searching,
-                    attachments: files[n.id] ?? [])
+                    attachments: files[n.id] ?? [],
+                    suggestions: advice[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
             if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, trail: trail + [own], context: context, active: active) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, advice: advice, trail: trail + [own], context: context, active: active) }
             }
             if depth == 0 { Spacer().frame(height: 14) }
         })
@@ -746,13 +749,18 @@ struct NodeRow: View {
     var childrenShown = true
     /// The item's photos and links.
     var attachments: [Attachment] = []
+    /// The AI's open suggestions about this item, shown in its field with Accept and Dismiss buttons.
+    var suggestions: [Proposal] = []
     @Environment(\.openURL) private var openURL
     @State private var pickedPhotos: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var viewing: Attachment? = nil
-    @State private var showLinkPrompt = false
-    @State private var linkDraft = ""
-    @State private var linkRejected = false
+    /// The AI is working on suggestions for this item (the lightbulb was tapped).
+    @State private var advising = false
+    /// One line under the suggestions: nothing new came back, or why the request failed.
+    @State private var adviceNote: String? = nil
+    /// Children made from list lines typed in this field, innermost last, so an indented line nests under the one above.
+    @State private var listTrail: [(indent: Int, id: UUID)] = []
     @Environment(HarnessEngine.self) private var harness
     @State private var runFailure: String? = nil
     @State private var title: String = ""
@@ -766,6 +774,8 @@ struct NodeRow: View {
     @State private var note: String = ""
     @State private var showNote = false
     @FocusState private var noteFocused: Bool
+    /// Return was just pressed in the notes: the focus it takes away is put back instead of ending the edit.
+    @State private var noteContinuing = false
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -916,7 +926,16 @@ struct NodeRow: View {
                 .onAppear { if editRequest == node.id { claimEdit() } }
                 .onChange(of: editRequest) { _, r in if r == node.id { claimEdit() } }
                 // Return always makes a new item (the field is multi-line, so a typed newline is caught here too).
-                .onChange(of: title) { _, v in if v.contains("\n") { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter) } }
+                // Text with a list under its first line (pasted, usually): the list lines become children instead.
+                .onChange(of: title) { _, v in
+                    guard v.contains("\n") else { return }
+                    let lines = v.components(separatedBy: "\n")
+                    let (rest, items) = ListText.extract(from: lines.dropFirst().joined(separator: "\n"), includeLastLine: true)
+                    if items.isEmpty { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter); return }
+                    let head = ListText.item(lines[0])?.title ?? lines[0]
+                    title = ([head] + rest.components(separatedBy: "\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+                    commit(); addListChildren(items)
+                }
                 .onSubmit { commit(); onKey(.enter) }
                 #if os(macOS)
                 .onKeyPress(.tab) { commit(); onKey(.tab); return .handled }
@@ -935,8 +954,18 @@ struct NodeRow: View {
                     .font(Appearance.shared.font.font(.callout))
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .focused($noteFocused)
-                    .onChange(of: noteFocused) { _, f in if !f { commitNote() } }
-                    .onSubmit { commitNote() }
+                    // A list started here turns into child items, line by line as each is finished.
+                    .onChange(of: note) { _, v in
+                        guard noteFocused else { return }
+                        let (rest, items) = ListText.extract(from: v, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
+                        if !items.isEmpty { note = rest.hasPrefix("\n") ? String(rest.drop { $0 == "\n" }) : rest; addListChildren(items) }
+                    }
+                    // Return ends the field's editing (a text field's rule); here it means "next line", so typing goes on.
+                    .onChange(of: noteFocused) { _, f in
+                        if f { return }
+                        if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote() }
+                    }
+                    .onSubmit { noteReturn() }
             }
             if !attachments.isEmpty {
                 AttachmentStrip(items: attachments, editing: open,
@@ -945,6 +974,7 @@ struct NodeRow: View {
             }
             if open {
                 ItemSheetBody(node: node)   // the AI's draft, when there is one
+                suggestionList
                 controlRow
             }
             }
@@ -976,7 +1006,7 @@ struct NodeRow: View {
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
-        .onChange(of: infoOpen) { _, open in if !open { commitNote() } }   // closing the sheet saves notes being typed
+        .onChange(of: infoOpen) { _, open in if !open { commitNote(); adviceNote = nil; listTrail = [] } }   // closing the item saves notes being typed
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
@@ -985,26 +1015,15 @@ struct NodeRow: View {
         .sheet(item: $viewing) { a in
             AttachmentViewer(attachment: a) { viewing = nil; store.deleteAttachment(a); store.save() }
         }
-        .alert("Add link", isPresented: $showLinkPrompt) {
-            TextField("example.com/page", text: $linkDraft)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
-            Button("Add") { addLink() }
-            Button("Cancel", role: .cancel) { linkDraft = "" }
-        } message: { Text("Type or paste a web address.") }
-        .alert("That is not a web address", isPresented: $linkRejected) { Button("OK") {} }
         .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; sel.infoID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id {
                 commit()
                 // Left with no text at all: the item is removed (this is how an item is deleted on a touch screen).
-                // Not while its photo picker or link prompt is up (they take the keyboard away), nor once it holds a file.
+                // Not while its photo picker is up (it takes the keyboard away), nor once it holds a file or a child.
                 if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil
-                    && attachments.isEmpty && !showPhotos && !showLinkPrompt { deleteItem() }
+                    && attachments.isEmpty && !showPhotos && store.children(of: node.id).isEmpty { deleteItem() }
             }
         }
         }
@@ -1149,7 +1168,8 @@ struct NodeRow: View {
     }
 
     /// The item field's controls, as bare glyphs along its bottom edge: who holds the item (tap to change), add
-    /// photos, add a link, new child. Approve / Redo join them at the right while an AI draft awaits review.
+    /// photos, new child, ask the AI for suggestions. Approve / Redo join them at the right while an AI draft awaits
+    /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
         HStack(spacing: 0) {
             if !node.isProject {
@@ -1158,11 +1178,17 @@ struct NodeRow: View {
                     .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
             }
             FieldIcon(systemImage: "photo") { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
-            FieldIcon(systemImage: "link") { linkDraft = ""; showLinkPrompt = true }.help("Add a link").accessibilityLabel("Add a link")
             // An item with no text is removed when the keyboard leaves it, so it can't take a child yet.
             FieldIcon(systemImage: "text.badge.plus") { commit(); onKey(.child) }
                 .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
                 .help("New child item").accessibilityLabel("New child item")
+            if advising {
+                ProgressView().controlSize(.small).frame(width: ItemField.icon, height: 34).accessibilityLabel("Thinking")
+            } else {
+                FieldIcon(systemImage: "lightbulb") { advise() }
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .help("Ask the AI for feedback and suggestions").accessibilityLabel("Suggestions")
+            }
             Spacer(minLength: 0)
             if node.state == .review {
                 // An AI draft is waiting: approve it, or send it back to be redone.
@@ -1193,10 +1219,65 @@ struct NodeRow: View {
             store.save()
         }
     }
-    private func addLink() {
-        let text = linkDraft
-        linkDraft = ""
-        if store.addLink(text, to: node.id) == nil { linkRejected = !text.trimmingCharacters(in: .whitespaces).isEmpty } else { store.save() }
+    /// The AI's feedback on the item, inside its field: each suggestion with a button to accept it and one to
+    /// dismiss it. There is no chat; a suggestion is acted on by tapping.
+    @ViewBuilder private var suggestionList: some View {
+        if !suggestions.isEmpty || adviceNote != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(suggestions) { p in
+                    SuggestionRow(proposal: p,
+                                  onAccept: { withAnimation(.snappy(duration: 0.22)) { accept(p) } },
+                                  onDismiss: { withAnimation(.snappy(duration: 0.22)) { store.dismiss(p); store.save() } })
+                }
+                if let m = adviceNote {
+                    Text(m).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+    private func accept(_ p: Proposal) {
+        try? store.accept(p)
+        if p.type == .decompose && node.collapsed { store.update(node) { $0.collapsed = false } }   // show the new children
+        store.save()
+    }
+    /// Lightbulb: ask the AI to look at this item. What comes back is listed in the field as suggestions.
+    private func advise() {
+        commit(); commitNote()
+        advising = true; adviceNote = nil
+        let id = node.id, container = ctx.container, provider = AppSettings.shared.makeProvider()
+        Task { @MainActor in
+            defer { advising = false }
+            do {
+                let added = try await ItemAdvisor.advise(nodeID: id, container: container, provider: provider)
+                if added == 0 { adviceNote = "Nothing new to suggest." }
+            } catch { adviceNote = "No suggestions: " + error.localizedDescription }
+        }
+    }
+    /// List lines typed in the field become children of the item, in order; an indented line goes under the line above it.
+    private func addListChildren(_ items: [ListText.Item]) {
+        guard !gone, !items.isEmpty else { return }
+        for item in items {
+            while let last = listTrail.last, last.indent >= item.indent || store.node(last.id) == nil { listTrail.removeLast() }
+            let child = store.create(title: item.title, parentID: listTrail.last?.id ?? node.id, assignee: node.isProject ? nil : node.assignee)
+            if item.done { store.update(child) { $0.state = .done } }
+            listTrail.append((item.indent, child.id))
+        }
+        if node.collapsed { store.update(node) { $0.collapsed = false } }
+        store.save()
+    }
+    /// Web addresses typed in the text are taken out of it and kept on the item as links (shown as chips under the text).
+    private func popLinks(from text: String) -> String {
+        let (rest, links) = LinkText.extract(from: text)
+        var kept = rest
+        for link in links {
+            if let a = store.addLink(link, to: node.id) {
+                // Text that was nothing but a link: the site's name stands in for it.
+                if kept.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text == title { kept = a.displayTitle }
+            } else { kept += (kept.isEmpty ? "" : " ") + link }
+        }
+        return kept
     }
     // Bindings for the strip pickers; they write through the store so undo and save work.
     private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
@@ -1240,6 +1321,23 @@ struct NodeRow: View {
         Button("Delete", role: .destructive) { deleteItem() }
     }
 
+    /// Return in the notes: start a new line and keep typing. A list line just finished becomes a child item.
+    private func noteReturn() {
+        // The field may already have put the line break in (and the list line may already be gone as a child).
+        var text = note
+        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+        let (rest, items) = ListText.extract(from: text, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
+        addListChildren(items)
+        // Lines that left as children leave no blank lines behind.
+        var kept = rest
+        if !items.isEmpty {
+            while kept.hasPrefix("\n") { kept.removeFirst() }
+            while kept.hasSuffix("\n\n") { kept.removeLast() }
+        }
+        note = kept
+        noteContinuing = true; noteFocused = true
+        Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); noteContinuing = false }
+    }
     private func openNote() { showNote = true; DispatchQueue.main.async { noteFocused = true } }
     /// Clear focus and selection first so nothing reads the node after it is gone, then delete.
     private func deleteItem() {
@@ -1252,7 +1350,13 @@ struct NodeRow: View {
     private var noteSource: String { node.isProject ? node.goal : node.notes }
     private func commitNote() {
         guard !gone else { return }
-        let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        var n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n != noteSource {
+            // Leaving the notes: a list line still at the end becomes a child too, and links go to the item's chips.
+            let (rest, items) = ListText.extract(from: n, includeLastLine: true, keeping: Set(noteSource.components(separatedBy: "\n")))
+            addListChildren(items)
+            n = popLinks(from: rest).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if n != noteSource { store.update(node) { if $0.isProject { $0.goal = n } else { $0.notes = n } }; store.save() }
         note = n
         showNote = !n.isEmpty
@@ -1277,6 +1381,7 @@ struct NodeRow: View {
             if let r = t.range(of: "\\s*#" + tag + "(?![\\p{L}\\p{N}_-])", options: [.regularExpression, .caseInsensitive]) { t.removeSubrange(r) }
         }
         t = t.trimmingCharacters(in: .whitespaces)
+        if t != node.title { t = popLinks(from: t).trimmingCharacters(in: .whitespaces) }
         if t != node.title || assignee != nil || mode != nil || clearMode || state != nil {
             store.update(node) { n in
                 n.title = t

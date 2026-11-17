@@ -80,6 +80,7 @@ enum ItemField {
 struct FieldIcon: View {
     let systemImage: String
     var on = false
+    var width: CGFloat = ItemField.icon
     let action: () -> Void
     @Environment(\.isEnabled) private var enabled
 
@@ -88,10 +89,59 @@ struct FieldIcon: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Color.ink.opacity(!enabled ? 0.2 : on ? 0.9 : 0.5))
-                .frame(width: ItemField.icon, height: 34)
+                .frame(width: width, height: 34)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// One AI suggestion in the item field: what it is, what accepting it would do, and the two buttons that answer it
+/// (accept, dismiss). A remark with nothing to apply has only dismiss.
+struct SuggestionRow: View {
+    let proposal: Proposal
+    let onAccept: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        // Reading a deleted model traps; the row can render once more after it is answered.
+        if proposal.isDeleted || proposal.modelContext == nil { EmptyView() } else { content }
+    }
+
+    private var content: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "sparkle").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.45)).padding(.top, 9)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(proposal.summary).font(Appearance.shared.font.font(.footnote)).foregroundStyle(Color.ink.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let d = detail {
+                    Text(d).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            if !proposal.isInformational {
+                FieldIcon(systemImage: "checkmark", on: true, width: 34, action: onAccept).help("Accept").accessibilityLabel("Accept suggestion")
+            }
+            FieldIcon(systemImage: "xmark", width: 34, action: onDismiss).help("Dismiss").accessibilityLabel("Dismiss suggestion")
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// What accepting would add or change.
+    private var detail: String? {
+        let pl = proposal.payload
+        switch proposal.type {
+        case .decompose:
+            let titles = (pl["subtasks"] as? [[String: Any]] ?? []).compactMap { $0["title"] as? String }
+            return titles.isEmpty ? nil : titles.map { "+ " + $0 }.joined(separator: "\n")
+        case .new_task: return (pl["title"] as? String).map { "+ " + $0 }
+        case .retitle: return (pl["title"] as? String).map { "\u{201C}" + $0 + "\u{201D}" }
+        case .note: return pl["text"] as? String
+        case .reassign: return (pl["assignee"] as? String).flatMap(Assignee.init(rawValue:)).map { "\u{2192} " + $0.label }
+        case .stale, .blocked_chain, .no_path, .feedback: return nil
+        }
     }
 }
 
