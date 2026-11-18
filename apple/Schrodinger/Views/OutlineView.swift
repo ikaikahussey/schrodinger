@@ -81,7 +81,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, StatusBar.column(t.depth)).padding(.trailing, 16)
+                        .padding(.leading, StatusBar.textStart(t.depth)).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -381,7 +381,7 @@ struct OutlineView: View {
         }
         // The logo's ink starts where a top-level item's text starts (one grid unit past its circle), less the
         // drawing's own margin (whisker tips at x = 10 of its 64-unit box).
-        .padding(.leading, StatusBar.column(1) - 30 * 10 / 64).padding(.trailing, 2)
+        .padding(.leading, StatusBar.textStart(0) - 30 * 10 / 64).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
         .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(33) }
         .contentShape(Rectangle())
@@ -637,7 +637,7 @@ struct ProjectLine: View {
             }
         }
         .frame(height: 1.5)
-        .padding(.leading, StatusBar.column(1)).padding(.trailing, 4).padding(.bottom, 4)
+        .padding(.leading, StatusBar.textStart(0)).padding(.trailing, 4).padding(.bottom, 4)
         .opacity(progress.total == 0 ? 0 : 1)
     }
 }
@@ -653,21 +653,20 @@ struct StatusBar: View {
     let assignee: Assignee
     let isProject: Bool
     var color: Color = .ink
-    /// Indent level: 0 is a circle; deeper, the mark is a rounded bar that starts at the left margin and reaches one
-    /// grid unit further per level, ending where a circle at that level would be.
+    /// Indent level: 0 is a circle; deeper, the mark is a rounded bar (depth + 1) diameters long.
     var depth: Int = 0
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
-    /// The grid: a top-level circle starts `margin` from the left edge; each level is `unit` further in. A row's text
-    /// starts one unit after its circle, which is where its children's circles go.
+    /// Marks start `margin` from the left edge. A top-level mark is a circle; each level down it is one diameter
+    /// longer (2×, 3×…). The row's text starts `gap` after the mark.
     static let margin: CGFloat = 12
-    static let unit: CGFloat = 26
-    /// Left edge of the circle at `depth`; the text of that row starts at `column(depth + 1)`.
-    static func column(_ depth: Int) -> CGFloat { margin + CGFloat(max(depth, 0)) * unit }
+    static let gap: CGFloat = 12
     static var ownShape: Capsule { Capsule() }
-    /// Width of the mark at `depth`: a circle at 0, then one grid unit longer per level.
-    static func width(_ depth: Int) -> CGFloat { w + CGFloat(max(depth, 0)) * unit }
+    /// Width of the mark at `depth`: (depth + 1) diameters.
+    static func width(_ depth: Int) -> CGFloat { w * CGFloat(max(depth, 0) + 1) }
+    /// Where the text of a row at `depth` starts.
+    static func textStart(_ depth: Int) -> CGFloat { margin + width(depth) + gap }
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
     private var solid: Bool { isProject || (state != .review && state != .blocked) }
@@ -698,8 +697,8 @@ struct StatusBar: View {
     }
 }
 
-/// The row's mark, on the grid: a circle for a top-level item; deeper, a rounded bar from the left margin that grows one
-/// unit per level, so its round end sits right under the left edge of the parent's text. Tap = actions.
+/// The row's mark: a circle for a top-level item; deeper, a rounded bar from the left margin, one diameter longer per
+/// level. Tap = actions.
 struct DepthBars: View {
     let node: Node
     let depth: Int
@@ -712,7 +711,7 @@ struct DepthBars: View {
         StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth)
             .panelBlink(seed)
             .padding(.leading, StatusBar.margin)
-            .frame(width: StatusBar.column(depth + 1), alignment: .leading)
+            .frame(width: StatusBar.textStart(depth), alignment: .leading)
             .contentShape(Rectangle())
     }
 }
