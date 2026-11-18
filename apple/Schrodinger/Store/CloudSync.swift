@@ -55,13 +55,21 @@ final class CloudSync {
     /// CloudKit errors carry the useful part (e.g. a record type missing from the schema) in partial errors.
     nonisolated static func describe(_ error: Error) -> String {
         let ns = error as NSError
-        if let partial = ns.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error], let first = partial.values.first {
-            return (first as NSError).localizedDescription
+        // Partial failures (CKError 2) hold one error per record; show the distinct server messages, which name the
+        // problem (e.g. a record type missing from the Production schema). They may sit under an underlying error.
+        var e: NSError? = ns
+        while let cur = e {
+            if let partial = cur.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error], !partial.isEmpty {
+                let msgs = partial.values.map { err -> String in
+                    let n = err as NSError
+                    return (n.userInfo["ServerErrorDescription"] as? String) ?? (n.userInfo[NSLocalizedDescriptionKey] as? String) ?? "\(n.domain) \(n.code)"
+                }
+                return "\(partial.count) records failed: " + Array(Set(msgs)).prefix(3).joined(separator: " · ")
+            }
+            e = cur.userInfo[NSUnderlyingErrorKey] as? NSError
         }
-        if let ck = error as? CKError, let underlying = ck.userInfo[NSUnderlyingErrorKey] as? Error {
-            return "\(ck.localizedDescription) (\(underlying.localizedDescription))"
-        }
-        return ns.localizedDescription
+        let server = ns.userInfo["ServerErrorDescription"] as? String
+        return [ns.localizedDescription, server].compactMap { $0 }.joined(separator: " — ")
     }
 
     /// Creates the app's record types in the CloudKit Development environment, from the SwiftData models. Run once from
