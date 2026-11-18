@@ -34,9 +34,13 @@ struct SchrodingerApp: App {
 
     var body: some Scene {
         #if os(macOS)
+        // As on iPhone/iPad, the outline's own header (search, path, filters) is the top of the window: no title bar
+        // or toolbar.
         WindowGroup { ContentView().environment(harness).task { harness.start() } }
             .modelContainer(container)
-            .defaultSize(width: 1280, height: 820)
+            .windowStyle(.hiddenTitleBar)
+            .defaultSize(width: 900, height: 820)
+            .commands { UndoCommands() }
         Settings { SettingsView().modelContainer(container).environment(harness) }
         #else
         WindowGroup { ContentView().environment(harness).task { harness.start() } }

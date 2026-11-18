@@ -5,10 +5,8 @@ enum Panel: String, CaseIterable, Identifiable {
     case outline, batch, inbox, calendar, digest, activity, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
-    /// Panels kept in code but not shown in navigation. Calendar is hidden pending a decision to remove it; Batch is
-    /// replaced by the filter bar on the outline.
-    static let hidden: Set<Panel> = [.calendar, .settings, .batch]
-    static var navItems: [Panel] { allCases.filter { !hidden.contains($0) } }
+    // The outline is the app; the others open as a sheet over it (from the header's menu: Inbox, and Settings on
+    // iPhone/iPad). Batch, Calendar, Digest and Activity are kept in code but not reachable from the menu.
     var icon: String {
         switch self {
         case .outline: "list.bullet.indent"; case .batch: "square.stack.3d.up"
@@ -34,52 +32,30 @@ final class Selection {
 
 struct ContentView: View {
     @Environment(HarnessEngine.self) private var harness
-    @Environment(\.modelContext) private var ctx
     @State private var sel = Selection()
-    @Query(filter: #Predicate<Proposal> { $0.statusRaw == "open" }) private var openProposals: [Proposal]
 
     var body: some View {
-        Group {
-            #if os(macOS)
-            // Sidebar + one panel. An item's details open inline in the outline (tap its squares), not in a separate column.
-            NavigationSplitView {
-                List(selection: Binding(get: { sel.panel }, set: { if let p = $0 { sel.panel = p } })) {
-                    ForEach(Panel.navItems) { p in
-                        Label(p.label, systemImage: p.icon).badge(badge(p)).tag(p)
-                    }
-                }
-                .navigationSplitViewColumnWidth(min: 160, ideal: 190)
-            } detail: {
-                NavigationStack { panelView(sel.panel) }.navigationSplitViewColumnWidth(min: 420, ideal: 760)
-            }
-            #else
-            // No tab bar: the outline is the app. Inbox and Settings open from the header's menu as a sheet.
-            NavigationStack { OutlineView(sel: sel) }
-                .shakeToUndo()
-                .sheet(item: Binding(get: { sel.panel == .outline ? nil : sel.panel }, set: { sel.panel = $0 ?? .outline })) { p in
-                    NavigationStack {
-                        panelView(p)
-                            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sel.panel = .outline }.fontWeight(.semibold) } }
-                    }
-                    .environment(sel)
-                    .environment(harness)
-                    .font(Appearance.shared.font.font(.body))
-                }
+        // The same on every platform: no sidebar or tab bar, the outline is the app. Inbox (and, on iPhone/iPad,
+        // Settings) open from the header's menu as a sheet; on the Mac, Settings is its own window (⌘,).
+        NavigationStack { OutlineView(sel: sel) }
+            #if os(iOS)
+            .shakeToUndo()
             #endif
-        }
+            .sheet(item: Binding(get: { sel.panel == .outline ? nil : sel.panel }, set: { sel.panel = $0 ?? .outline })) { p in
+                NavigationStack {
+                    panelView(p)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sel.panel = .outline }.fontWeight(.semibold) } }
+                }
+                #if os(macOS)
+                .frame(minWidth: 520, idealWidth: 620, minHeight: 480, idealHeight: 640)
+                #endif
+                .environment(sel)
+                .environment(harness)
+                .font(Appearance.shared.font.font(.body))
+            }
         .environment(sel)
         .font(Appearance.shared.font.font(.body))
         // No global Run button: an item shows a play button when the AI has something to run on it (see NodeRow).
-    }
-
-    private func badge(_ p: Panel) -> Int {
-        let s = Store(ctx)
-        switch p {
-        case .inbox: return openProposals.count
-        // Drafts to review and shared items waiting on you; tap their squares in the outline (or filter by Review).
-        case .outline: return s.allNodes().filter { $0.state == .review || $0.isYourTurn }.count
-        default: return 0
-        }
     }
 
     @ViewBuilder
