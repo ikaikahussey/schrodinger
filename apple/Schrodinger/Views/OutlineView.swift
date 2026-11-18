@@ -37,6 +37,12 @@ struct OutlineView: View {
     @State private var zoomingIn = true
     /// The calendar box at the bottom has been pushed off screen (its tab stays, to bring it back).
     @AppStorage("agendaPushed") private var agendaPushed = false
+    /// Harp mode (long press the hide/show-all button): the outline holds still and each item is a string; running a
+    /// finger across the rows plays each item's note.
+    @State private var harp = false
+    @State private var harpLastY: CGFloat? = nil
+    @State private var plucked: UUID? = nil
+    @State private var plucks = 0
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
@@ -87,8 +93,10 @@ struct OutlineView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay { if harp { harpStrings } }
         }
-        .scrollDisabled(drag.id != nil)   // the list holds still while an item is lifted
+        .scrollDisabled(drag.id != nil || harp)
+        .sensoryFeedback(.selection, trigger: plucks)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
         .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) { breadcrumbBar(zoomed); tagBar } }
         // Dragging the list also puts the keyboard away (which ends editing).
@@ -137,11 +145,11 @@ struct OutlineView: View {
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
-            if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx) { zoom(to: nil) }
+            if zoomID != nil && drag.id == nil && !harp && OutlineView.isBackSwipe(dx: t.width, dy: t.height, vx: vx) { zoom(to: nil) }
         }))
         #else
         .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { v in
-            if zoomID != nil && drag.id == nil && OutlineView.isBackSwipe(v) { zoom(to: nil) }
+            if zoomID != nil && drag.id == nil && !harp && OutlineView.isBackSwipe(v) { zoom(to: nil) }
         })
         #endif
         .background(Color.canvas)
@@ -210,30 +218,112 @@ struct OutlineView: View {
     private var allFolded: Bool { let f = foldable; return !f.isEmpty && f.allSatisfy(\.collapsed) }
     /// Hide or show every item's children, in the oval motif: a single oval while children are showing, a stack of two
     /// (like an item whose children are hidden) once they are all folded away. Tap to switch.
+    /// Long press: harp mode (the icon becomes a harp; tap it to leave).
     private var foldAllButton: some View {
         let folded = allFolded
-        return Button {
-            finishTyping()
-            let target = !folded
-            withAnimation(.snappy(duration: 0.25)) {
-                for n in foldable where n.collapsed != target && n.id != zoomID { store.update(n) { $0.collapsed = target } }
-                store.save()
-            }
-        } label: {
-            let ink = PanelPalette.text(on: PanelPalette.orange)
-            ZStack {
-                Circle().fill(PanelPalette.orange).panelBlink(30)
+        let ink = PanelPalette.text(on: PanelPalette.orange)
+        return ZStack {
+            Circle().fill(PanelPalette.orange).panelBlink(30)
+            if harp {
+                HarpIcon().stroke(ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    .frame(width: 16, height: 18)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
                 Capsule().fill(ink.opacity(folded ? 0.5 : 0)).frame(width: 16, height: 8).offset(x: 1.5, y: 2.5)
                 Capsule().fill(ink).frame(width: 16, height: 8).offset(y: folded ? -1.5 : 0)
             }
-            .frame(width: Self.headerHeight + 4, height: Self.headerHeight + 4)
-            .contentShape(Circle())
-            .animation(.snappy(duration: 0.2), value: folded)
         }
-        .buttonStyle(.plain)
-        .disabled(foldable.isEmpty)
-        .help(folded ? "Show all items" : "Hide all children")
-        .accessibilityLabel(folded ? "Show all items" : "Hide all children")
+        .frame(width: Self.headerHeight + 4, height: Self.headerHeight + 4)
+        .opacity(!harp && foldable.isEmpty ? 0.4 : 1)
+        .contentShape(Circle())
+        .animation(.snappy(duration: 0.2), value: folded)
+        .animation(.snappy(duration: 0.2), value: harp)
+        .onTapGesture { harp ? setHarp(false) : foldAll(!folded) }
+        .onLongPressGesture(minimumDuration: 0.45) { setHarp(!harp) }
+        .help(harp ? "Leave harp mode" : folded ? "Show all items (hold for harp mode)" : "Hide all children (hold for harp mode)")
+        .accessibilityElement()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(harp ? "Leave harp mode" : folded ? "Show all items" : "Hide all children")
+        .accessibilityAction(named: harp ? "Leave harp mode" : "Harp mode") { setHarp(!harp) }
+    }
+
+    private func foldAll(_ target: Bool) {
+        guard !foldable.isEmpty else { return }
+        finishTyping()
+        withAnimation(.snappy(duration: 0.25)) {
+            for n in foldable where n.collapsed != target && n.id != zoomID { store.update(n) { $0.collapsed = target } }
+            store.save()
+        }
+    }
+
+    private func setHarp(_ on: Bool) {
+        if on { finishTyping() }
+        harpLastY = nil; plucked = nil
+        withAnimation(.snappy(duration: 0.2)) { harp = on }
+    }
+
+    // MARK: Harp
+
+    struct HarpString: Identifiable { let id: UUID; let top: CGFloat; var bottom: CGFloat; let depth: Int; let note: Int }
+
+    /// One string per row on screen; a row's band runs down to the next row. Each item's note is its own: its level
+    /// sets the step of the scale, its place among its siblings lowers it a semitone at a time (as when moving items).
+    private var harpRows: [HarpString] {
+        let kids = childrenMap
+        var rows = drag.frames.compactMap { id, f -> HarpString? in
+            guard let n = store.node(id) else { return nil }
+            let d = depthOf(n)
+            let i = (kids[n.parentID] ?? []).firstIndex { $0.id == id } ?? 0
+            return HarpString(id: id, top: f.minY, bottom: f.maxY, depth: d, note: OutlinePitch.position(i, depth: d))
+        }
+        .sorted { $0.top < $1.top }
+        for i in rows.indices.dropLast() { rows[i].bottom = rows[i + 1].top }
+        return rows
+    }
+
+    /// Over the outline in harp mode: a hairline between rows, a flash on the row being played, and the touch that
+    /// plays them. Rows underneath don't react.
+    private var harpStrings: some View {
+        let rows = harpRows
+        return ZStack(alignment: .topLeading) {
+            Color.canvas.opacity(0.001)
+            ForEach(rows) { r in
+                let lit = r.id == plucked
+                RoundedRectangle(cornerRadius: 8).fill(Color.ink.opacity(lit ? 0.08 : 0))
+                    .frame(height: r.bottom - r.top)
+                    .padding(.leading, StatusBar.textStart(r.depth) - 8).padding(.trailing, 8)
+                    .offset(y: r.top)
+                    .animation(.easeOut(duration: lit ? 0.02 : 0.4), value: lit)
+                Rectangle().fill(Color.ink.opacity(0.1)).frame(height: 1)
+                    .padding(.leading, StatusBar.textStart(r.depth)).padding(.trailing, 16)
+                    .offset(y: r.bottom - 0.5)
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { v in harpMove(to: v.location.y, rows) }
+            .onEnded { _ in harpLastY = nil })
+    }
+
+    /// Touching a row plays it; moving into another row plays that one, and every row passed over on the way, in
+    /// order.
+    private func harpMove(to y: CGFloat, _ rows: [HarpString]) {
+        defer { harpLastY = y }
+        func band(_ y: CGFloat) -> Int? { rows.firstIndex { y >= $0.top && y < $0.bottom } }
+        guard let now = band(y) else { return }
+        guard let lastY = harpLastY else { strike(rows[now]); return }
+        let was = band(lastY) ?? (lastY < rows[0].top ? -1 : rows.count)
+        guard was != now else { return }
+        for i in stride(from: was + (now > was ? 1 : -1), through: now, by: now > was ? 1 : -1) where rows.indices.contains(i) { strike(rows[i]) }
+    }
+
+    private func strike(_ r: HarpString) {
+        Xylophone.shared.play(r.note, force: true)
+        plucked = r.id; plucks += 1
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(160))
+            if plucked == r.id { plucked = nil }
+        }
     }
 
     /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
@@ -1630,4 +1720,27 @@ extension Color {
     #else
     static var canvas: Color { Color(uiColor: .systemBackground) }
     #endif
+}
+
+/// A harp, for harp mode's button: the pillar on the left, the curved neck across the top, the sound box on the
+/// diagonal, and three strings between neck and box.
+struct HarpIcon: Shape {
+    func path(in r: CGRect) -> Path {
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * r.width, y: r.minY + y * r.height) }
+        let n0 = (0.15, 0.12), n1 = (0.4, -0.02), n2 = (0.6, 0.4), n3 = (0.88, 0.28)
+        func neck(_ t: CGFloat) -> (CGFloat, CGFloat) {
+            let a = pow(1 - t, 3), b = 3 * pow(1 - t, 2) * t, c = 3 * (1 - t) * t * t, d = t * t * t
+            return (a * n0.0 + b * n1.0 + c * n2.0 + d * n3.0, a * n0.1 + b * n1.1 + c * n2.1 + d * n3.1)
+        }
+        var p = Path()
+        p.move(to: pt(0.15, 0.96)); p.addLine(to: pt(n0.0, n0.1))                       // pillar
+        p.addCurve(to: pt(n3.0, n3.1), control1: pt(n1.0, n1.1), control2: pt(n2.0, n2.1))  // neck
+        p.addLine(to: pt(0.15, 0.96))                                                  // sound box
+        for t in [0.28, 0.52, 0.76] as [CGFloat] {
+            let (x, y) = neck(t)
+            let bottom = 0.96 - (x - 0.15) / (n3.0 - 0.15) * (0.96 - n3.1)
+            p.move(to: pt(x, y + 0.04)); p.addLine(to: pt(x, bottom - 0.04))
+        }
+        return p
+    }
 }
