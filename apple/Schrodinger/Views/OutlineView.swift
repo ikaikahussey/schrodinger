@@ -91,8 +91,8 @@ struct OutlineView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         #endif
-        // Bottom right, over the list: "+ NEW ITEM"; while the keyboard is up it becomes "DONE", which ends editing
-        // (title, notes or search) and puts the keyboard away.
+        // Bottom right, over the list: "+ NEW ITEM"; while searching it becomes "DONE", which puts the keyboard away.
+        // An open item has its own Done (the check in its field), so there is no second one here.
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
             VStack(alignment: .trailing, spacing: 0) {
             HStack(alignment: .bottom, spacing: 0) {
@@ -102,7 +102,7 @@ struct OutlineView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             Spacer(minLength: 0)
-            if keyboardUp {
+            if keyboardUp && searchFocused {
                 cornerButton("DONE", systemImage: "checkmark", fill: PanelPalette.peach, help: "Finish editing") { finishTyping() }
             } else if focused == nil && editRequest == nil && !searchFocused {
                 newItemButton {
@@ -145,19 +145,14 @@ struct OutlineView: View {
         .toolbar(.hidden, for: .navigationBar)
         #endif
         .toolbar {
-            // Only while typing: Done (Escape on the Mac; above the keyboard on iPhone/iPad).
+            // Only while typing, on the Mac: Done (Escape). On iPhone/iPad the check in the item's field is the Done.
+            #if os(macOS)
             if focused != nil || editRequest != nil {
-                #if os(macOS)
                 ToolbarItem(placement: .primaryAction) {
                     Button("Done") { endEdit() }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
                 }
-                #else
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { endEdit() }.fontWeight(.semibold)
-                }
-                #endif
             }
+            #endif
         }
         // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
         .onChange(of: sel.revealID) { _, id in reveal(id, proxy) }
