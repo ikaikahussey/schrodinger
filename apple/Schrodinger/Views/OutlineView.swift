@@ -713,11 +713,21 @@ struct DepthBars: View {
     var color: Color = .ink
     /// The item is open: its mark turns down a quarter turn about its left (round) end, hanging beside the field.
     var open = false
+    /// The item has children that are hidden: a second oval peeks out below the mark, like a stack. Tap to show them.
+    var childrenHidden = false
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
         // No blink here: the mark's strength carries the status, so it holds still.
         StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty)
+            .background(alignment: .leading) {
+                if childrenHidden {
+                    StatusBar.ownShape.fill(color.opacity(0.45))
+                        .frame(width: StatusBar.width(depth), height: StatusBar.h)
+                        .offset(x: 3, y: 4)
+                }
+            }
+            .animation(.snappy(duration: 0.22), value: childrenHidden)
             .rotationEffect(.degrees(open ? 90 : 0), anchor: UnitPoint(x: StatusBar.w / 2 / StatusBar.width(depth), y: 0.5))
             .animation(.snappy(duration: 0.25), value: open)
             .padding(.leading, StatusBar.margin)
@@ -956,7 +966,7 @@ struct NodeRow: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 0) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open)
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, childrenHidden: hasChildren && !childrenShown)
                 .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
                 // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
@@ -968,10 +978,10 @@ struct NodeRow: View {
                 .simultaneousGesture(handleGesture(onText: false))
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + " · tap to open · hold to zoom in · hold and drag to move")
+                .help(summary + (hasChildren ? (childrenShown ? " · tap to hide children" : " · tap to show children") : " · tap to open") + " · hold to zoom in · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
-                .accessibilityHint(open ? "Closes the item" : "Opens the item")
+                .accessibilityHint(hasChildren ? (childrenShown ? "Hides its children" : "Shows its children") : (open ? "Closes the item" : "Opens the item"))
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { commit(); toggleInfo() }
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
@@ -1069,20 +1079,6 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && !open {
-                // The item has children: the … shows them; turned upright, it hides them. (An open item has the same
-                // button in its field.)
-                Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
-                    Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
-                        .rotationEffect(.degrees(childrenShown ? 90 : 0))
-                        .frame(width: 36, height: 22)   // no taller than a line of text, so the row keeps its height
-                        .contentShape(Rectangle().inset(by: -6))
-                }
-                .buttonStyle(.plain)
-                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                .help(childrenShown ? "Hide children" : "Show children")
-                .accessibilityLabel(childrenShown ? "Hide children" : "Show children")
-            }
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
@@ -1184,9 +1180,11 @@ struct NodeRow: View {
         commit(); openItem()
     }
     /// Tap on the squares: open the item, or close it if it is open. Same hold guard as `tapped()`.
+    /// Tap on the oval: an item with children shows or hides them; one without opens (or closes) the item.
     private func squareTapped() {
         if holdFired { holdFired = false; return }
-        commit(); toggleInfo()
+        commit()
+        if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } else { toggleInfo() }
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
@@ -1278,13 +1276,6 @@ struct NodeRow: View {
                 // An AI draft is waiting: approve it, or send it back to be redone.
                 FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
                 FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
-            }
-            // The item has children: the ellipsis says so, at full strength while they are hidden and turned upright
-            // while they are showing. Tap to show or hide them.
-            if hasChildren {
-                FieldIcon(systemImage: "ellipsis", on: !childrenShown) { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
-                    .rotationEffect(.degrees(childrenShown ? 90 : 0))   // upright while the children are showing
-                    .help(childrenShown ? "Hide children" : "Show children").accessibilityLabel(childrenShown ? "Hide children" : "Show children")
             }
             // New child: a filled circle like the + button, with a down-right arrow. An item with no text is removed
             // when the keyboard leaves it, so it can't take a child yet.
