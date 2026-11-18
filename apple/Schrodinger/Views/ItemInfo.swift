@@ -73,6 +73,8 @@ enum ItemField {
     static let top: CGFloat = 8
     /// Width of one control's touch area.
     static let icon: CGFloat = 40
+    /// Width of a control on the title line (narrower, so the title keeps its room).
+    static let compact: CGFloat = 30
 }
 
 /// One control on the bottom edge of the item field: a bare glyph, no capsule. `on` draws it at full strength
@@ -89,8 +91,8 @@ struct FieldIcon: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Color.ink.opacity(!enabled ? 0.2 : on ? 0.9 : 0.5))
-                .frame(width: width, height: 34)
-                .contentShape(Rectangle())
+                .frame(width: width, height: width == ItemField.compact ? 22 : 34)   // on the title line: text height
+                .contentShape(Rectangle().inset(by: width == ItemField.compact ? -6 : 0))
         }
         .buttonStyle(.plain)
     }
@@ -100,18 +102,20 @@ struct FieldIcon: View {
 struct FieldCircle: View {
     let systemImage: String
     let fill: Color
+    /// On the title line: a smaller circle in a narrower slot, no taller than the text.
+    var compact = false
     let action: () -> Void
     @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: compact ? 11 : 13, weight: .bold))
                 .foregroundStyle(PanelPalette.text(on: fill))
-                .frame(width: 28, height: 28)
+                .frame(width: compact ? 22 : 28, height: compact ? 22 : 28)
                 .background { Circle().fill(fill).panelBlink(34) }
                 .opacity(enabled ? 1 : 0.35)
-                .frame(width: ItemField.icon, height: 34)
+                .frame(width: compact ? ItemField.compact : ItemField.icon, height: compact ? 22 : 34)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

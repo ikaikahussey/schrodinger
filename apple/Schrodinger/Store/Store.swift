@@ -84,9 +84,9 @@ struct Store {
 
     // MARK: - Mutations
     @discardableResult
-    func create(title: String = "", parentID: UUID? = nil, assignee: Assignee? = nil, mode: Mode? = nil, due: Date? = nil, position: Int? = nil, actor: Actor = .human) -> Node {
+    func create(title: String = "", parentID: UUID? = nil, assignee: Assignee? = nil, due: Date? = nil, position: Int? = nil, actor: Actor = .human) -> Node {
         let siblings = children(of: parentID)
-        let n = Node(title: title, parentID: parentID, assignee: assignee, mode: mode, due: due, position: position ?? siblings.count)
+        let n = Node(title: title, parentID: parentID, assignee: assignee, due: due, position: position ?? siblings.count)
         if let position { for s in siblings where s.position >= position { s.position += 1 } }
         ctx.insert(n)
         log(n, actor, "create", title)
@@ -207,7 +207,10 @@ struct Store {
         case .new_task:
             let parent = (pl["parent_id"] as? String).flatMap(UUID.init(uuidString:)) ?? p.projectID
             let due = (pl["due"] as? Double).map { Date(timeIntervalSince1970: $0) }
-            create(title: pl["title"] as? String ?? "", parentID: parent, assignee: Assignee(rawValue: pl["assignee"] as? String ?? "ai"), mode: Mode(rawValue: pl["mode"] as? String ?? ""), due: due, actor: .ai)
+            let made = create(title: pl["title"] as? String ?? "", parentID: parent, assignee: Assignee(rawValue: pl["assignee"] as? String ?? "ai"), due: due, actor: .ai)
+            // Tags the proposal carries ("tags", or the older "mode") go in the new item's notes.
+            let tags = ((pl["tags"] as? [String]) ?? []) + [pl["mode"] as? String].compactMap { $0 }
+            if !tags.isEmpty { made.notes = tags.map { "#" + $0 }.joined(separator: " ") }
         case .decompose:
             for t in pl["subtasks"] as? [[String: Any]] ?? [] {
                 create(title: t["title"] as? String ?? "", parentID: p.nodeID, assignee: Assignee(rawValue: t["assignee"] as? String ?? "ai"), actor: .ai)
@@ -251,8 +254,9 @@ struct Store {
         return (try? ctx.fetch(d)) ?? []
     }
 
-    // MARK: - Batch by mode (open leaf tasks across active projects)
-    func byMode(assignee: Assignee? = nil) -> [(mode: String, tasks: [(Node, project: Node)])] {
+    // MARK: - Batch by tag (open leaf tasks across active projects)
+    /// Open tasks in active projects, grouped by tag (a task with several tags is in each group), then untagged.
+    func byTag(assignee: Assignee? = nil) -> [(tag: String, tasks: [(Node, project: Node)])] {
         var rows: [(Node, Node)] = []
         for p in projects() where p.projectStatus == .active {
             for t in leaves(under: p.id) where t.state != .done {
@@ -265,13 +269,26 @@ struct Store {
                 if include { rows.append((t, p)) }
             }
         }
-        let grouped = Dictionary(grouping: rows, by: { $0.0.modeRaw })
-        let order = Mode.allCases.map(\.rawValue) + [""]
-        return order.compactMap { m in
-            guard let g = grouped[m], !g.isEmpty else { return nil }
-            let sorted = g.sorted { ($0.0.due ?? .distantFuture, $0.1.position, $0.0.position) < ($1.0.due ?? .distantFuture, $1.1.position, $1.0.position) }
-            return (mode: m.isEmpty ? "unsorted" : m, tasks: sorted.map { ($0.0, project: $0.1) })
+        var groups: [String: [(Node, Node)]] = [:]
+        for r in rows { let tags = r.0.tags; for t in tags.isEmpty ? [""] : Array(tags) { groups[t, default: []].append(r) } }
+        let order = groups.keys.filter { !$0.isEmpty }.sorted() + (groups[""] == nil ? [] : [""])
+        return order.map { tag in
+            let sorted = groups[tag]!.sorted { ($0.0.due ?? .distantFuture, $0.1.position, $0.0.position) < ($1.0.due ?? .distantFuture, $1.1.position, $1.0.position) }
+            return (tag: tag.isEmpty ? "untagged" : "#" + tag, tasks: sorted.map { ($0.0, project: $0.1) })
         }
+    }
+
+    /// Items made before modes became tags: move each item's mode into its notes as a #tag and clear it. Saves if
+    /// anything changed. Safe to run at every launch.
+    func migrateModesToTags() {
+        let d = FetchDescriptor<Node>(predicate: #Predicate { $0.modeRaw != "" })
+        guard let old = try? ctx.fetch(d), !old.isEmpty else { return }
+        for n in old {
+            let tag = "#" + n.modeRaw
+            if !n.tags.contains(n.modeRaw) { n.notes = n.notes.isEmpty ? tag : n.notes + "\n" + tag }
+            n.modeRaw = ""
+        }
+        save()
     }
 
     func save() { try? ctx.save() }

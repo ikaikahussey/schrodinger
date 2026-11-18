@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Color schemes for the outline squares. Each scheme gives one color per mode and a rotating set of context colors
-/// (one per top-level project). "Retro 70s" is the default; "Mono" keeps the original black-on-white look.
+/// Color schemes for the outline marks. Each scheme gives an ordered set of colors, one per outline level
+/// (top level first). "Retro 70s" is the default; "Mono" keeps the original black-on-white look.
 enum PaletteKind: String, CaseIterable, Identifiable {
     // "pastel" keeps its original stored value so a saved choice of this scheme still loads.
     case retro70s, swiss, mono, pastel = "lcars", okabeIto, reef, custom
@@ -14,12 +14,12 @@ enum PaletteKind: String, CaseIterable, Identifiable {
 }
 
 struct Palette {
-    /// Indexed by `Mode.allCases` order: call, errand, email, write, research, meeting, admin, other.
+    /// Legacy: colors of the preset modes, which are now tags. Unused; kept so saved custom schemes still load.
     var modes: [Color]
     /// Rotating colors for top-level projects (contexts).
     var contexts: [Color]
 
-    static let modeCount = Mode.allCases.count
+    static let modeCount = 8
     static let contextCount = 6
 
     static let mono = Palette(modes: Array(repeating: .primary, count: modeCount), contexts: Array(repeating: .primary, count: contextCount))
@@ -105,11 +105,6 @@ final class Appearance {
 
     var current: Palette {
         palette == .custom ? Palette(modes: customModes.map { Color($0) }, contexts: customContexts.map { Color($0) }) : .preset(palette)
-    }
-    func color(for mode: Mode) -> Color {
-        let i = Mode.allCases.firstIndex(of: mode) ?? 0
-        let m = current.modes
-        return m.isEmpty ? .primary : m[i % m.count]
     }
     func contextColor(_ index: Int) -> Color {
         let c = current.contexts

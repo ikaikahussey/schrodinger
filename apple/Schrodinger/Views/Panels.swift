@@ -46,7 +46,7 @@ struct ActivityLine: View {
     }
 }
 
-// MARK: - Batch by mode
+// MARK: - Batch by tag
 
 struct BatchView: View {
     @Environment(\.modelContext) private var ctx
@@ -54,11 +54,11 @@ struct BatchView: View {
     @Query private var all: [Node]   // observed so the view refreshes
     @State private var assignee: Assignee? = nil
     var body: some View {
-        let groups = Store(ctx).byMode(assignee: assignee)
+        let groups = Store(ctx).byTag(assignee: assignee)
         List {
             if groups.isEmpty { Text("No open tasks match.").foregroundStyle(.secondary) }
-            ForEach(groups, id: \.mode) { g in
-                Section("\(Mode(rawValue: g.mode)?.emoji ?? "") \(g.mode.uppercased())  \(g.tasks.count)") {
+            ForEach(groups, id: \.tag) { g in
+                Section("\(g.tag)  \(g.tasks.count)") {
                     ForEach(g.tasks, id: \.0.id) { t, project in
                         HStack {
                             Button { Store(ctx).update(t) { $0.state = $0.state == .done ? .todo : .done }; Store(ctx).save() } label: { Image(systemName: t.state == .done ? "checkmark.square.fill" : "square") }.buttonStyle(.plain)
@@ -72,7 +72,7 @@ struct BatchView: View {
                 }
             }
         }
-        .navigationTitle("Batch by mode")
+        .navigationTitle("Batch by tag")
         .toolbar { Picker("Who", selection: $assignee) { Text("All").tag(Assignee?.none); Text("Mine").tag(Assignee?.some(.human)); Text("AI's").tag(Assignee?.some(.ai)) } }
     }
 }
@@ -265,11 +265,8 @@ struct AppearanceSection: View {
                 Menu("Start from preset") {
                     ForEach(PaletteKind.allCases.filter { $0 != .custom }) { k in Button(k.label) { look.copyToCustom(k) } }
                 }
-                ForEach(Array(Mode.allCases.enumerated()), id: \.element.id) { i, m in
-                    ColorPicker(m.label, selection: modeBinding(i), supportsOpacity: false)
-                }
                 ForEach(0..<Palette.contextCount, id: \.self) { i in
-                    ColorPicker("Project color \(i + 1)", selection: contextBinding(i), supportsOpacity: false)
+                    ColorPicker("Level \(i + 1) color", selection: contextBinding(i), supportsOpacity: false)
                 }
             }
             Picker("Font", selection: $look.font) {
@@ -283,13 +280,9 @@ struct AppearanceSection: View {
     private var swatches: some View {
         let p = look.current
         return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 1) { ForEach(0..<p.modes.count, id: \.self) { i in Rectangle().fill(p.modes[i]).frame(width: 16, height: 16) } }
             HStack(spacing: 1) { ForEach(0..<p.contexts.count, id: \.self) { i in Rectangle().fill(p.contexts[i]).frame(width: 16, height: 16) } }
         }
         .accessibilityHidden(true)
-    }
-    private func modeBinding(_ i: Int) -> Binding<Color> {
-        Binding(get: { Color(look.customModes[i]) }, set: { look.customModes[i] = $0.resolve(in: EnvironmentValues()) })
     }
     private func contextBinding(_ i: Int) -> Binding<Color> {
         Binding(get: { Color(look.customContexts[i]) }, set: { look.customContexts[i] = $0.resolve(in: EnvironmentValues()) })

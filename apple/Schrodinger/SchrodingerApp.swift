@@ -65,6 +65,7 @@ struct SchrodingerApp: App {
         do { c = try ModelContainer(for: schema, configurations: [config]) }
         catch { openError = error; c = try! ModelContainer(for: schema, configurations: [ModelConfiguration("Schrodinger-local", schema: schema, cloudKitDatabase: .none)]) }
         CloudSync.shared.opened(sync: sync, error: openError)
+        Store(c.mainContext).migrateModesToTags()   // items from before modes became tags
         c.mainContext.undoManager = UndoManager()   // enables undo/redo for every edit made through the main context
         return c
     }

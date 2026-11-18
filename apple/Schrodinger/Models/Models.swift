@@ -26,11 +26,6 @@ enum ProjectStatus: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum Mode: String, Codable, CaseIterable, Identifiable {
-    case call, errand, email, write, research, meeting, admin, other
-    var id: String { rawValue }
-}
-
 enum AIStatus: String, Codable { case pending, done }
 
 /// Hashtags typed into an item's text. A tag is `#` followed by letters, digits, `_` or `-`; tags are lowercased.
@@ -67,6 +62,9 @@ final class Node {
     var projectStatusRaw: String = ProjectStatus.active.rawValue
     var assigneeRaw: String = Assignee.human.rawValue
     var stateRaw: String = TaskState.unset.rawValue
+    /// Legacy: the preset mode an item used to have (call, email…). Modes are now ordinary tags; at launch any value
+    /// here is moved into the item's notes as a #tag and cleared (`Store.migrateModesToTags`). Kept so stored data
+    /// and the iCloud schema still match.
     var modeRaw: String = ""
     var aiStatusRaw: String = AIStatus.pending.rawValue
     var due: Date? = nil
@@ -83,11 +81,10 @@ final class Node {
     var updatedAt: Date = Date()
     var lastActivityAt: Date = Date()
 
-    init(title: String = "", parentID: UUID? = nil, assignee: Assignee? = nil, mode: Mode? = nil, due: Date? = nil, position: Int = 0) {
+    init(title: String = "", parentID: UUID? = nil, assignee: Assignee? = nil, due: Date? = nil, position: Int = 0) {
         self.title = title
         self.parentID = parentID
         self.assigneeRaw = (assignee ?? (parentID == nil ? .unassigned : .human)).rawValue
-        self.modeRaw = mode?.rawValue ?? ""
         self.due = due
         self.position = position
     }
@@ -96,15 +93,10 @@ final class Node {
     var projectStatus: ProjectStatus { get { ProjectStatus(rawValue: projectStatusRaw) ?? .active } set { projectStatusRaw = newValue.rawValue } }
     var assignee: Assignee { get { Assignee(rawValue: assigneeRaw) ?? .unassigned } set { assigneeRaw = newValue.rawValue } }
     var state: TaskState { get { TaskState(rawValue: stateRaw) ?? .unset } set { stateRaw = newValue.rawValue } }
-    var mode: Mode? { get { Mode(rawValue: modeRaw) } set { modeRaw = newValue?.rawValue ?? "" } }
     var aiStatus: AIStatus { get { AIStatus(rawValue: aiStatusRaw) ?? .pending } set { aiStatusRaw = newValue.rawValue } }
     /// Shared task whose AI part is done and which the human still has to finish.
-    /// Every tag on the item: hashtags in its title and notes (and, for a project, its goal), plus its mode.
-    var tags: Set<String> {
-        var t = Set(Tags.hashtags(in: title) + Tags.hashtags(in: notes) + Tags.hashtags(in: goal))
-        if let m = mode { t.insert(m.rawValue) }
-        return t
-    }
+    /// Every tag on the item: hashtags in its title and notes (and, for a project, its goal).
+    var tags: Set<String> { Set(Tags.hashtags(in: title) + Tags.hashtags(in: notes) + Tags.hashtags(in: goal)) }
     var isYourTurn: Bool { assignee == .shared && aiStatus == .done && state != .done }
 }
 

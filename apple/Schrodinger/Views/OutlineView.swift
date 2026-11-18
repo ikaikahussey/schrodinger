@@ -4,7 +4,7 @@ import PhotosUI
 import UniformTypeIdentifiers
 
 /// One continuous outline. Depth is shown by black bars at the left (one per level). The item's own bar carries
-/// its status, who holds it, and its mode; tapping the bars opens the item's menu. Everything else stays out of the
+/// its status and who holds it; tapping the bars opens the item's menu. Everything else stays out of the
 /// way of the text. Top-level items are projects (the harness runs one agent per top-level item).
 struct OutlineView: View {
     @Environment(\.modelContext) private var ctx
@@ -15,7 +15,8 @@ struct OutlineView: View {
     /// Photos and links on items, oldest first; grouped by item in `body`.
     @Query(sort: [SortDescriptor(\Attachment.createdAt)]) private var attachments: [Attachment]
     @State private var filter: Filter = .all
-    @State private var modeFilter: Mode? = nil
+    /// Show only items with this tag (nil: any).
+    @State private var tagFilter: String? = nil
     @State private var showLegend = false
     /// Header search: words match an item's text; `#tag` words match its tags.
     @State private var search = ""
@@ -185,7 +186,7 @@ struct OutlineView: View {
         guard let id, let n = store.node(id) else { return }
         sel.revealID = nil
         if let z = zoomID, !isInSubtree(id, of: z) { withAnimation(.snappy(duration: 0.32)) { zoomID = nil } }
-        if !matches(n) { filter = .all; modeFilter = nil }
+        if !matches(n) { filter = .all; tagFilter = nil }
         var p = n.parentID
         while let pid = p, let x = store.node(pid) { if x.collapsed { store.update(x) { $0.collapsed = false } }; p = x.parentID }
         store.save()
@@ -198,7 +199,7 @@ struct OutlineView: View {
 
     /// Name for an export: the zoomed item's title, or the app's name for everything.
     private var exportName: String { zoomID.flatMap { store.node($0)?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? "Schrodinger" }
-    private var filtering: Bool { filter != .all || modeFilter != nil }
+    private var filtering: Bool { filter != .all || tagFilter != nil }
 
     /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
     private static let headerHeight: CGFloat = 28
@@ -208,14 +209,17 @@ struct OutlineView: View {
                 ForEach(Filter.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
-            Picker("Mode", selection: Binding(get: { modeFilter }, set: { v in withAnimation(.snappy(duration: 0.25)) { modeFilter = v } })) {
-                Text("Any mode").tag(Mode?.none)
-                ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) }
+            // Tags in use (typed as #tag in an item's text or notes).
+            if !allTags.isEmpty {
+                Picker("Tag", selection: Binding(get: { tagFilter }, set: { v in withAnimation(.snappy(duration: 0.25)) { tagFilter = v } })) {
+                    Text("Any tag").tag(String?.none)
+                    ForEach(allTags, id: \.self) { Text("#" + $0).tag(String?.some($0)) }
+                }
+                .pickerStyle(.inline)
             }
-            .pickerStyle(.inline)
             if filtering {
                 Divider()
-                Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
+                Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; tagFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
             }
             Divider()
             // Import a CSV, text or Markdown file (a note exported from Notes, say): it becomes a new item, with the
@@ -452,9 +456,9 @@ struct OutlineView: View {
     private func matches(_ n: Node) -> Bool {
         if !searchMatches(n) { return false }
         if n.isProject { return true }
-        if let m = modeFilter, n.mode != m { return false }
+        if let t = tagFilter, !n.tags.contains(t) { return false }
         switch filter {
-        case .all: return modeFilter == nil || n.state != .done
+        case .all: return tagFilter == nil || n.state != .done
         case .mine: return (n.assignee == .human || n.isYourTurn) && n.state != .done
         case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done
         case .review: return n.state == .review || n.isYourTurn
@@ -477,7 +481,7 @@ struct OutlineView: View {
         // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
         let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
-        let hidden = ((filter != .all || modeFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
+        let hidden = ((filter != .all || tagFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
@@ -648,7 +652,7 @@ struct ProjectLine: View {
 // MARK: - Squares
 
 /// The item's own mark: the rightmost one in the row, a circle the size of the squares.
-/// Every item's square has this same shape. Color = the item's mode (or, with no mode, its project's context color).
+/// Every item's mark has this same shape. Color: see Appearance.itemColor.
 ///   who holds it: mine or unassigned = blank · AI = sparkles glyph · both = a single sparkle
 ///   state:        todo/in progress/done = solid · review = hollow · blocked = dashed outline
 struct StatusBar: View {
@@ -769,17 +773,6 @@ extension TaskState {
     }
 }
 
-extension Mode {
-    /// Emoji shown under the bars and in menus.
-    var emoji: String {
-        switch self {
-        case .call: "📞"; case .errand: "🚗"; case .email: "✉️"; case .write: "✍️"; case .research: "🔎"; case .meeting: "👥"; case .admin: "🗂️"; case .other: "📌"
-        }
-    }
-    /// Emoji plus name, for menus and pickers.
-    var label: String { "\(emoji) \(rawValue)" }
-}
-
 struct BarLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -842,7 +835,6 @@ struct NodeRow: View {
     @State private var showCalendar = false
     @State private var viewing: Attachment? = nil
     /// The AI is working on suggestions for this item (the lightbulb was tapped).
-    @State private var advising = false
     /// One line under the suggestions: nothing new came back, or why the request failed.
     @State private var adviceNote: String? = nil
     /// Children made from list lines typed in this field, innermost last, so an indented line nests under the one above.
@@ -862,6 +854,9 @@ struct NodeRow: View {
     @FocusState private var noteFocused: Bool
     /// Return was just pressed in the notes: the focus it takes away is put back instead of ending the edit.
     @State private var noteContinuing = false
+    /// The notes as they were when the item opened. List lines typed since then become children when it closes;
+    /// lines that were already there stay text.
+    @State private var notesAtOpen = ""
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -954,7 +949,7 @@ struct NodeRow: View {
     private func toggleInfo() { if open { closeItem() } else { openItem() } }
     /// The field's Done: save what was typed and close the field. The children stay as they are.
     private func doneItem() {
-        commit(); commitNote()
+        commit(); commitNote(convertLists: true)
         endEdit(); noteFocused = false
         withAnimation(.snappy(duration: 0.22)) { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } }
     }
@@ -1010,9 +1005,12 @@ struct NodeRow: View {
                     .simultaneousGesture(handleGesture(onText: true))
                     #endif
             } else {
+            // Open: the title, with the item's controls on the same line, at its right end.
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(titleFont)
+                .fixedSize(horizontal: false, vertical: true)   // wraps to as many lines as it needs beside the controls
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
@@ -1025,9 +1023,13 @@ struct NodeRow: View {
                     let lines = v.components(separatedBy: "\n")
                     let (rest, items) = ListText.extract(from: lines.dropFirst().joined(separator: "\n"), includeLastLine: true)
                     if items.isEmpty { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter); return }
+                    // The list goes into the notes, as typed; it becomes children when the item closes.
                     let head = ListText.item(lines[0])?.title ?? lines[0]
                     title = ([head] + rest.components(separatedBy: "\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
-                    commit(); addListChildren(items)
+                    commit()
+                    let listText = lines.dropFirst().filter { ListText.item($0) != nil }.joined(separator: "\n")
+                    note = note.isEmpty ? listText : note + "\n" + listText
+                    _ = items
                 }
                 .onSubmit { commit(); onKey(.enter) }
                 #if os(macOS)
@@ -1038,6 +1040,8 @@ struct NodeRow: View {
                 .onKeyPress(.downArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altDown); return .handled }; return .ignored }
                 .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
+                controlRow
+            }
             }
             // The item's notes, read and edited here in the row, only while the item is open. Closed, a row is just
             // its title.
@@ -1047,17 +1051,12 @@ struct NodeRow: View {
                     .font(titleFont)
                     .foregroundStyle(Color.ink)   // same as the title
                     .focused($noteFocused)
-                    // A list started here turns into child items, line by line as each is finished.
-                    .onChange(of: note) { _, v in
-                        guard noteFocused else { return }
-                        let (rest, items) = ListText.extract(from: v, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
-                        if !items.isEmpty { note = rest.hasPrefix("\n") ? String(rest.drop { $0 == "\n" }) : rest; addListChildren(items) }
-                    }
+                    // A list typed here stays text while the item is open; it becomes child items when the item closes.
                     // Return ends the field's editing (a text field's rule); here it means "next line", so typing goes on.
                     .onChange(of: noteFocused) { _, f in
                         // Typing in the notes of a closed item opens it, so the controls are there with the text.
                         if f { if !infoOpen { withAnimation(.snappy(duration: 0.22)) { sel.nodeID = node.id; sel.infoID = node.id } }; return }
-                        if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote() }
+                        if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote(convertLists: false) }
                     }
                     .onSubmit { noteReturn() }
             }
@@ -1069,14 +1068,13 @@ struct NodeRow: View {
             if open {
                 ItemSheetBody(node: node)   // the AI's draft, when there is one
                 suggestionList
-                controlRow
             }
             }
             // Open: the column is the item field, one rounded block holding the text and, along its bottom edge, the
             // controls. It reaches left by its own inset so the text stays where it was.
             .padding(.horizontal, open ? ItemField.inset : 0)
             .padding(.top, open ? ItemField.top : 0)
-            .padding(.bottom, open ? 2 : 0)
+            .padding(.bottom, open ? ItemField.top : 0)
             .background(open ? PanelPalette.field : .clear, in: RoundedRectangle(cornerRadius: 12))
             .padding(.leading, open ? -ItemField.inset : 0)
             // Middle of the first line of text lines up with the middle of the bars.
@@ -1086,9 +1084,12 @@ struct NodeRow: View {
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
         }
         .padding(.vertical, 6)
-        .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
+        .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty; notesAtOpen = noteSource }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
-        .onChange(of: infoOpen) { _, open in if !open { commitNote(); adviceNote = nil; listTrail = [] } }   // closing the item saves notes being typed
+        // Opening the item remembers its notes; closing it saves the notes and turns list lines typed since into children.
+        .onChange(of: infoOpen) { _, open in
+            if open { notesAtOpen = noteSource } else { commitNote(convertLists: true); adviceNote = nil; listTrail = [] }
+        }
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
@@ -1238,7 +1239,7 @@ struct NodeRow: View {
     private var summary: String {
         if node.isProject { return "Project" }
         var parts = [node.state.label, node.assignee.label]
-        if let m = node.mode { parts.append(m.rawValue) }
+        parts += node.tags.sorted().map { "#" + $0 }
         if node.isYourTurn { parts.append("your turn") }
         return parts.joined(separator: " · ")
     }
@@ -1260,39 +1261,36 @@ struct NodeRow: View {
     /// when there are some), new child, and Done. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
+        let empty = title.trimmingCharacters(in: .whitespaces).isEmpty
         HStack(spacing: 0) {
             if !node.isProject {
-                FieldIcon(systemImage: node.assignee.icon, on: true) { cycleAssignee() }
+                FieldIcon(systemImage: node.assignee.icon, on: true, width: ItemField.compact) { cycleAssignee() }
                     .help("Responsible: " + node.assignee.label + " (tap to change)")
                     .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
             }
-            FieldIcon(systemImage: "photo") { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
-            FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil) { commit(); showCalendar = true }
+            FieldIcon(systemImage: "photo", width: ItemField.compact) { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
+            FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil, width: ItemField.compact) { commit(); showCalendar = true }
                 .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
                 .accessibilityLabel(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
-            if advising {
-                ProgressView().controlSize(.small).frame(width: ItemField.icon, height: 34).accessibilityLabel("Thinking")
-            } else {
-                FieldIcon(systemImage: "lightbulb") { advise() }
-                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .help("Ask the AI for feedback and suggestions").accessibilityLabel("Suggestions")
-            }
-            Spacer(minLength: 0)
             if node.state == .review {
                 // An AI draft is waiting: approve it, or send it back to be redone.
-                FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
-                FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
+                FieldIcon(systemImage: "arrow.counterclockwise", width: ItemField.compact) { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+                FieldIcon(systemImage: "checkmark.seal.fill", on: true, width: ItemField.compact) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
-            // New child: a filled circle like the + button, with a down-right arrow. An item with no text is removed
-            // when the keyboard leaves it, so it can't take a child yet.
-            FieldCircle(systemImage: "arrow.turn.down.right", fill: PanelPalette.orange) { commit(); onKey(.child) }
-                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            // New child (down-right arrow) and new sibling (+), bare glyphs like the others. An item with no text is
+            // removed when the keyboard leaves it, so it can't take a child or a sibling yet.
+            FieldIcon(systemImage: "arrow.turn.down.right", on: true, width: ItemField.compact) { commit(); onKey(.child) }
+                .disabled(empty)
                 .help("New child item").accessibilityLabel("New child item")
+            FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
+                .disabled(empty)
+                .help("New item below").accessibilityLabel("New item below")
             // Done: close the item's field.
-            FieldIcon(systemImage: "checkmark", on: true) { doneItem() }.help("Done").accessibilityLabel("Done")
+            FieldIcon(systemImage: "checkmark", on: true, width: ItemField.compact) { doneItem() }.help("Done").accessibilityLabel("Done")
         }
-        // The first glyph's left edge sits on the text's left edge.
-        .padding(.horizontal, -(ItemField.icon - 18) / 2)
+        .fixedSize()
+        // The last glyph's right edge sits near the field's right edge.
+        .padding(.trailing, -(ItemField.compact - 18) / 2)
     }
     /// Who holds the item: me, then the AI, then both, then me again.
     private func cycleAssignee() {
@@ -1337,19 +1335,6 @@ struct NodeRow: View {
         if p.type == .decompose && node.collapsed { store.update(node) { $0.collapsed = false } }   // show the new children
         store.save()
     }
-    /// Lightbulb: ask the AI to look at this item. What comes back is listed in the field as suggestions.
-    private func advise() {
-        commit(); commitNote()
-        advising = true; adviceNote = nil
-        let id = node.id, container = ctx.container, provider = AppSettings.shared.makeProvider()
-        Task { @MainActor in
-            defer { advising = false }
-            do {
-                let added = try await ItemAdvisor.advise(nodeID: id, container: container, provider: provider)
-                if added == 0 { adviceNote = "Nothing new to suggest." }
-            } catch { adviceNote = "No suggestions: " + error.localizedDescription }
-        }
-    }
     /// List lines typed in the field become children of the item, in order; an indented line goes under the line above it.
     private func addListChildren(_ items: [ListText.Item]) {
         guard !gone, !items.isEmpty else { return }
@@ -1377,7 +1362,6 @@ struct NodeRow: View {
     // Bindings for the strip pickers; they write through the store so undo and save work.
     private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
     private var stateBinding: Binding<TaskState> { Binding(get: { node.state }, set: { v in store.update(node) { $0.state = v }; store.save() }) }
-    private var modeBinding: Binding<Mode?> { Binding(get: { node.mode }, set: { v in store.update(node) { $0.mode = v }; store.save() }) }
 
     @ViewBuilder private var menu: some View {
         // This item and everything under it, as text: to Notes, Messages, Mail…
@@ -1387,12 +1371,6 @@ struct NodeRow: View {
             Section("Responsible") {
                 ForEach(Assignee.allCases) { a in
                     Button { store.update(node) { $0.assignee = a }; store.save() } label: { if node.assignee == a { Label(a.label, systemImage: "checkmark") } else { Text(a.label) } }
-                }
-            }
-            Menu("Mode") {
-                Button { store.update(node) { $0.mode = nil }; store.save() } label: { if node.mode == nil { Label("none", systemImage: "checkmark") } else { Text("none") } }
-                ForEach(Mode.allCases) { m in
-                    Button { store.update(node) { $0.mode = m }; store.save() } label: { if node.mode == m { Label(m.label, systemImage: "checkmark") } else { Text(m.label) } }
                 }
             }
             Menu("Status") {
@@ -1420,19 +1398,10 @@ struct NodeRow: View {
     }
 
     /// Return in the notes: start a new line and keep typing. A list line just finished becomes a child item.
+    /// Return in the notes: a new line, and typing goes on (list lines become children only when the item closes).
     private func noteReturn() {
-        // The field may already have put the line break in (and the list line may already be gone as a child).
-        var text = note
-        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
-        let (rest, items) = ListText.extract(from: text, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
-        addListChildren(items)
-        // Lines that left as children leave no blank lines behind.
-        var kept = rest
-        if !items.isEmpty {
-            while kept.hasPrefix("\n") { kept.removeFirst() }
-            while kept.hasSuffix("\n\n") { kept.removeLast() }
-        }
-        note = kept
+        // The field may already have put the line break in.
+        if !note.isEmpty && !note.hasSuffix("\n") { note += "\n" }
         noteContinuing = true; noteFocused = true
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); noteContinuing = false }
     }
@@ -1446,15 +1415,18 @@ struct NodeRow: View {
     }
     /// Where the row's notes are stored: a task's notes; for a top-level item, the text its agent works toward.
     private var noteSource: String { node.isProject ? node.goal : node.notes }
-    private func commitNote() {
+    /// Saves the notes. With `convertLists` (the item is closing), list lines typed since it opened become children.
+    /// Links typed go to the item's chips either way.
+    private func commitNote(convertLists: Bool) {
         guard !gone else { return }
         var n = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        if n != noteSource {
-            // Leaving the notes: a list line still at the end becomes a child too, and links go to the item's chips.
-            let (rest, items) = ListText.extract(from: n, includeLastLine: true, keeping: Set(noteSource.components(separatedBy: "\n")))
+        if convertLists {
+            let (rest, items) = ListText.extract(from: n, includeLastLine: true, keeping: Set(notesAtOpen.components(separatedBy: "\n")))
             addListChildren(items)
-            n = popLinks(from: rest).trimmingCharacters(in: .whitespacesAndNewlines)
+            n = rest.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty || items.isEmpty }.joined(separator: "\n")
+            notesAtOpen = n
         }
+        if n != noteSource { n = popLinks(from: n).trimmingCharacters(in: .whitespacesAndNewlines) }
         if n != noteSource { store.update(node) { if $0.isProject { $0.goal = n } else { $0.notes = n } }; store.save() }
         note = n
         showNote = !n.isEmpty
@@ -1463,29 +1435,25 @@ struct NodeRow: View {
     private func commit() {
         guard !gone else { return }
         var t = title.trimmingCharacters(in: .whitespaces)
-        var assignee: Assignee? = nil, mode: Mode? = nil, clearMode = false, state: TaskState? = nil
+        var assignee: Assignee? = nil, state: TaskState? = nil
         if let r = t.range(of: "\\s*@(ai|me|human|both|shared|none)\\b", options: [.regularExpression, .caseInsensitive]) {
             let tag = t[r].trimmingCharacters(in: .whitespaces).dropFirst().lowercased()
             assignee = ["ai": .ai, "me": .human, "human": .human, "both": .shared, "shared": .shared, "none": .unassigned][String(tag)]
             t.removeSubrange(r)
         }
-        // Tags that act: a mode (#call …), #none (clear the mode) and a status (#done #doing #blocked #todo) are applied
-        // and removed from the text. Any other #tag stays in the text and is searchable.
+        // Tags that act: a status (#done #doing #blocked #todo) is applied and removed from the text. Any other #tag
+        // stays in the text: it is the item's tag, searchable and filterable.
         for tag in Tags.hashtags(in: t) {
-            if let m = Mode(rawValue: tag) { mode = m }
-            else if tag == "none" { clearMode = true }
-            else if let st = Tags.status[tag] { state = st }
-            else { continue }
+            guard let st = Tags.status[tag] else { continue }
+            state = st
             if let r = t.range(of: "\\s*#" + tag + "(?![\\p{L}\\p{N}_-])", options: [.regularExpression, .caseInsensitive]) { t.removeSubrange(r) }
         }
         t = t.trimmingCharacters(in: .whitespaces)
         if t != node.title { t = popLinks(from: t).trimmingCharacters(in: .whitespaces) }
-        if t != node.title || assignee != nil || mode != nil || clearMode || state != nil {
+        if t != node.title || assignee != nil || state != nil {
             store.update(node) { n in
                 n.title = t
                 if let a = assignee, !n.isProject { n.assignee = a }
-                if let m = mode { n.mode = m }
-                if clearMode { n.mode = nil }
                 if let st = state, !n.isProject { n.state = st }
             }
             store.save(); title = t
