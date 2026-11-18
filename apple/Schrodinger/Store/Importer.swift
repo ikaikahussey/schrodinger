@@ -20,15 +20,26 @@ enum Importer {
 
     /// Headings (`#`) and plain lines become items; list lines (`-`, `*`, `•`, `1.`, `[ ]`…) nest under the line above
     /// them, deeper as they are indented. A long paragraph is kept as the notes of the item before it.
-    static func parse(text: String) -> [Entry] {
+    static func parse(text: String) -> [Entry] { parseText(text).entries }
+
+    /// `parse(text:)`, plus the `> ` notes that came before any item (they belong to the import's top item).
+    static func parseText(_ text: String) -> (entries: [Entry], lead: String) {
         var out: [Entry] = []
         var headingDepth = -1          // depth of the latest heading; plain lines go one below it
         var base = -1                  // depth of the latest heading or plain line; list lines go below it
         var indents: [Int] = []        // indents of the open list levels in the current list
+        var leadNotes = ""
         for raw in text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
             let line = normalizeBullet(raw)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
+            // `> text`: notes of the item above (how exported text carries notes).
+            if trimmed.hasPrefix(">") {
+                let note = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+                if out.isEmpty { leadNotes += (leadNotes.isEmpty ? "" : "\n") + note }
+                else { out[out.count - 1].notes += (out[out.count - 1].notes.isEmpty ? "" : "\n") + note }
+                continue
+            }
             if let h = heading(trimmed) {
                 let d = h.level - 1
                 out.append(Entry(depth: d, title: h.title)); headingDepth = d; base = d; indents = []
@@ -43,7 +54,13 @@ enum Importer {
                 out.append(Entry(depth: d, title: trimmed)); base = d; indents = []
             }
         }
-        return normalized(out)
+        let entries = normalized(out).map { e in
+            var e = e
+            let (t, due) = Exporter.parseDueSuffix(e.title)
+            if let due { e.title = t; e.due = due }
+            return e
+        }
+        return (entries, leadNotes)
     }
 
     /// A Markdown heading: `# Title` (level 1) to `###### Title`.
@@ -182,6 +199,12 @@ enum Importer {
         let first = lines.isEmpty ? "" : lines[firstIndex]
         let title = heading(first.trimmingCharacters(in: .whitespaces))?.title ?? ListText.item(first)?.title ?? first.trimmingCharacters(in: .whitespaces)
         let rest = lines.dropFirst(firstIndex + 1).joined(separator: "\n")
-        return insert(parse(text: rest), title: title.isEmpty ? "Imported note" : title, under: parentID, store: store)
+        let (entries, leadNotes) = parseText(rest)
+        let (t, due) = Exporter.parseDueSuffix(title)
+        let id = insert(entries, title: t.isEmpty ? "Imported note" : t, under: parentID, store: store)
+        if let top = store.node(id), !leadNotes.isEmpty || due != nil {
+            store.update(top) { if !leadNotes.isEmpty { $0.notes = leadNotes }; if let due { $0.due = due } }; store.save()
+        }
+        return id
     }
 }
