@@ -152,6 +152,69 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(LinkText.extract(from: "no links here").rest, "no links here")
     }
 
+    func testImportTextNestsListsUnderLines() throws {
+        let note = """
+        Campaign plan
+        # Goals
+        How do we get there
+        - knock doors
+          - Kailua
+          ◦ Kaneohe
+        - [x] file papers
+        ## Principles
+        Listen first
+        """
+        let e = Importer.parse(text: note)
+        XCTAssertEqual(e.map(\.title), ["Campaign plan", "Goals", "How do we get there", "knock doors", "Kailua", "Kaneohe", "file papers", "Principles", "Listen first"])
+        XCTAssertEqual(e.map(\.depth), [0, 0, 1, 2, 3, 3, 2, 1, 2])
+        XCTAssertTrue(e[6].done)
+
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let top = Importer.importNote("Trip\n- pack\n  - socks\n- book", under: nil, store: s)
+        XCTAssertEqual(s.node(top)?.title, "Trip")
+        let kids = s.children(of: top)
+        XCTAssertEqual(kids.map(\.title), ["pack", "book"])
+        XCTAssertEqual(s.children(of: kids[0].id).map(\.title), ["socks"])
+    }
+
+    func testExportRoundTrips() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let top = s.create(title: "Shoot")
+        s.update(top) { $0.notes = "film, \"lights\"" }
+        let a = s.create(title: "Buy film", parentID: top.id, due: Calendar.current.date(from: DateComponents(year: 2026, month: 12, day: 1)))
+        s.update(a) { $0.state = .done; $0.notes = "400 speed" }
+        _ = s.create(title: "Kodak", parentID: a.id)
+        s.save()
+        for viaCSV in [false, true] {
+            let id = viaCSV
+                ? Importer.insert(Importer.parse(csv: Exporter.csv(top.id, store: s)), title: "copy", under: nil, store: s)
+                : Importer.importNote(Exporter.text(top.id, store: s), under: nil, store: s)
+            // CSV rows include the exported item itself (depth 0), under the new "copy" item.
+            let root = viaCSV ? s.children(of: id)[0] : s.node(id)!
+            XCTAssertEqual(root.title, "Shoot")
+            XCTAssertEqual(root.notes, "film, \"lights\"")
+            let kid = s.children(of: root.id)[0]
+            XCTAssertEqual(kid.title, "Buy film")
+            XCTAssertEqual(kid.notes, "400 speed")
+            XCTAssertEqual(kid.state, .done)
+            XCTAssertEqual(kid.due, a.due)
+            XCTAssertEqual(s.children(of: kid.id).map(\.title), ["Kodak"])
+        }
+    }
+
+    func testImportCSV() {
+        let csv = "Title,Notes,Due,Done,Parent\nShoot,\"film, lights\",2026-12-01,,\nBuy film,\"say \"\"400\"\"\",,yes,Shoot\n"
+        let e = Importer.parse(csv: csv)
+        XCTAssertEqual(e.map(\.title), ["Shoot", "Buy film"])
+        XCTAssertEqual(e.map(\.depth), [0, 1])
+        XCTAssertEqual(e[0].notes, "film, lights")
+        XCTAssertEqual(e[1].notes, "say \"400\"")
+        XCTAssertNotNil(e[0].due)
+        XCTAssertTrue(e[1].done)
+        // No header: first column title, second notes.
+        XCTAssertEqual(Importer.parse(csv: "a,x\nb,y").map(\.notes), ["x", "y"])
+    }
+
     func testItemAdvisorFilesSuggestionsAndAcceptApplies() async throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P")
