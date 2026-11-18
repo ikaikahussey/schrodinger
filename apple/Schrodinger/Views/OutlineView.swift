@@ -361,7 +361,7 @@ struct OutlineView: View {
             .allowsHitTesting(z != nil)
             .accessibilityLabel(z == nil ? "Schrodinger" : "Schrodinger. All items")
             .accessibilityAddTraits(.isHeader)
-            TextField("", text: $search, prompt: Text("SEARCH").foregroundStyle(ink.opacity(0.5)))
+            TextField("", text: $search)
                 .textFieldStyle(.plain)
                 .font(PanelPalette.label(.subheadline)).foregroundStyle(ink).tint(ink)
                 .focused($searchFocused)
@@ -377,6 +377,11 @@ struct OutlineView: View {
                         .frame(width: 24, height: h).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Clear search")
+            } else {
+                // Idle: a magnifying glass at the bar's right end stands for search (no word).
+                Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .heavy)).foregroundStyle(ink.opacity(0.5))
+                    .frame(width: 24, height: h).padding(.trailing, 8)
+                    .accessibilityHidden(true)
             }
         }
         // The logo's ink starts where the top-level circles start, less the drawing's own margin (whisker tips at
