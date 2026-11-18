@@ -212,7 +212,8 @@ struct OutlineView: View {
     /// Items whose children can be hidden (in view: the zoomed item's subtree, or everything).
     private var foldable: [Node] {
         let parents = Set(all.compactMap(\.parentID))
-        return all.filter { parents.contains($0.id) && (zoomID == nil || $0.id == zoomID || isInSubtree($0.id, of: zoomID!)) }
+        // Not the zoomed item itself: its children always show, so it would never count as folded.
+        return all.filter { parents.contains($0.id) && (zoomID == nil || ($0.id != zoomID && isInSubtree($0.id, of: zoomID!))) }
     }
     /// Every item with children has them hidden.
     private var allFolded: Bool { let f = foldable; return !f.isEmpty && f.allSatisfy(\.collapsed) }
@@ -251,7 +252,7 @@ struct OutlineView: View {
         guard !foldable.isEmpty else { return }
         finishTyping()
         withAnimation(.snappy(duration: 0.25)) {
-            for n in foldable where n.collapsed != target && n.id != zoomID { store.update(n) { $0.collapsed = target } }
+            for n in foldable where n.collapsed != target { store.update(n) { $0.collapsed = target } }
             store.save()
         }
     }
