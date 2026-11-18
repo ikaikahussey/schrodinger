@@ -172,20 +172,13 @@ struct OutlineView: View {
             if case .failure(let e) = result { importFailure = e.localizedDescription }
         }
         .alert("Import failed", isPresented: Binding(get: { importFailure != nil }, set: { if !$0 { importFailure = nil } })) { Button("OK") {} } message: { Text(importFailure ?? "") }
+        // The breadcrumb bar is the header (logo, path, filter): the system navigation bar / window toolbar is not
+        // shown. The one Done is the check in the open item's field (Escape on a keyboard).
         #if os(iOS)
-        // The breadcrumb bar is the header (logo, path, filter): the system navigation bar is not shown.
         .toolbar(.hidden, for: .navigationBar)
+        #else
+        .toolbar(.hidden, for: .windowToolbar)
         #endif
-        .toolbar {
-            // Only while typing, on the Mac: Done (Escape). On iPhone/iPad the check in the item's field is the Done.
-            #if os(macOS)
-            if focused != nil || editRequest != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Done") { endEdit() }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
-                }
-            }
-            #endif
-        }
         // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
         .onChange(of: sel.revealID) { _, id in reveal(id, proxy) }
         .confirmationDialog(deleteAskTitle, isPresented: Binding(get: { sel.deleteAskID != nil }, set: { if !$0 { sel.deleteAskID = nil } }), titleVisibility: .visible) {
@@ -397,12 +390,15 @@ struct OutlineView: View {
                 Button { finishTyping(); exportingCSV = true } label: { Label("Save as CSV…", systemImage: "tablecells") }
             } label: { Label("Export", systemImage: "square.and.arrow.up") }
             Toggle("Show square legend", isOn: Binding(get: { showLegend }, set: { v in withAnimation(.snappy(duration: 0.2)) { showLegend = v } }))
-            #if os(iOS)
-            // The rest of the app (there is no tab bar): each opens as a sheet over the outline.
+            // The rest of the app (there is no tab bar or sidebar): Inbox opens as a sheet over the outline. Settings
+            // does too on iPhone/iPad; on the Mac it is the Settings window (⌘,).
             Divider()
             Button { finishTyping(); sel.panel = .inbox } label: {
                 Label(openProposals.isEmpty ? "Inbox" : "Inbox (\(openProposals.count))", systemImage: "tray")
             }
+            #if os(macOS)
+            SettingsLink { Label("Settings…", systemImage: "gear") }
+            #else
             Button { finishTyping(); sel.panel = .settings } label: { Label("Settings", systemImage: "gear") }
             #endif
         } label: {
@@ -1456,7 +1452,9 @@ struct NodeRow: View {
             FieldIcon(systemImage: "trash", width: ItemField.compact) { askDelete() }
                 .help("Delete item").accessibilityLabel("Delete item")
             // Done: close the item's field.
-            FieldIcon(systemImage: "checkmark", on: true, width: ItemField.compact) { doneItem() }.help("Done").accessibilityLabel("Done")
+            FieldIcon(systemImage: "checkmark", on: true, width: ItemField.compact) { doneItem() }
+                .keyboardShortcut(.escape, modifiers: [])
+                .help("Done (Esc)").accessibilityLabel("Done")
         }
         .fixedSize()
         // The last glyph's right edge sits near the field's right edge.
