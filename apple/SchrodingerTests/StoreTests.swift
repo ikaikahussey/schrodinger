@@ -29,7 +29,7 @@ final class StoreTests: XCTestCase {
         let p = s.create(title: "P"); p.goal = "ship"
         let ai = s.create(title: "first", parentID: p.id, assignee: .ai)
         let dep = s.create(title: "second", parentID: p.id, assignee: .ai); dep.deps = [ai.id]
-        let sh = s.create(title: "Meet funder", parentID: p.id, assignee: .shared, mode: .meeting)
+        let sh = s.create(title: "Meet funder #meeting", parentID: p.id, assignee: .shared)
         let hum = s.create(title: "human thing", parentID: p.id, assignee: .human)
         s.save()
         let out = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
@@ -38,7 +38,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(dep.state, .unset, "dependent task not picked up")
         XCTAssertEqual(hum.state, .unset)
         XCTAssertEqual(sh.state, .in_progress); XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.isYourTurn)
-        XCTAssertTrue(s.byMode(assignee: .human).contains { $0.tasks.contains { $0.0.id == sh.id } })
+        XCTAssertTrue(s.byTag(assignee: .human).contains { $0.tag == "#meeting" && $0.tasks.contains { $0.0.id == sh.id } })
         // reject with note → redraft includes note
         try s.reject(ai, note: "make it shorter")
         _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
@@ -94,7 +94,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(Tags.hashtags(in: "#a#b"), ["a", "b"])
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P #client"); p.goal = "ship #Q3"
-        let t = s.create(title: "Draft letter #urgent", parentID: p.id, mode: .write); t.notes = "see #legal"
+        let t = s.create(title: "Draft letter #urgent #write", parentID: p.id); t.notes = "see #legal"
         XCTAssertEqual(p.tags, ["client", "q3"])
         XCTAssertEqual(t.tags, ["urgent", "legal", "write"])
     }
@@ -200,6 +200,18 @@ final class StoreTests: XCTestCase {
             XCTAssertEqual(kid.due, a.due)
             XCTAssertEqual(s.children(of: kid.id).map(\.title), ["Kodak"])
         }
+    }
+
+    func testModesBecomeTags() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let a = s.create(title: "Call the lab", parentID: p.id); a.modeRaw = "call"
+        let b = s.create(title: "Write it", parentID: p.id); b.notes = "draft"; b.modeRaw = "write"
+        s.save()
+        s.migrateModesToTags()
+        XCTAssertEqual(a.notes, "#call"); XCTAssertEqual(a.modeRaw, "")
+        XCTAssertEqual(b.notes, "draft\n#write")
+        XCTAssertEqual(a.tags, ["call"])
     }
 
     func testImportCSV() {

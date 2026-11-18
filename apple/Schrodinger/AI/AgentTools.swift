@@ -14,12 +14,12 @@ enum AgentTools {
 
     nonisolated static func make(container: ModelContainer, projectID: UUID, taskID: UUID) -> [AgentToolSpec] {
         return [
-            AgentToolSpec(name: "project_context", description: "Get the project goal, success criteria, constraints, and all tasks with state, assignee, mode, due date, notes and existing artifacts.", schemaJSON: schema([:])) { _ in
+            AgentToolSpec(name: "project_context", description: "Get the project goal, success criteria, constraints, and all tasks with state, assignee, tags, due date, notes and existing artifacts.", schemaJSON: schema([:])) { _ in
                 return await MainActor.run {
                     let s = Store(container.mainContext)
                     guard let p = s.node(projectID) else { return "{}" }
                     let tasks = s.descendants(of: p.id).map { t -> [String: Any] in
-                        var d: [String: Any] = ["id": t.id.uuidString, "title": t.title, "assignee": t.assigneeRaw, "state": t.stateRaw, "mode": t.modeRaw]
+                        var d: [String: Any] = ["id": t.id.uuidString, "title": t.title, "assignee": t.assigneeRaw, "state": t.stateRaw, "tags": t.tags.sorted()]
                         if let due = t.due { d["due"] = due.dayString }
                         if !t.acceptanceNote.isEmpty { d["acceptance_note"] = t.acceptanceNote }
                         if !t.notes.isEmpty { d["notes"] = t.notes }

@@ -4,7 +4,7 @@ import PhotosUI
 import UniformTypeIdentifiers
 
 /// One continuous outline. Depth is shown by black bars at the left (one per level). The item's own bar carries
-/// its status, who holds it, and its mode; tapping the bars opens the item's menu. Everything else stays out of the
+/// its status and who holds it; tapping the bars opens the item's menu. Everything else stays out of the
 /// way of the text. Top-level items are projects (the harness runs one agent per top-level item).
 struct OutlineView: View {
     @Environment(\.modelContext) private var ctx
@@ -15,7 +15,8 @@ struct OutlineView: View {
     /// Photos and links on items, oldest first; grouped by item in `body`.
     @Query(sort: [SortDescriptor(\Attachment.createdAt)]) private var attachments: [Attachment]
     @State private var filter: Filter = .all
-    @State private var modeFilter: Mode? = nil
+    /// Show only items with this tag (nil: any).
+    @State private var tagFilter: String? = nil
     @State private var showLegend = false
     /// Header search: words match an item's text; `#tag` words match its tags.
     @State private var search = ""
@@ -185,7 +186,7 @@ struct OutlineView: View {
         guard let id, let n = store.node(id) else { return }
         sel.revealID = nil
         if let z = zoomID, !isInSubtree(id, of: z) { withAnimation(.snappy(duration: 0.32)) { zoomID = nil } }
-        if !matches(n) { filter = .all; modeFilter = nil }
+        if !matches(n) { filter = .all; tagFilter = nil }
         var p = n.parentID
         while let pid = p, let x = store.node(pid) { if x.collapsed { store.update(x) { $0.collapsed = false } }; p = x.parentID }
         store.save()
@@ -198,7 +199,7 @@ struct OutlineView: View {
 
     /// Name for an export: the zoomed item's title, or the app's name for everything.
     private var exportName: String { zoomID.flatMap { store.node($0)?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? "Schrodinger" }
-    private var filtering: Bool { filter != .all || modeFilter != nil }
+    private var filtering: Bool { filter != .all || tagFilter != nil }
 
     /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
     private static let headerHeight: CGFloat = 28
@@ -208,14 +209,17 @@ struct OutlineView: View {
                 ForEach(Filter.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
-            Picker("Mode", selection: Binding(get: { modeFilter }, set: { v in withAnimation(.snappy(duration: 0.25)) { modeFilter = v } })) {
-                Text("Any mode").tag(Mode?.none)
-                ForEach(Mode.allCases) { Text($0.label).tag(Mode?.some($0)) }
+            // Tags in use (typed as #tag in an item's text or notes).
+            if !allTags.isEmpty {
+                Picker("Tag", selection: Binding(get: { tagFilter }, set: { v in withAnimation(.snappy(duration: 0.25)) { tagFilter = v } })) {
+                    Text("Any tag").tag(String?.none)
+                    ForEach(allTags, id: \.self) { Text("#" + $0).tag(String?.some($0)) }
+                }
+                .pickerStyle(.inline)
             }
-            .pickerStyle(.inline)
             if filtering {
                 Divider()
-                Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
+                Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; tagFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
             }
             Divider()
             // Import a CSV, text or Markdown file (a note exported from Notes, say): it becomes a new item, with the
@@ -452,9 +456,9 @@ struct OutlineView: View {
     private func matches(_ n: Node) -> Bool {
         if !searchMatches(n) { return false }
         if n.isProject { return true }
-        if let m = modeFilter, n.mode != m { return false }
+        if let t = tagFilter, !n.tags.contains(t) { return false }
         switch filter {
-        case .all: return modeFilter == nil || n.state != .done
+        case .all: return tagFilter == nil || n.state != .done
         case .mine: return (n.assignee == .human || n.isYourTurn) && n.state != .done
         case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done
         case .review: return n.state == .review || n.isYourTurn
@@ -477,7 +481,7 @@ struct OutlineView: View {
         // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
         let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
-        let hidden = ((filter != .all || modeFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
+        let hidden = ((filter != .all || tagFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
@@ -648,7 +652,7 @@ struct ProjectLine: View {
 // MARK: - Squares
 
 /// The item's own mark: the rightmost one in the row, a circle the size of the squares.
-/// Every item's square has this same shape. Color = the item's mode (or, with no mode, its project's context color).
+/// Every item's mark has this same shape. Color: see Appearance.itemColor.
 ///   who holds it: mine or unassigned = blank · AI = sparkles glyph · both = a single sparkle
 ///   state:        todo/in progress/done = solid · review = hollow · blocked = dashed outline
 struct StatusBar: View {
@@ -767,17 +771,6 @@ extension TaskState {
         case .review: "eye"; case .done: "checkmark.circle.fill"
         }
     }
-}
-
-extension Mode {
-    /// Emoji shown under the bars and in menus.
-    var emoji: String {
-        switch self {
-        case .call: "📞"; case .errand: "🚗"; case .email: "✉️"; case .write: "✍️"; case .research: "🔎"; case .meeting: "👥"; case .admin: "🗂️"; case .other: "📌"
-        }
-    }
-    /// Emoji plus name, for menus and pickers.
-    var label: String { "\(emoji) \(rawValue)" }
 }
 
 struct BarLegend: View {
@@ -1238,7 +1231,7 @@ struct NodeRow: View {
     private var summary: String {
         if node.isProject { return "Project" }
         var parts = [node.state.label, node.assignee.label]
-        if let m = node.mode { parts.append(m.rawValue) }
+        parts += node.tags.sorted().map { "#" + $0 }
         if node.isYourTurn { parts.append("your turn") }
         return parts.joined(separator: " · ")
     }
@@ -1377,7 +1370,6 @@ struct NodeRow: View {
     // Bindings for the strip pickers; they write through the store so undo and save work.
     private var assigneeBinding: Binding<Assignee> { Binding(get: { node.assignee }, set: { v in store.update(node) { $0.assignee = v }; store.save() }) }
     private var stateBinding: Binding<TaskState> { Binding(get: { node.state }, set: { v in store.update(node) { $0.state = v }; store.save() }) }
-    private var modeBinding: Binding<Mode?> { Binding(get: { node.mode }, set: { v in store.update(node) { $0.mode = v }; store.save() }) }
 
     @ViewBuilder private var menu: some View {
         // This item and everything under it, as text: to Notes, Messages, Mail…
@@ -1387,12 +1379,6 @@ struct NodeRow: View {
             Section("Responsible") {
                 ForEach(Assignee.allCases) { a in
                     Button { store.update(node) { $0.assignee = a }; store.save() } label: { if node.assignee == a { Label(a.label, systemImage: "checkmark") } else { Text(a.label) } }
-                }
-            }
-            Menu("Mode") {
-                Button { store.update(node) { $0.mode = nil }; store.save() } label: { if node.mode == nil { Label("none", systemImage: "checkmark") } else { Text("none") } }
-                ForEach(Mode.allCases) { m in
-                    Button { store.update(node) { $0.mode = m }; store.save() } label: { if node.mode == m { Label(m.label, systemImage: "checkmark") } else { Text(m.label) } }
                 }
             }
             Menu("Status") {
@@ -1463,29 +1449,25 @@ struct NodeRow: View {
     private func commit() {
         guard !gone else { return }
         var t = title.trimmingCharacters(in: .whitespaces)
-        var assignee: Assignee? = nil, mode: Mode? = nil, clearMode = false, state: TaskState? = nil
+        var assignee: Assignee? = nil, state: TaskState? = nil
         if let r = t.range(of: "\\s*@(ai|me|human|both|shared|none)\\b", options: [.regularExpression, .caseInsensitive]) {
             let tag = t[r].trimmingCharacters(in: .whitespaces).dropFirst().lowercased()
             assignee = ["ai": .ai, "me": .human, "human": .human, "both": .shared, "shared": .shared, "none": .unassigned][String(tag)]
             t.removeSubrange(r)
         }
-        // Tags that act: a mode (#call …), #none (clear the mode) and a status (#done #doing #blocked #todo) are applied
-        // and removed from the text. Any other #tag stays in the text and is searchable.
+        // Tags that act: a status (#done #doing #blocked #todo) is applied and removed from the text. Any other #tag
+        // stays in the text: it is the item's tag, searchable and filterable.
         for tag in Tags.hashtags(in: t) {
-            if let m = Mode(rawValue: tag) { mode = m }
-            else if tag == "none" { clearMode = true }
-            else if let st = Tags.status[tag] { state = st }
-            else { continue }
+            guard let st = Tags.status[tag] else { continue }
+            state = st
             if let r = t.range(of: "\\s*#" + tag + "(?![\\p{L}\\p{N}_-])", options: [.regularExpression, .caseInsensitive]) { t.removeSubrange(r) }
         }
         t = t.trimmingCharacters(in: .whitespaces)
         if t != node.title { t = popLinks(from: t).trimmingCharacters(in: .whitespaces) }
-        if t != node.title || assignee != nil || mode != nil || clearMode || state != nil {
+        if t != node.title || assignee != nil || state != nil {
             store.update(node) { n in
                 n.title = t
                 if let a = assignee, !n.isProject { n.assignee = a }
-                if let m = mode { n.mode = m }
-                if clearMode { n.mode = nil }
                 if let st = state, !n.isProject { n.state = st }
             }
             store.save(); title = t
