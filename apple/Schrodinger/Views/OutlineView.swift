@@ -494,7 +494,6 @@ struct OutlineView: View {
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, advice: advice, trail: trail + [own], context: context, active: active) }
             }
-            if depth == 0 { Spacer().frame(height: 14) }
         })
     }
 
@@ -893,14 +892,14 @@ struct NodeRow: View {
     /// there is something to run.
     @ViewBuilder private var runButton: some View {
         if runningHere {
-            ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Running")
+            ProgressView().controlSize(.small).frame(width: 28, height: 22).accessibilityLabel("Running")
         } else {
             Button { run() } label: {
                 Image(systemName: "play.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.ink)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .frame(width: 28, height: 22)
+                    .contentShape(Rectangle().inset(by: -6))
             }
             .buttonStyle(.plain)
             .disabled(harness.running)
@@ -1072,8 +1071,8 @@ struct NodeRow: View {
                 Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
                     Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
                         .rotationEffect(.degrees(childrenShown ? 90 : 0))
-                        .frame(width: 36, height: 32)
-                        .contentShape(Rectangle())
+                        .frame(width: 36, height: 22)   // no taller than a line of text, so the row keeps its height
+                        .contentShape(Rectangle().inset(by: -6))
                 }
                 .buttonStyle(.plain)
                 .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
