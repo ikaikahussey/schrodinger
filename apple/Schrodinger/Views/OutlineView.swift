@@ -81,7 +81,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
+                        .padding(.leading, StatusBar.textStart(t.depth)).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -269,7 +269,7 @@ struct OutlineView: View {
         var path: [Node] = []
         var p = n.parentID
         while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
-        return path.map { a in (a.isProject ? nil : a.mode.map { look.color(for: $0) }) ?? context }
+        return path.enumerated().map { i, a in look.itemColor(depth: i, state: a.isProject ? .todo : a.state, assignee: a.isProject ? .human : a.assignee) }
     }
     private func rootIndex(_ n: Node, roots: [Node]) -> Int {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
@@ -361,7 +361,7 @@ struct OutlineView: View {
             .allowsHitTesting(z != nil)
             .accessibilityLabel(z == nil ? "Schrodinger" : "Schrodinger. All items")
             .accessibilityAddTraits(.isHeader)
-            TextField("", text: $search, prompt: Text("SEARCH").foregroundStyle(ink.opacity(0.5)))
+            TextField("", text: $search)
                 .textFieldStyle(.plain)
                 .font(PanelPalette.label(.subheadline)).foregroundStyle(ink).tint(ink)
                 .focused($searchFocused)
@@ -377,11 +377,16 @@ struct OutlineView: View {
                         .frame(width: 24, height: h).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Clear search")
+            } else {
+                // Idle: a magnifying glass at the bar's right end stands for search (no word).
+                Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .heavy)).foregroundStyle(ink.opacity(0.5))
+                    .frame(width: 24, height: h).padding(.trailing, 8)
+                    .accessibilityHidden(true)
             }
         }
-        // The logo's ink starts where a top-level item's text starts: the circle's column, the squares' grab padding
-        // (12) and the row's spacing (2), less the drawing's own margin (whisker tips at x = 10 of its 64-unit box).
-        .padding(.leading, StatusBar.step + 12 + 2 - 30 * 10 / 64).padding(.trailing, 2)
+        // The logo's ink starts where the top-level circles start, less the drawing's own margin (whisker tips at
+        // x = 10 of its 64-unit box).
+        .padding(.leading, StatusBar.margin - 30 * 10 / 64).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
         .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(33) }
         .contentShape(Rectangle())
@@ -469,8 +474,8 @@ struct OutlineView: View {
     /// `active`: the item's project is active (paused and archived projects don't run).
     private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
-        // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
-        let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
+        // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
+        let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
         let hidden = ((filter != .all || modeFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
@@ -491,11 +496,9 @@ struct OutlineView: View {
                     attachments: files[n.id] ?? [],
                     suggestions: advice[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
-            if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, advice: advice, trail: trail + [own], context: context, active: active) }
             }
-            if depth == 0 { Spacer().frame(height: 14) }
         })
     }
 
@@ -637,7 +640,7 @@ struct ProjectLine: View {
             }
         }
         .frame(height: 1.5)
-        .padding(.leading, StatusBar.step + 8).padding(.trailing, 4).padding(.bottom, 4)
+        .padding(.leading, StatusBar.textStart(0)).padding(.trailing, 4).padding(.bottom, 4)
         .opacity(progress.total == 0 ? 0 : 1)
     }
 }
@@ -653,13 +656,22 @@ struct StatusBar: View {
     let assignee: Assignee
     let isProject: Bool
     var color: Color = .ink
+    /// Indent level: 0 is a circle; deeper, the mark is a rounded bar (depth + 1) diameters long.
+    var depth: Int = 0
+    /// The item has notes: a small dot at the mark's left end.
+    var hasNotes = false
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
-    /// Horizontal distance from one depth square to the next (side + 1 px gap).
-    static let step: CGFloat = w + 1
-    /// The item's own mark is a circle (its ancestors' marks stay square).
-    static var ownShape: Circle { Circle() }
+    /// Marks start `margin` from the left edge. A top-level mark is a circle; each level down it is one diameter
+    /// longer (2×, 3×…). The row's text starts `gap` after the mark.
+    static let margin: CGFloat = 12
+    static let gap: CGFloat = 12
+    static var ownShape: Capsule { Capsule() }
+    /// Width of the mark at `depth`: (depth + 1) diameters.
+    static func width(_ depth: Int) -> CGFloat { w * CGFloat(max(depth, 0) + 1) }
+    /// Where the text of a row at `depth` starts.
+    static func textStart(_ depth: Int) -> CGFloat { margin + width(depth) + gap }
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
     private var solid: Bool { isProject || (state != .review && state != .blocked) }
@@ -675,42 +687,57 @@ struct StatusBar: View {
                 case .blocked: shape.strokeBorder(color, style: StrokeStyle(lineWidth: 2, dash: [3, 2]))
                 default:       shape.fill(color)
                 }
-                // AI involvement is a glyph inside the square; the square itself never changes shape.
+                // AI involvement is a glyph in the mark's round end (next to the text); the mark never changes shape.
                 if let glyph = assignee.squareGlyph {
                     Image(systemName: glyph)
                         .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
                         .foregroundStyle(solid ? Color.canvas : color)
+                        .frame(width: Self.w, height: Self.h)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
+            // Notes: a dot in the mark's left end (on a circle, its middle unless the AI glyph is there).
+            if hasNotes && !(depth == 0 && assignee.squareGlyph != nil) {
+                Circle().fill(solid ? Color.canvas : color).frame(width: 5, height: 5)
+                    .frame(width: Self.w, height: Self.h)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .frame(width: Self.w, height: Self.h)
+        .frame(width: Self.width(depth), height: Self.h)
         .clipShape(shape)
     }
 }
 
-/// One square per depth level, flush with the left edge and 1 px apart: each ancestor's square in that ancestor's color,
-/// then the item's own square (StatusBar). Tap = actions.
+/// The row's mark: a circle for a top-level item; deeper, a rounded bar from the left margin, one diameter longer per
+/// level. Tap = actions.
 struct DepthBars: View {
     let node: Node
     let depth: Int
     let hasChildren: Bool
     var trail: [Color] = []
     var color: Color = .ink
+    /// The item is open: its mark turns down a quarter turn about its left (round) end, hanging beside the field.
+    var open = false
+    /// The item has children that are hidden: a second oval peeks out below the mark, like a stack. Tap to show them.
+    var childrenHidden = false
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
-        HStack(alignment: .top, spacing: 1) {
-            ForEach(0..<max(depth, 0), id: \.self) { i in
-                Rectangle().fill(i < trail.count ? trail[i] : Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
-                    .panelBlink(seed + i + 1)
+        // No blink here: the mark's strength carries the status, so it holds still.
+        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty)
+            .background(alignment: .leading) {
+                if childrenHidden {
+                    StatusBar.ownShape.fill(color.opacity(0.45))
+                        .frame(width: StatusBar.width(depth), height: StatusBar.h)
+                        .offset(x: 3, y: 4)
+                }
             }
-            StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
-                .panelBlink(seed)
-                // Top level: the circle sits half off the left edge of the screen, so only its right half shows.
-                .offset(x: depth == 0 ? -StatusBar.w / 2 : 0)
-        }
-        .frame(minWidth: CGFloat(depth + 1) * StatusBar.step, alignment: .leading)
-        .contentShape(Rectangle())
+            .animation(.snappy(duration: 0.22), value: childrenHidden)
+            .rotationEffect(.degrees(open ? 90 : 0), anchor: UnitPoint(x: StatusBar.w / 2 / StatusBar.width(depth), y: 0.5))
+            .animation(.snappy(duration: 0.25), value: open)
+            .padding(.leading, StatusBar.margin)
+            .frame(width: StatusBar.textStart(depth), alignment: .leading)
+            .contentShape(Rectangle())
     }
 }
 
@@ -756,18 +783,23 @@ extension Mode {
 struct BarLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Squares").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
-            row(StatusBar(state: .todo, assignee: .human, isProject: false), "me, or unassigned")
-            row(StatusBar(state: .todo, assignee: .ai, isProject: false), "ai")
-            row(StatusBar(state: .todo, assignee: .shared, isProject: false), "both")
-            row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
-            row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
-            Text("Color is the mode; items without a mode take their project's color.").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
-            ForEach(Mode.allCases) { m in
-                row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.color(for: m)), m.label)
-            }
+            Text("Marks").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
+            Text("Color is the level, the same in every project:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
+            ForEach(0..<3, id: \.self) { d in row(mark(d, .todo, .human), "level \(d + 1)") }
+            Text("Strength is the status; a darker shade is the AI's:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
+            row(mark(1, .unset, .human), "no status yet")
+            row(mark(1, .todo, .human), "to-do, in progress")
+            row(mark(1, .done, .human), "done")
+            row(mark(1, .todo, .ai), "AI")
+            row(mark(1, .todo, .shared), "both")
+            row(mark(1, .review, .human), "review")
+            row(mark(1, .blocked, .human), "blocked")
+            row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, hasNotes: true), "has notes")
         }
         .padding(.leading, 16)
+    }
+    private func mark(_ depth: Int, _ state: TaskState, _ who: Assignee) -> StatusBar {
+        StatusBar(state: state, assignee: who, isProject: false, color: Appearance.shared.itemColor(depth: depth, state: state, assignee: who), depth: depth)
     }
     private func row(_ bar: StatusBar, _ label: String) -> some View {
         HStack(spacing: 10) { bar; Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6)) }
@@ -833,7 +865,8 @@ struct NodeRow: View {
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
-    private var titleFont: Font { Appearance.shared.font.font(node.isProject ? .title3 : .body, weight: node.isProject ? .semibold : .regular) }
+    /// One size and weight for every item's text, top level or not, title or notes.
+    private var titleFont: Font { Appearance.shared.font.font(.body) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
     private func toggleSelect() {
@@ -878,14 +911,14 @@ struct NodeRow: View {
     /// there is something to run.
     @ViewBuilder private var runButton: some View {
         if runningHere {
-            ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Running")
+            ProgressView().controlSize(.small).frame(width: 28, height: 22).accessibilityLabel("Running")
         } else {
             Button { run() } label: {
                 Image(systemName: "play.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.ink)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .frame(width: 28, height: 22)
+                    .contentShape(Rectangle().inset(by: -6))
             }
             .buttonStyle(.plain)
             .disabled(harness.running)
@@ -937,9 +970,9 @@ struct NodeRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-        HStack(alignment: .rowLine, spacing: 2) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
-                .padding(.vertical, 4).padding(.trailing, 12)   // wider grab area (the squares are a touch target)
+        HStack(alignment: .rowLine, spacing: 0) {
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, childrenHidden: hasChildren && !childrenShown)
+                .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
                 // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
                 // move: drag.
@@ -950,10 +983,10 @@ struct NodeRow: View {
                 .simultaneousGesture(handleGesture(onText: false))
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + " · tap to open · hold to zoom in · hold and drag to move")
+                .help(summary + (open ? " · tap to close" : hasChildren && childrenShown ? " · tap to hide children" : " · tap to open") + " · hold to zoom in · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
-                .accessibilityHint(open ? "Closes the item" : "Opens the item")
+                .accessibilityHint(open ? "Closes the item" : hasChildren && childrenShown ? "Hides its children" : "Opens the item")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { commit(); toggleInfo() }
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
@@ -1011,8 +1044,8 @@ struct NodeRow: View {
             if open {
                 TextField("Notes", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(Appearance.shared.font.font(.callout))
-                    .foregroundStyle(Color.ink.opacity(0.6))
+                    .font(titleFont)
+                    .foregroundStyle(Color.ink)   // same as the title
                     .focused($noteFocused)
                     // A list started here turns into child items, line by line as each is finished.
                     .onChange(of: note) { _, v in
@@ -1051,20 +1084,6 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && !open {
-                // The item has children: the … shows them; turned upright, it hides them. (An open item has the same
-                // button in its field.)
-                Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
-                    Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
-                        .rotationEffect(.degrees(childrenShown ? 90 : 0))
-                        .frame(width: 36, height: 32)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                .help(childrenShown ? "Hide children" : "Show children")
-                .accessibilityLabel(childrenShown ? "Hide children" : "Show children")
-            }
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
@@ -1166,9 +1185,12 @@ struct NodeRow: View {
         commit(); openItem()
     }
     /// Tap on the squares: open the item, or close it if it is open. Same hold guard as `tapped()`.
+    /// Tap on the oval: open the item (its notes and controls) and show its children. Tap again: close it and hide
+    /// them. A closed item whose children are showing just hides them, so folding it up is one tap.
     private func squareTapped() {
         if holdFired { holdFired = false; return }
-        commit(); toggleInfo()
+        commit()
+        if !open && hasChildren && childrenShown { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } else { toggleInfo() }
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
@@ -1261,13 +1283,6 @@ struct NodeRow: View {
                 FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
                 FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
-            // The item has children: the ellipsis says so, at full strength while they are hidden and turned upright
-            // while they are showing. Tap to show or hide them.
-            if hasChildren {
-                FieldIcon(systemImage: "ellipsis", on: !childrenShown) { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
-                    .rotationEffect(.degrees(childrenShown ? 90 : 0))   // upright while the children are showing
-                    .help(childrenShown ? "Hide children" : "Show children").accessibilityLabel(childrenShown ? "Hide children" : "Show children")
-            }
             // New child: a filled circle like the + button, with a down-right arrow. An item with no text is removed
             // when the keyboard leaves it, so it can't take a child yet.
             FieldCircle(systemImage: "arrow.turn.down.right", fill: PanelPalette.orange) { commit(); onKey(.child) }
@@ -1310,7 +1325,7 @@ struct NodeRow: View {
                                   onDismiss: { withAnimation(.snappy(duration: 0.22)) { store.dismiss(p); store.save() } })
                 }
                 if let m = adviceNote {
-                    Text(m).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.5))
+                    Text(m).font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

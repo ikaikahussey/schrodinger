@@ -134,10 +134,10 @@ struct SuggestionRow: View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "sparkle").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.45)).padding(.top, 9)
             VStack(alignment: .leading, spacing: 2) {
-                Text(proposal.summary).font(Appearance.shared.font.font(.footnote)).foregroundStyle(Color.ink.opacity(0.85))
+                Text(proposal.summary).font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
                 if let d = detail {
-                    Text(d).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.55))
+                    Text(d).font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
