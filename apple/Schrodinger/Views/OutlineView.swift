@@ -379,9 +379,9 @@ struct OutlineView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        // The logo's ink starts where a top-level item's text starts (one grid unit past its circle), less the
-        // drawing's own margin (whisker tips at x = 10 of its 64-unit box).
-        .padding(.leading, StatusBar.textStart(0) - 30 * 10 / 64).padding(.trailing, 2)
+        // The logo's ink starts where the top-level circles start, less the drawing's own margin (whisker tips at
+        // x = 10 of its 64-unit box).
+        .padding(.leading, StatusBar.margin - 30 * 10 / 64).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
         .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(33) }
         .contentShape(Rectangle())
