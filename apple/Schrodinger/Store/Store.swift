@@ -300,6 +300,19 @@ struct Store {
         save()
     }
 
+    /// Done items that have a due date are removed `days` after they were last changed (when they were checked off,
+    /// unless edited since). Only leaf items: an item with children stays. Saves if anything was removed. Run at launch.
+    @discardableResult
+    func pruneDoneDated(olderThan days: Int = 7, now: Date = Date()) -> Int {
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        let done = TaskState.done.rawValue
+        let d = FetchDescriptor<Node>(predicate: #Predicate { $0.stateRaw == done && $0.due != nil && $0.parentID != nil })
+        let old = ((try? ctx.fetch(d)) ?? []).filter { $0.updatedAt < cutoff && children(of: $0.id).isEmpty }
+        for n in old { delete(n) }
+        if !old.isEmpty { save() }
+        return old.count
+    }
+
     func save() { try? ctx.save() }
 }
 
