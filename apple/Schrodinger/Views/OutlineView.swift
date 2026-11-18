@@ -854,6 +854,9 @@ struct NodeRow: View {
     @FocusState private var noteFocused: Bool
     /// Return was just pressed in the notes: the focus it takes away is put back instead of ending the edit.
     @State private var noteContinuing = false
+    /// The notes as they were when the item opened. List lines typed since then become children when it closes;
+    /// lines that were already there stay text.
+    @State private var notesAtOpen = ""
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -946,7 +949,7 @@ struct NodeRow: View {
     private func toggleInfo() { if open { closeItem() } else { openItem() } }
     /// The field's Done: save what was typed and close the field. The children stay as they are.
     private func doneItem() {
-        commit(); commitNote()
+        commit(); commitNote(convertLists: true)
         endEdit(); noteFocused = false
         withAnimation(.snappy(duration: 0.22)) { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } }
     }
@@ -1020,9 +1023,13 @@ struct NodeRow: View {
                     let lines = v.components(separatedBy: "\n")
                     let (rest, items) = ListText.extract(from: lines.dropFirst().joined(separator: "\n"), includeLastLine: true)
                     if items.isEmpty { title = v.replacingOccurrences(of: "\n", with: " "); commit(); onKey(.enter); return }
+                    // The list goes into the notes, as typed; it becomes children when the item closes.
                     let head = ListText.item(lines[0])?.title ?? lines[0]
                     title = ([head] + rest.components(separatedBy: "\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
-                    commit(); addListChildren(items)
+                    commit()
+                    let listText = lines.dropFirst().filter { ListText.item($0) != nil }.joined(separator: "\n")
+                    note = note.isEmpty ? listText : note + "\n" + listText
+                    _ = items
                 }
                 .onSubmit { commit(); onKey(.enter) }
                 #if os(macOS)
@@ -1044,17 +1051,12 @@ struct NodeRow: View {
                     .font(titleFont)
                     .foregroundStyle(Color.ink)   // same as the title
                     .focused($noteFocused)
-                    // A list started here turns into child items, line by line as each is finished.
-                    .onChange(of: note) { _, v in
-                        guard noteFocused else { return }
-                        let (rest, items) = ListText.extract(from: v, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
-                        if !items.isEmpty { note = rest.hasPrefix("\n") ? String(rest.drop { $0 == "\n" }) : rest; addListChildren(items) }
-                    }
+                    // A list typed here stays text while the item is open; it becomes child items when the item closes.
                     // Return ends the field's editing (a text field's rule); here it means "next line", so typing goes on.
                     .onChange(of: noteFocused) { _, f in
                         // Typing in the notes of a closed item opens it, so the controls are there with the text.
                         if f { if !infoOpen { withAnimation(.snappy(duration: 0.22)) { sel.nodeID = node.id; sel.infoID = node.id } }; return }
-                        if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote() }
+                        if noteContinuing { noteContinuing = false; noteFocused = true } else { commitNote(convertLists: false) }
                     }
                     .onSubmit { noteReturn() }
             }
@@ -1082,9 +1084,12 @@ struct NodeRow: View {
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
         }
         .padding(.vertical, 6)
-        .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty }
+        .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty; notesAtOpen = noteSource }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
-        .onChange(of: infoOpen) { _, open in if !open { commitNote(); adviceNote = nil; listTrail = [] } }   // closing the item saves notes being typed
+        // Opening the item remembers its notes; closing it saves the notes and turns list lines typed since into children.
+        .onChange(of: infoOpen) { _, open in
+            if open { notesAtOpen = noteSource } else { commitNote(convertLists: true); adviceNote = nil; listTrail = [] }
+        }
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
@@ -1393,19 +1398,10 @@ struct NodeRow: View {
     }
 
     /// Return in the notes: start a new line and keep typing. A list line just finished becomes a child item.
+    /// Return in the notes: a new line, and typing goes on (list lines become children only when the item closes).
     private func noteReturn() {
-        // The field may already have put the line break in (and the list line may already be gone as a child).
-        var text = note
-        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
-        let (rest, items) = ListText.extract(from: text, includeLastLine: false, keeping: Set(noteSource.components(separatedBy: "\n")))
-        addListChildren(items)
-        // Lines that left as children leave no blank lines behind.
-        var kept = rest
-        if !items.isEmpty {
-            while kept.hasPrefix("\n") { kept.removeFirst() }
-            while kept.hasSuffix("\n\n") { kept.removeLast() }
-        }
-        note = kept
+        // The field may already have put the line break in.
+        if !note.isEmpty && !note.hasSuffix("\n") { note += "\n" }
         noteContinuing = true; noteFocused = true
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); noteContinuing = false }
     }
@@ -1419,15 +1415,18 @@ struct NodeRow: View {
     }
     /// Where the row's notes are stored: a task's notes; for a top-level item, the text its agent works toward.
     private var noteSource: String { node.isProject ? node.goal : node.notes }
-    private func commitNote() {
+    /// Saves the notes. With `convertLists` (the item is closing), list lines typed since it opened become children.
+    /// Links typed go to the item's chips either way.
+    private func commitNote(convertLists: Bool) {
         guard !gone else { return }
         var n = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        if n != noteSource {
-            // Leaving the notes: a list line still at the end becomes a child too, and links go to the item's chips.
-            let (rest, items) = ListText.extract(from: n, includeLastLine: true, keeping: Set(noteSource.components(separatedBy: "\n")))
+        if convertLists {
+            let (rest, items) = ListText.extract(from: n, includeLastLine: true, keeping: Set(notesAtOpen.components(separatedBy: "\n")))
             addListChildren(items)
-            n = popLinks(from: rest).trimmingCharacters(in: .whitespacesAndNewlines)
+            n = rest.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty || items.isEmpty }.joined(separator: "\n")
+            notesAtOpen = n
         }
+        if n != noteSource { n = popLinks(from: n).trimmingCharacters(in: .whitespacesAndNewlines) }
         if n != noteSource { store.update(node) { if $0.isProject { $0.goal = n } else { $0.notes = n } }; store.save() }
         note = n
         showNote = !n.isEmpty
