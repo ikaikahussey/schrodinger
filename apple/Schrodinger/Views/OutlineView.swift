@@ -29,8 +29,8 @@ struct OutlineView: View {
     /// Item the outline is zoomed into (shown at the top with its children), or nil for the whole outline.
     @State private var zoomID: UUID? = nil
     @State private var zoomingIn = true
-    /// Calendared items the box at the bottom was dismissed for (item + date). A newly calendared item brings it back.
-    @AppStorage("agendaDismissed") private var agendaDismissed = ""
+    /// The calendar box at the bottom has been pushed off screen (its tab stays, to bring it back).
+    @AppStorage("agendaPushed") private var agendaPushed = false
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
         var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
@@ -39,9 +39,8 @@ struct OutlineView: View {
     private var look: Appearance { Appearance.shared }
     /// Items with a date that are not done, soonest first.
     private var calendared: [Node] { all.filter { $0.due != nil && $0.state != .done }.sorted { $0.due! < $1.due! } }
-    private var agendaKeys: [String] { calendared.map { "\($0.id.uuidString):\(Int($0.due!.timeIntervalSince1970))" } }
-    /// The box shows while any calendared item is one it was not dismissed for.
-    private var agendaShown: Bool { !Set(agendaKeys).isSubset(of: Set(agendaDismissed.split(separator: ",").map(String.init))) }
+    /// The box shows while there are calendared items and it has not been pushed off screen.
+    private var agendaShown: Bool { !calendared.isEmpty && !agendaPushed }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     var body: some View {
@@ -96,6 +95,13 @@ struct OutlineView: View {
         // (title, notes or search) and puts the keyboard away.
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
             VStack(alignment: .trailing, spacing: 0) {
+            HStack(alignment: .bottom, spacing: 0) {
+            // The calendar box pushed off screen: its tab, at the bottom left, brings it back.
+            if !keyboardUp && agendaPushed && !calendared.isEmpty {
+                AgendaTab(count: calendared.count) { withAnimation(.snappy(duration: 0.22)) { agendaPushed = false } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            Spacer(minLength: 0)
             if keyboardUp {
                 cornerButton("DONE", systemImage: "checkmark", fill: PanelPalette.peach, help: "Finish editing") { finishTyping() }
             } else if focused == nil && editRequest == nil && !searchFocused {
@@ -109,13 +115,16 @@ struct OutlineView: View {
                     }
                 }
             }
-            // Calendared items, soonest first, in a box that can be dismissed. Not while typing (the keyboard needs the room).
+            }
+            // Calendared items, soonest first, in a box that can be pushed off the bottom of the screen. Not while
+            // typing (the keyboard needs the room).
             if !keyboardUp && agendaShown {
-                AgendaBox(items: calendared, onOpen: { sel.open($0) }, onDismiss: { withAnimation(.snappy(duration: 0.22)) { agendaDismissed = agendaKeys.joined(separator: ",") } })
+                AgendaBox(items: calendared, onOpen: { sel.open($0) }, onPush: { withAnimation(.snappy(duration: 0.22)) { agendaPushed = true } })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             }
             .animation(.snappy(duration: 0.22), value: agendaShown)
+            .animation(.snappy(duration: 0.22), value: calendared.count)
         }
         // Calendared items are mirrored to the calendar chosen in Settings (if any) whenever one of them changes.
         .task(id: CalendarSync.signature(all) + AppSettings.shared.syncCalendarID) { await CalendarSync.syncAll(container: ctx.container) }

@@ -4,13 +4,15 @@ import SwiftData
 // Calendaring: an item is calendared when it has a date (the calendar button in its field). Calendared items are
 // listed in a box at the bottom of the outline, and mirrored to a calendar if one is chosen in Settings.
 
-/// The box at the bottom of the outline: calendared items, soonest first. Tap one to go to it; the X dismisses the
-/// box until another item is calendared.
+/// The box at the bottom of the outline: calendared items, soonest first. Tap one to go to it. Dragging its header
+/// down (or tapping the chevron) pushes the box off the bottom of the screen, where `AgendaTab` stands in for it.
 struct AgendaBox: View {
     let items: [Node]
     let onOpen: (UUID) -> Void
-    let onDismiss: () -> Void
+    let onPush: () -> Void
     private let rowHeight: CGFloat = 30
+    /// How far the box has been dragged down.
+    @GestureState private var pull: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,9 +21,13 @@ struct AgendaBox: View {
                 Text("CALENDAR").font(PanelPalette.label(.caption2))
                 Text("\(items.count)").font(PanelPalette.label(.caption2)).opacity(0.6)
                 Spacer(minLength: 0)
-                FieldIcon(systemImage: "xmark", width: 34, action: onDismiss).help("Dismiss").accessibilityLabel("Dismiss calendar box")
+                FieldIcon(systemImage: "chevron.down", width: 34, action: onPush).help("Push off screen").accessibilityLabel("Hide calendar box")
             }
             .foregroundStyle(Color.ink.opacity(0.55))
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 6)
+                .updating($pull) { v, s, _ in s = max(0, v.translation.height) }
+                .onEnded { v in if v.translation.height > 30 || v.predictedEndTranslation.height > 120 { onPush() } })
             // Up to three rows show; more scroll.
             ScrollView {
                 VStack(spacing: 0) { ForEach(items) { row($0) } }
@@ -37,6 +43,8 @@ struct AgendaBox: View {
             .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
         }
         .padding(.horizontal, 12).padding(.bottom, 8)
+        .offset(y: pull)
+        .animation(.snappy(duration: 0.22), value: pull == 0)
     }
 
     @ViewBuilder private func row(_ n: Node) -> some View {
@@ -59,6 +67,34 @@ struct AgendaBox: View {
             }
             .buttonStyle(.plain)
         }
+    }
+}
+
+/// What is left on screen once the calendar box has been pushed off: a small tab at the bottom edge with the number
+/// of calendared items. Tap it, or drag it up, to bring the box back.
+struct AgendaTab: View {
+    let count: Int
+    let onPull: () -> Void
+
+    var body: some View {
+        Button(action: onPull) {
+            HStack(spacing: 5) {
+                Image(systemName: "calendar").font(.system(size: 11, weight: .semibold))
+                Text("\(count)").font(PanelPalette.label(.caption2))
+                Image(systemName: "chevron.up").font(.system(size: 9, weight: .bold)).opacity(0.6)
+            }
+            .foregroundStyle(Color.ink.opacity(0.6))
+            .padding(.horizontal, 12).frame(height: 30)
+            .background {
+                ZStack { Capsule().fill(Color.canvas); Capsule().fill(PanelPalette.field) }
+                    .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(DragGesture(minimumDistance: 6).onEnded { v in if v.translation.height < -12 { onPull() } })
+        .padding(.leading, 12).padding(.bottom, 8)
+        .help("Show calendared items").accessibilityLabel("Show calendared items, \(count)")
     }
 }
 
