@@ -835,7 +835,6 @@ struct NodeRow: View {
     @State private var showCalendar = false
     @State private var viewing: Attachment? = nil
     /// The AI is working on suggestions for this item (the lightbulb was tapped).
-    @State private var advising = false
     /// One line under the suggestions: nothing new came back, or why the request failed.
     @State private var adviceNote: String? = nil
     /// Children made from list lines typed in this field, innermost last, so an indented line nests under the one above.
@@ -1003,9 +1002,12 @@ struct NodeRow: View {
                     .simultaneousGesture(handleGesture(onText: true))
                     #endif
             } else {
+            // Open: the title, with the item's controls on the same line, at its right end.
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(titleFont)
+                .fixedSize(horizontal: false, vertical: true)   // wraps to as many lines as it needs beside the controls
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
@@ -1031,6 +1033,8 @@ struct NodeRow: View {
                 .onKeyPress(.downArrow, phases: .down) { p in if p.modifiers.contains(.option) { commit(); onKey(.altDown); return .handled }; return .ignored }
                 .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
+                controlRow
+            }
             }
             // The item's notes, read and edited here in the row, only while the item is open. Closed, a row is just
             // its title.
@@ -1062,14 +1066,13 @@ struct NodeRow: View {
             if open {
                 ItemSheetBody(node: node)   // the AI's draft, when there is one
                 suggestionList
-                controlRow
             }
             }
             // Open: the column is the item field, one rounded block holding the text and, along its bottom edge, the
             // controls. It reaches left by its own inset so the text stays where it was.
             .padding(.horizontal, open ? ItemField.inset : 0)
             .padding(.top, open ? ItemField.top : 0)
-            .padding(.bottom, open ? 2 : 0)
+            .padding(.bottom, open ? ItemField.top : 0)
             .background(open ? PanelPalette.field : .clear, in: RoundedRectangle(cornerRadius: 12))
             .padding(.leading, open ? -ItemField.inset : 0)
             // Middle of the first line of text lines up with the middle of the bars.
@@ -1253,39 +1256,36 @@ struct NodeRow: View {
     /// when there are some), new child, and Done. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
+        let empty = title.trimmingCharacters(in: .whitespaces).isEmpty
         HStack(spacing: 0) {
             if !node.isProject {
-                FieldIcon(systemImage: node.assignee.icon, on: true) { cycleAssignee() }
+                FieldIcon(systemImage: node.assignee.icon, on: true, width: ItemField.compact) { cycleAssignee() }
                     .help("Responsible: " + node.assignee.label + " (tap to change)")
                     .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
             }
-            FieldIcon(systemImage: "photo") { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
-            FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil) { commit(); showCalendar = true }
+            FieldIcon(systemImage: "photo", width: ItemField.compact) { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
+            FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil, width: ItemField.compact) { commit(); showCalendar = true }
                 .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
                 .accessibilityLabel(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
-            if advising {
-                ProgressView().controlSize(.small).frame(width: ItemField.icon, height: 34).accessibilityLabel("Thinking")
-            } else {
-                FieldIcon(systemImage: "lightbulb") { advise() }
-                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .help("Ask the AI for feedback and suggestions").accessibilityLabel("Suggestions")
-            }
-            Spacer(minLength: 0)
             if node.state == .review {
                 // An AI draft is waiting: approve it, or send it back to be redone.
-                FieldIcon(systemImage: "arrow.counterclockwise") { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
-                FieldIcon(systemImage: "checkmark.seal.fill", on: true) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
+                FieldIcon(systemImage: "arrow.counterclockwise", width: ItemField.compact) { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
+                FieldIcon(systemImage: "checkmark.seal.fill", on: true, width: ItemField.compact) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
-            // New child: a filled circle like the + button, with a down-right arrow. An item with no text is removed
-            // when the keyboard leaves it, so it can't take a child yet.
-            FieldCircle(systemImage: "arrow.turn.down.right", fill: PanelPalette.orange) { commit(); onKey(.child) }
-                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            // New child (down-right arrow) and new sibling (+), filled circles like the corner + button. An item with
+            // no text is removed when the keyboard leaves it, so it can't take a child or a sibling yet.
+            FieldCircle(systemImage: "arrow.turn.down.right", fill: PanelPalette.orange, compact: true) { commit(); onKey(.child) }
+                .disabled(empty)
                 .help("New child item").accessibilityLabel("New child item")
+            FieldCircle(systemImage: "plus", fill: PanelPalette.orange, compact: true) { commit(); onKey(.enter) }
+                .disabled(empty)
+                .help("New item below").accessibilityLabel("New item below")
             // Done: close the item's field.
-            FieldIcon(systemImage: "checkmark", on: true) { doneItem() }.help("Done").accessibilityLabel("Done")
+            FieldIcon(systemImage: "checkmark", on: true, width: ItemField.compact) { doneItem() }.help("Done").accessibilityLabel("Done")
         }
-        // The first glyph's left edge sits on the text's left edge.
-        .padding(.horizontal, -(ItemField.icon - 18) / 2)
+        .fixedSize()
+        // The last glyph's right edge sits near the field's right edge.
+        .padding(.trailing, -(ItemField.compact - 18) / 2)
     }
     /// Who holds the item: me, then the AI, then both, then me again.
     private func cycleAssignee() {
@@ -1329,19 +1329,6 @@ struct NodeRow: View {
         try? store.accept(p)
         if p.type == .decompose && node.collapsed { store.update(node) { $0.collapsed = false } }   // show the new children
         store.save()
-    }
-    /// Lightbulb: ask the AI to look at this item. What comes back is listed in the field as suggestions.
-    private func advise() {
-        commit(); commitNote()
-        advising = true; adviceNote = nil
-        let id = node.id, container = ctx.container, provider = AppSettings.shared.makeProvider()
-        Task { @MainActor in
-            defer { advising = false }
-            do {
-                let added = try await ItemAdvisor.advise(nodeID: id, container: container, provider: provider)
-                if added == 0 { adviceNote = "Nothing new to suggest." }
-            } catch { adviceNote = "No suggestions: " + error.localizedDescription }
-        }
     }
     /// List lines typed in the field become children of the item, in order; an indented line goes under the line above it.
     private func addListChildren(_ items: [ListText.Item]) {
