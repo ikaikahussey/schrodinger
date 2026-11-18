@@ -189,11 +189,11 @@ struct OutlineView: View {
         // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
         .onChange(of: sel.revealID) { _, id in reveal(id, proxy) }
         .confirmationDialog(deleteAskTitle, isPresented: Binding(get: { sel.deleteAskID != nil }, set: { if !$0 { sel.deleteAskID = nil } }), titleVisibility: .visible) {
-            Button("Delete It and Its Children", role: .destructive) { confirmDelete(keepChildren: false) }
-            Button("Delete It, Keep Its Children") { confirmDelete(keepChildren: true) }
+            Button("Delete All of These", role: .destructive) { confirmDelete(keepChildren: false) }
+            Button("Delete Only This One") { confirmDelete(keepChildren: true) }
             Button("Cancel", role: .cancel) { sel.deleteAskID = nil }
         } message: {
-            Text("Kept children move up a level, into its place.")
+            Text(deleteAskMessage)
         }
         }
     }
@@ -216,6 +216,19 @@ struct OutlineView: View {
     private var deleteAskTitle: String {
         let t = sel.deleteAskID.flatMap { store.node($0)?.title } ?? ""
         return t.isEmpty ? "Delete this item?" : "Delete \u{201C}\(t)\u{201D}?"
+    }
+    /// Everything under the item, indented by level, and what keeping them does.
+    private var deleteAskMessage: String {
+        guard let id = sel.deleteAskID else { return "" }
+        var lines: [String] = []
+        func walk(_ parent: UUID, _ depth: Int) {
+            for c in store.children(of: parent) {
+                lines.append(String(repeating: "    ", count: depth) + "\u{2022} " + (c.title.isEmpty ? "Untitled" : c.title))
+                walk(c.id, depth + 1)
+            }
+        }
+        walk(id, 0)
+        return "Under it:\n" + lines.joined(separator: "\n") + "\n\nDelete only this one and these move up a level, into its place."
     }
     private func confirmDelete(keepChildren: Bool) {
         guard let id = sel.deleteAskID, let n = store.node(id) else { return }
