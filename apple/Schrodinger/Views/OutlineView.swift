@@ -990,6 +990,7 @@ struct NodeRow: View {
     /// The notes as they were when the item opened. List lines typed since then become children when it closes;
     /// lines that were already there stay text.
     @State private var notesAtOpen = ""
+    @State private var confirmDelete = false
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -1418,6 +1419,12 @@ struct NodeRow: View {
             FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
+            // Delete; an item with children asks first, since they go with it.
+            FieldIcon(systemImage: "trash", width: ItemField.compact) { hasChildren ? (confirmDelete = true) : deleteItem() }
+                .help("Delete item").accessibilityLabel("Delete item")
+                .confirmationDialog("Delete \u{201C}\(title)\u{201D} and everything under it?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                    Button("Delete", role: .destructive) { deleteItem() }
+                }
             // Done: close the item's field.
             FieldIcon(systemImage: "checkmark", on: true, width: ItemField.compact) { doneItem() }.help("Done").accessibilityLabel("Done")
         }
