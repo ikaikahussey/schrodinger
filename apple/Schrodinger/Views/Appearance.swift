@@ -115,21 +115,21 @@ final class Appearance {
         let c = current.contexts
         return c.isEmpty ? .primary : c[((index % c.count) + c.count) % c.count]
     }
-    /// An item's color, the same scheme in every project. The level picks the color: top-level items color A, their
-    /// children color B, the next level C, and so on (the scheme's colors in order). Then the item's details tint it:
-    ///   to-do    — a reddish tint;
-    ///   has notes — a green tint;
-    ///   AI holds it — a darker shade (shared: a little darker).
-    /// A gray scheme (Mono, Swiss black) shows only the AI shade, as strength, so it still follows light and dark mode.
-    func itemColor(depth: Int, state: TaskState, hasNotes: Bool, assignee: Assignee) -> Color {
+    /// An item's color. Each variable has its own channel, so they never blur together:
+    ///   level  → hue: top-level items are color A, their children B, then C… (the scheme's colors in order), the same
+    ///            in every project;
+    ///   status → strength: no status yet is a pale tint, to-do / in progress full strength, done faded;
+    ///   holder → darkness: the AI's items are a darker shade (shared, a little darker).
+    /// (Notes are a dot inside the mark; review / blocked are an outline / dashed outline. See StatusBar.)
+    /// A gray scheme (Mono, Swiss black) keeps status and holder as strength, so it still follows light and dark mode.
+    func itemColor(depth: Int, state: TaskState, assignee: Assignee) -> Color {
         let base = contextColor(max(depth, 0))
-        let darker: Double = switch assignee { case .ai: 0.68; case .shared: 0.84; case .human, .unassigned: 1 }
+        let darker: Double = switch assignee { case .ai: 0.66; case .shared: 0.83; case .human, .unassigned: 1 }
+        let pale: Double = switch state { case .unset: 0.3; case .done: 0.6; default: 0 }
         let r = base.resolve(in: EnvironmentValues())
         var rgb = (Double(r.red), Double(r.green), Double(r.blue))
-        if Self.hsb(rgb.0, rgb.1, rgb.2).1 < 0.08 { return base.opacity(0.55 + 0.45 * (1 - darker) / 0.32) }
-        func mix(_ t: (Double, Double, Double), _ k: Double) { rgb = (rgb.0 + (t.0 - rgb.0) * k, rgb.1 + (t.1 - rgb.1) * k, rgb.2 + (t.2 - rgb.2) * k) }
-        if state == .todo { mix((0.84, 0.16, 0.16), 0.3) }      // reddish
-        if hasNotes { mix((0.18, 0.62, 0.27), 0.3) }             // green
+        if Self.hsb(rgb.0, rgb.1, rgb.2).1 < 0.08 { return base.opacity((1 - pale * 0.8) * (darker < 1 ? 1 : 0.8)) }
+        rgb = (rgb.0 + (1 - rgb.0) * pale, rgb.1 + (1 - rgb.1) * pale, rgb.2 + (1 - rgb.2) * pale)   // toward white
         rgb = (rgb.0 * darker, rgb.1 * darker, rgb.2 * darker)
         return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
     }

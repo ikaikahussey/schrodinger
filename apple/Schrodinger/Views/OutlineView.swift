@@ -269,7 +269,7 @@ struct OutlineView: View {
         var path: [Node] = []
         var p = n.parentID
         while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
-        return path.enumerated().map { i, a in look.itemColor(depth: i, state: a.state, hasNotes: !a.notes.isEmpty, assignee: a.isProject ? .human : a.assignee) }
+        return path.enumerated().map { i, a in look.itemColor(depth: i, state: a.isProject ? .todo : a.state, assignee: a.isProject ? .human : a.assignee) }
     }
     private func rootIndex(_ n: Node, roots: [Node]) -> Int {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
@@ -469,8 +469,8 @@ struct OutlineView: View {
     /// `active`: the item's project is active (paused and archived projects don't run).
     private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
-        // Own color: by level (the same in every project), tinted by state, notes and who holds it (Appearance.itemColor).
-        let own = look.itemColor(depth: depth, state: n.isProject ? .unset : n.state, hasNotes: !n.notes.isEmpty, assignee: n.isProject ? .human : n.assignee)
+        // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
+        let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
         let hidden = ((filter != .all || modeFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
@@ -491,7 +491,6 @@ struct OutlineView: View {
                     attachments: files[n.id] ?? [],
                     suggestions: advice[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
-            if n.isProject { ProjectLine(node: n, progress: store.progress(of: n.id)) }
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
                 ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, advice: advice, trail: trail + [own], context: context, active: active) }
             }
@@ -655,6 +654,8 @@ struct StatusBar: View {
     var color: Color = .ink
     /// Indent level: 0 is a circle; deeper, the mark is a rounded bar (depth + 1) diameters long.
     var depth: Int = 0
+    /// The item has notes: a small dot at the mark's left end.
+    var hasNotes = false
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
@@ -691,6 +692,12 @@ struct StatusBar: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
+            // Notes: a dot in the mark's left end (on a circle, its middle unless the AI glyph is there).
+            if hasNotes && !(depth == 0 && assignee.squareGlyph != nil) {
+                Circle().fill(solid ? Color.canvas : color).frame(width: 5, height: 5)
+                    .frame(width: Self.w, height: Self.h)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .frame(width: Self.width(depth), height: Self.h)
         .clipShape(shape)
@@ -708,8 +715,8 @@ struct DepthBars: View {
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
-        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth)
-            .panelBlink(seed)
+        // No blink here: the mark's strength carries the status, so it holds still.
+        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty)
             .padding(.leading, StatusBar.margin)
             .frame(width: StatusBar.textStart(depth), alignment: .leading)
             .contentShape(Rectangle())
@@ -758,21 +765,23 @@ extension Mode {
 struct BarLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Squares").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
-            row(StatusBar(state: .todo, assignee: .human, isProject: false), "me, or unassigned")
-            row(StatusBar(state: .todo, assignee: .ai, isProject: false), "ai")
-            row(StatusBar(state: .todo, assignee: .shared, isProject: false), "both")
-            row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
-            row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
-            Text("Color is the level: the same in every project. To-dos are tinted red, items with notes green, and the AI's items are darker.").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4).fixedSize(horizontal: false, vertical: true)
-            ForEach(0..<3, id: \.self) { d in
-                row(StatusBar(state: .unset, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: d, state: .unset, hasNotes: false, assignee: .human)), "level \(d + 1)")
-            }
-            row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, hasNotes: false, assignee: .human)), "to-do")
-            row(StatusBar(state: .unset, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .unset, hasNotes: true, assignee: .human)), "has notes")
-            row(StatusBar(state: .unset, assignee: .ai, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .unset, hasNotes: false, assignee: .ai)), "AI")
+            Text("Marks").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
+            Text("Color is the level, the same in every project:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
+            ForEach(0..<3, id: \.self) { d in row(mark(d, .todo, .human), "level \(d + 1)") }
+            Text("Strength is the status; a darker shade is the AI's:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
+            row(mark(1, .unset, .human), "no status yet")
+            row(mark(1, .todo, .human), "to-do, in progress")
+            row(mark(1, .done, .human), "done")
+            row(mark(1, .todo, .ai), "AI")
+            row(mark(1, .todo, .shared), "both")
+            row(mark(1, .review, .human), "review")
+            row(mark(1, .blocked, .human), "blocked")
+            row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, hasNotes: true), "has notes")
         }
         .padding(.leading, 16)
+    }
+    private func mark(_ depth: Int, _ state: TaskState, _ who: Assignee) -> StatusBar {
+        StatusBar(state: state, assignee: who, isProject: false, color: Appearance.shared.itemColor(depth: depth, state: state, assignee: who), depth: depth)
     }
     private func row(_ bar: StatusBar, _ label: String) -> some View {
         HStack(spacing: 10) { bar; Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6)) }
