@@ -711,11 +711,15 @@ struct DepthBars: View {
     let hasChildren: Bool
     var trail: [Color] = []
     var color: Color = .ink
+    /// The item is open: its mark turns down a quarter turn about its left (round) end, hanging beside the field.
+    var open = false
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
         // No blink here: the mark's strength carries the status, so it holds still.
         StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty)
+            .rotationEffect(.degrees(open ? 90 : 0), anchor: UnitPoint(x: StatusBar.w / 2 / StatusBar.width(depth), y: 0.5))
+            .animation(.snappy(duration: 0.25), value: open)
             .padding(.leading, StatusBar.margin)
             .frame(width: StatusBar.textStart(depth), alignment: .leading)
             .contentShape(Rectangle())
@@ -952,7 +956,7 @@ struct NodeRow: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 0) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open)
                 .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
                 // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
