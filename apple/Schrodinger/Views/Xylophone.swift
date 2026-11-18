@@ -41,11 +41,12 @@ final class Xylophone {
 
     private init() {}
 
-    func play(_ midi: Int) {
-        guard Appearance.shared.sounds else { return }
+    /// `force`: play even with the sounds setting off (harp mode, where the sound is the point).
+    func play(_ midi: Int, force: Bool = false) {
+        guard force || Appearance.shared.sounds else { return }
         // Ignore immediate repeats of the same note (layout passes can report the same drag target twice).
         let now = Date()
-        if lastNote == midi && now.timeIntervalSince(lastTime) < 0.06 { return }
+        if !force && lastNote == midi && now.timeIntervalSince(lastTime) < 0.06 { return }
         lastNote = midi; lastTime = now
         guard prepare(), let buf = buffer(midi) else { return }
         let p = players[next]; next = (next + 1) % players.count
