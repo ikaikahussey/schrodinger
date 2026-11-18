@@ -154,7 +154,11 @@ struct OutlineView: View {
         })
         #endif
         .background(Color.canvas)
+        #if os(macOS)
+        .navigationTitle("Schrodinger")   // the window's title bar
+        #else
         .navigationTitle("")
+        #endif
         .fileImporter(isPresented: $importing, allowedContentTypes: Importer.fileTypes, allowsMultipleSelection: true) { result in
             switch result {
             case .failure(let e): importFailure = e.localizedDescription
@@ -172,12 +176,10 @@ struct OutlineView: View {
             if case .failure(let e) = result { importFailure = e.localizedDescription }
         }
         .alert("Import failed", isPresented: Binding(get: { importFailure != nil }, set: { if !$0 { importFailure = nil } })) { Button("OK") {} } message: { Text(importFailure ?? "") }
-        // The breadcrumb bar is the header (logo, path, filter): the system navigation bar / window toolbar is not
-        // shown. The one Done is the check in the open item's field (Escape on a keyboard).
+        // iPhone/iPad: the breadcrumb bar is the header (logo, path, filter); the system navigation bar is not shown.
+        // Mac: a standard title bar above it. The one Done is the check in the open item's field (Escape on a keyboard).
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
-        #else
-        .toolbar(.hidden, for: .windowToolbar)
         #endif
         // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
         .onChange(of: sel.revealID) { _, id in reveal(id, proxy) }
