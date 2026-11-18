@@ -257,7 +257,8 @@ struct OutlineView: View {
     }
 
     private func setHarp(_ on: Bool) {
-        if on { finishTyping() }
+        // Every item is shown, so every item is a string.
+        if on { finishTyping(); foldAll(false) }
         harpLastY = nil; plucked = nil
         withAnimation(.snappy(duration: 0.2)) { harp = on }
     }
