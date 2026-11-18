@@ -115,6 +115,36 @@ final class Appearance {
         let c = current.contexts
         return c.isEmpty ? .primary : c[((index % c.count) + c.count) % c.count]
     }
+    /// An item's color. Every item in a project is a shade of the project's color (its family), so projects read as
+    /// one color each; within the family the shade says more about the item:
+    ///   level  — deeper items are lighter and softer;
+    ///   mode   — each mode turns the hue a few degrees (call one way, admin the other), staying in the family;
+    ///   holder — the AI's items are muted, shared items halfway, mine at full strength.
+    /// A gray family (Mono, Swiss black) varies by strength only, so it still follows light and dark mode.
+    func itemColor(family: Color, depth: Int, mode: Mode?, assignee: Assignee) -> Color {
+        let level = Double(min(max(depth, 0), 4))
+        let holder: Double = switch assignee { case .ai: 0.55; case .shared: 0.78; case .human, .unassigned: 1 }
+        let r = family.resolve(in: EnvironmentValues())
+        var (h, sat, b) = Self.hsb(Double(r.red), Double(r.green), Double(r.blue))
+        if sat < 0.08 { return family.opacity((1 - 0.14 * level) * (0.55 + 0.45 * holder)) }
+        if let mode, let i = Mode.allCases.firstIndex(of: mode) {
+            h += (Double(i) - Double(Mode.allCases.count - 1) / 2) * 5 / 360   // about ±17°
+            h = h - floor(h)
+        }
+        sat *= (1 - 0.13 * level) * holder
+        b += (1 - b) * 0.12 * level
+        return Color(hue: h, saturation: min(max(sat, 0), 1), brightness: min(max(b, 0), 1))
+    }
+    private static func hsb(_ r: Double, _ g: Double, _ b: Double) -> (Double, Double, Double) {
+        let mx = max(r, g, b), mn = min(r, g, b), d = mx - mn
+        var h = 0.0
+        if d > 0 {
+            if mx == r { h = (g - b) / d } else if mx == g { h = 2 + (b - r) / d } else { h = 4 + (r - g) / d }
+            h /= 6; if h < 0 { h += 1 }
+        }
+        return (h, mx == 0 ? 0 : d / mx, mx)
+    }
+
     /// Copy a preset into the custom slots (starting point for editing).
     func copyToCustom(_ k: PaletteKind) {
         let env = EnvironmentValues(), p = Palette.preset(k)

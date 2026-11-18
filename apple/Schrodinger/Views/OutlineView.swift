@@ -269,7 +269,7 @@ struct OutlineView: View {
         var path: [Node] = []
         var p = n.parentID
         while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
-        return path.map { a in (a.isProject ? nil : a.mode.map { look.color(for: $0) }) ?? context }
+        return path.enumerated().map { i, a in look.itemColor(family: context, depth: i, mode: a.isProject ? nil : a.mode, assignee: a.isProject ? .human : a.assignee) }
     }
     private func rootIndex(_ n: Node, roots: [Node]) -> Int {
         var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
@@ -469,8 +469,8 @@ struct OutlineView: View {
     /// `active`: the item's project is active (paused and archived projects don't run).
     private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
-        // Own color: the item's mode, else its project's context color. Children inherit this square in their trail.
-        let own = (n.isProject ? nil : n.mode.map { look.color(for: $0) }) ?? context
+        // Own color: a shade of the project's color, by level, mode and who holds it (see Appearance.itemColor).
+        let own = look.itemColor(family: context, depth: depth, mode: n.isProject ? nil : n.mode, assignee: n.isProject ? .human : n.assignee)
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
         let hidden = ((filter != .all || modeFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
@@ -764,9 +764,9 @@ struct BarLegend: View {
             row(StatusBar(state: .todo, assignee: .shared, isProject: false), "both")
             row(StatusBar(state: .review, assignee: .human, isProject: false), "review")
             row(StatusBar(state: .blocked, assignee: .human, isProject: false), "blocked")
-            Text("Color is the mode; items without a mode take their project's color.").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
+            Text("Each project has its own color. Its items are shades of it: lighter when deeper, muted when the AI holds them, and turned slightly by mode.").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4).fixedSize(horizontal: false, vertical: true)
             ForEach(Mode.allCases) { m in
-                row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.color(for: m)), m.label)
+                row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(family: Appearance.shared.contextColor(0), depth: 1, mode: m, assignee: .human)), m.label)
             }
         }
         .padding(.leading, 16)
