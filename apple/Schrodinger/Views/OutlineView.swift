@@ -201,6 +201,41 @@ struct OutlineView: View {
     private var exportName: String { zoomID.flatMap { store.node($0)?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? "Schrodinger" }
     private var filtering: Bool { filter != .all || tagFilter != nil }
 
+    /// Items whose children can be hidden (in view: the zoomed item's subtree, or everything).
+    private var foldable: [Node] {
+        let parents = Set(all.compactMap(\.parentID))
+        return all.filter { parents.contains($0.id) && (zoomID == nil || $0.id == zoomID || isInSubtree($0.id, of: zoomID!)) }
+    }
+    /// Every item with children has them hidden.
+    private var allFolded: Bool { let f = foldable; return !f.isEmpty && f.allSatisfy(\.collapsed) }
+    /// Hide or show every item's children, in the oval motif: a single oval while children are showing, a stack of two
+    /// (like an item whose children are hidden) once they are all folded away. Tap to switch.
+    private var foldAllButton: some View {
+        let folded = allFolded
+        return Button {
+            finishTyping()
+            let target = !folded
+            withAnimation(.snappy(duration: 0.25)) {
+                for n in foldable where n.collapsed != target && n.id != zoomID { store.update(n) { $0.collapsed = target } }
+                store.save()
+            }
+        } label: {
+            let ink = PanelPalette.text(on: PanelPalette.orange)
+            ZStack {
+                Circle().fill(PanelPalette.orange).panelBlink(30)
+                Capsule().fill(ink.opacity(folded ? 0.5 : 0)).frame(width: 16, height: 8).offset(x: 1.5, y: 2.5)
+                Capsule().fill(ink).frame(width: 16, height: 8).offset(y: folded ? -1.5 : 0)
+            }
+            .frame(width: Self.headerHeight + 4, height: Self.headerHeight + 4)
+            .contentShape(Circle())
+            .animation(.snappy(duration: 0.2), value: folded)
+        }
+        .buttonStyle(.plain)
+        .disabled(foldable.isEmpty)
+        .help(folded ? "Show all items" : "Hide all children")
+        .accessibilityLabel(folded ? "Show all items" : "Hide all children")
+    }
+
     /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
     private static let headerHeight: CGFloat = 28
     private var filterMenu: some View {
@@ -340,7 +375,8 @@ struct OutlineView: View {
                 .allowsHitTesting(!current)
                 .layoutPriority(current ? 1 : 0)
             }
-            filterMenu.padding(.leading, 14)
+            foldAllButton.padding(.leading, 10)
+            filterMenu.padding(.leading, 8)
         }
         .buttonStyle(.plain)
         .padding(.trailing, 12).padding(.vertical, 6)
