@@ -1009,7 +1009,7 @@ struct NodeRow: View {
                 TextField("Notes", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(titleFont)
-                    .foregroundStyle(Color.ink.opacity(0.6))
+                    .foregroundStyle(Color.ink)   // same as the title
                     .focused($noteFocused)
                     // A list started here turns into child items, line by line as each is finished.
                     .onChange(of: note) { _, v in
