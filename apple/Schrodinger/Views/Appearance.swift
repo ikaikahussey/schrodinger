@@ -115,25 +115,23 @@ final class Appearance {
         let c = current.contexts
         return c.isEmpty ? .primary : c[((index % c.count) + c.count) % c.count]
     }
-    /// An item's color. Every item in a project is a shade of the project's color (its family), so projects read as
-    /// one color each; within the family the shade says more about the item:
-    ///   level  — deeper items are lighter and softer;
-    ///   mode   — each mode turns the hue a few degrees (call one way, admin the other), staying in the family;
-    ///   holder — the AI's items are muted, shared items halfway, mine at full strength.
-    /// A gray family (Mono, Swiss black) varies by strength only, so it still follows light and dark mode.
-    func itemColor(family: Color, depth: Int, mode: Mode?, assignee: Assignee) -> Color {
-        let level = Double(min(max(depth, 0), 4))
-        let holder: Double = switch assignee { case .ai: 0.55; case .shared: 0.78; case .human, .unassigned: 1 }
-        let r = family.resolve(in: EnvironmentValues())
-        var (h, sat, b) = Self.hsb(Double(r.red), Double(r.green), Double(r.blue))
-        if sat < 0.08 { return family.opacity((1 - 0.14 * level) * (0.55 + 0.45 * holder)) }
-        if let mode, let i = Mode.allCases.firstIndex(of: mode) {
-            h += (Double(i) - Double(Mode.allCases.count - 1) / 2) * 5 / 360   // about ±17°
-            h = h - floor(h)
-        }
-        sat *= (1 - 0.13 * level) * holder
-        b += (1 - b) * 0.12 * level
-        return Color(hue: h, saturation: min(max(sat, 0), 1), brightness: min(max(b, 0), 1))
+    /// An item's color, the same scheme in every project. The level picks the color: top-level items color A, their
+    /// children color B, the next level C, and so on (the scheme's colors in order). Then the item's details tint it:
+    ///   to-do    — a reddish tint;
+    ///   has notes — a green tint;
+    ///   AI holds it — a darker shade (shared: a little darker).
+    /// A gray scheme (Mono, Swiss black) shows only the AI shade, as strength, so it still follows light and dark mode.
+    func itemColor(depth: Int, state: TaskState, hasNotes: Bool, assignee: Assignee) -> Color {
+        let base = contextColor(max(depth, 0))
+        let darker: Double = switch assignee { case .ai: 0.68; case .shared: 0.84; case .human, .unassigned: 1 }
+        let r = base.resolve(in: EnvironmentValues())
+        var rgb = (Double(r.red), Double(r.green), Double(r.blue))
+        if Self.hsb(rgb.0, rgb.1, rgb.2).1 < 0.08 { return base.opacity(0.55 + 0.45 * (1 - darker) / 0.32) }
+        func mix(_ t: (Double, Double, Double), _ k: Double) { rgb = (rgb.0 + (t.0 - rgb.0) * k, rgb.1 + (t.1 - rgb.1) * k, rgb.2 + (t.2 - rgb.2) * k) }
+        if state == .todo { mix((0.84, 0.16, 0.16), 0.3) }      // reddish
+        if hasNotes { mix((0.18, 0.62, 0.27), 0.3) }             // green
+        rgb = (rgb.0 * darker, rgb.1 * darker, rgb.2 * darker)
+        return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
     }
     private static func hsb(_ r: Double, _ g: Double, _ b: Double) -> (Double, Double, Double) {
         let mx = max(r, g, b), mn = min(r, g, b), d = mx - mn
