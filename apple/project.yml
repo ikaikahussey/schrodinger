@@ -27,7 +27,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSCalendarsFullAccessUsageDescription: "Schrodinger reads your calendar to show upcoming events alongside tasks and lets you add tasks to your calendar."
         BGTaskSchedulerPermittedIdentifiers: ["org.schrodinger.harness"]
-        UIBackgroundModes: ["fetch", "processing"]
+        UIBackgroundModes: ["fetch", "processing", "remote-notification"]
         LSApplicationCategoryType: public.app-category.productivity
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -35,18 +35,12 @@ targets:
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
-    entitlements:
-      path: Schrodinger/Resources/Schrodinger.entitlements
-      properties:
-        com.apple.developer.icloud-services: [CloudKit]
-        com.apple.developer.icloud-container-identifiers: [iCloud.org.schrodinger.app]
-        com.apple.security.app-sandbox: true
-        com.apple.security.network.client: true
-        com.apple.security.personal-information.calendars: true
-        com.apple.security.files.user-selected.read-write: true
-        keychain-access-groups: ["$(AppIdentifierPrefix)org.schrodinger.app"]
+    # One entitlements file per platform: push (which CloudKit uses to tell a device that another one changed
+    # something) has a different key on each. Export for the App Store switches both to production.
     settings:
       base:
+        CODE_SIGN_ENTITLEMENTS: Schrodinger/Resources/Schrodinger-iOS.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Schrodinger/Resources/Schrodinger-macOS.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: org.schrodinger.app
         ENABLE_PREVIEWS: YES
   SchrodingerTests:

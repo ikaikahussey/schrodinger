@@ -194,12 +194,38 @@ struct SettingsView: View {
             AppearanceSection()
             Section("Data") {
                 Toggle("Sync between my devices via iCloud", isOn: $settings.iCloudSync)
-                Text("All data is stored on this device. With iCloud sync on, it is also stored in your private iCloud database (Apple's CloudKit) and nowhere else. Changing this takes effect at next launch.").font(.caption).foregroundStyle(.secondary)
+                Text("All data is stored on this device. With iCloud sync on, it is also stored in your private iCloud database (Apple's CloudKit) and nowhere else. Turn it on on each device. Changing this takes effect at next launch.").font(.caption).foregroundStyle(.secondary)
+                SyncStatusView()
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .frame(minWidth: 420)
+    }
+}
+
+/// Whether iCloud sync is working on this device: the account, the last exchange each way, and the last error.
+struct SyncStatusView: View {
+    @State private var sync = CloudSync.shared
+    @State private var settings = AppSettings.shared
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            switch sync.mode {
+            case .off where settings.iCloudSync: line("Sync turns on at next launch.")
+            case .off: EmptyView()
+            case .failed(let why): line("Sync could not start; this device is using local data only. \(why)", bad: true)
+            case .on:
+                line(sync.account)
+                line("Last sent: " + (sync.lastExport.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "not yet"))
+                line("Last received: " + (sync.lastImport.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "not yet"))
+                if let e = sync.lastError { line("Error: " + e, bad: true) }
+            }
+            if !settings.iCloudSync && sync.mode != .off { line("Sync turns off at next launch.") }
+        }
+        .task { if sync.mode == .on { await sync.refreshAccount() } }
+    }
+    private func line(_ s: String, bad: Bool = false) -> some View {
+        Text(s).font(.caption).foregroundStyle(bad ? Color.red : .secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
     }
 }
 
