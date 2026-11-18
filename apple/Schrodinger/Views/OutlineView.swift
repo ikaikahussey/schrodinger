@@ -653,6 +653,9 @@ struct StatusBar: View {
     let assignee: Assignee
     let isProject: Bool
     var color: Color = .ink
+    /// Indent level: 0 is a circle; deeper, the mark is a rounded bar that starts at the left margin and reaches one
+    /// grid unit further per level, ending where a circle at that level would be.
+    var depth: Int = 0
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
@@ -662,7 +665,9 @@ struct StatusBar: View {
     static let unit: CGFloat = 26
     /// Left edge of the circle at `depth`; the text of that row starts at `column(depth + 1)`.
     static func column(_ depth: Int) -> CGFloat { margin + CGFloat(max(depth, 0)) * unit }
-    static var ownShape: Circle { Circle() }
+    static var ownShape: Capsule { Capsule() }
+    /// Width of the mark at `depth`: a circle at 0, then one grid unit longer per level.
+    static func width(_ depth: Int) -> CGFloat { w + CGFloat(max(depth, 0)) * unit }
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
     private var solid: Bool { isProject || (state != .review && state != .blocked) }
@@ -678,21 +683,23 @@ struct StatusBar: View {
                 case .blocked: shape.strokeBorder(color, style: StrokeStyle(lineWidth: 2, dash: [3, 2]))
                 default:       shape.fill(color)
                 }
-                // AI involvement is a glyph inside the square; the square itself never changes shape.
+                // AI involvement is a glyph in the mark's round end (next to the text); the mark never changes shape.
                 if let glyph = assignee.squareGlyph {
                     Image(systemName: glyph)
                         .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
                         .foregroundStyle(solid ? Color.canvas : color)
+                        .frame(width: Self.w, height: Self.h)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
         }
-        .frame(width: Self.w, height: Self.h)
+        .frame(width: Self.width(depth), height: Self.h)
         .clipShape(shape)
     }
 }
 
-/// The row's circle, on the grid: indented one unit per level, so a child's circle sits right under the left edge of
-/// its parent's text. The space to its left is part of the touch target. Tap = actions.
+/// The row's mark, on the grid: a circle for a top-level item; deeper, a rounded bar from the left margin that grows one
+/// unit per level, so its round end sits right under the left edge of the parent's text. Tap = actions.
 struct DepthBars: View {
     let node: Node
     let depth: Int
@@ -702,9 +709,9 @@ struct DepthBars: View {
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
-        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
+        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth)
             .panelBlink(seed)
-            .padding(.leading, StatusBar.column(depth))
+            .padding(.leading, StatusBar.margin)
             .frame(width: StatusBar.column(depth + 1), alignment: .leading)
             .contentShape(Rectangle())
     }
