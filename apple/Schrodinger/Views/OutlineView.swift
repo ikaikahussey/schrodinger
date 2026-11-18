@@ -93,6 +93,7 @@ struct OutlineView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .background { if harp { harpKeys } }
             .overlay { if harp { harpStrings } }
         }
         .scrollDisabled(drag.id != nil || harp)
@@ -268,39 +269,43 @@ struct OutlineView: View {
 
     struct HarpString: Identifiable { let id: UUID; let top: CGFloat; var bottom: CGFloat; let depth: Int; let note: Int }
 
-    /// One string per row on screen; a row's band runs down to the next row. Each item's note is its own: its level
-    /// sets the step of the scale, its place among its siblings lowers it a semitone at a time (as when moving items).
+    /// One key per row on screen; a row's band runs down to the next row. Top to bottom the rows play a chromatic
+    /// scale, one semitone per row, from C4 (four octaves, then it starts again).
     private var harpRows: [HarpString] {
-        let kids = childrenMap
         var rows = drag.frames.compactMap { id, f -> HarpString? in
             guard let n = store.node(id) else { return nil }
-            let d = depthOf(n)
-            let i = (kids[n.parentID] ?? []).firstIndex { $0.id == id } ?? 0
-            return HarpString(id: id, top: f.minY, bottom: f.maxY, depth: d, note: OutlinePitch.position(i, depth: d))
+            return HarpString(id: id, top: f.minY, bottom: f.maxY, depth: depthOf(n), note: 0)
         }
         .sorted { $0.top < $1.top }
         for i in rows.indices.dropLast() { rows[i].bottom = rows[i + 1].top }
-        return rows
+        return rows.enumerated().map { i, r in HarpString(id: r.id, top: r.top, bottom: r.bottom, depth: r.depth, note: 60 + i % 48) }
     }
 
-    /// Over the outline in harp mode: a hairline between rows, a flash on the row being played, and the touch that
-    /// plays them. Rows underneath don't react.
-    private var harpStrings: some View {
-        let rows = harpRows
-        return ZStack(alignment: .topLeading) {
-            Color.canvas.opacity(0.001)
-            ForEach(rows) { r in
-                let lit = r.id == plucked
-                RoundedRectangle(cornerRadius: 8).fill(Color.ink.opacity(lit ? 0.08 : 0))
-                    .frame(height: r.bottom - r.top)
-                    .padding(.leading, StatusBar.textStart(r.depth) - 8).padding(.trailing, 8)
-                    .offset(y: r.top)
+    static func isSharp(_ midi: Int) -> Bool { [1, 3, 6, 8, 10].contains(midi % 12) }
+
+    /// Behind the rows in harp mode: a keyboard laid on its side, one key per row. Naturals are pale and reach the left
+    /// edge; sharps and flats are dark and set in from it (staggered, as on a xylophone). The key being played lights up.
+    private var harpKeys: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(harpRows) { r in
+                let sharp = Self.isSharp(r.note), lit = r.id == plucked
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.ink.opacity(lit ? 0.3 : sharp ? 0.16 : 0.04))
+                    .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.ink.opacity(sharp ? 0 : 0.12), lineWidth: 1) }
+                    .frame(height: max(0, r.bottom - r.top - 3))
+                    .padding(.leading, sharp ? 28 : 4).padding(.trailing, 12)
+                    .offset(y: r.top + 1.5)
                     .animation(.easeOut(duration: lit ? 0.02 : 0.4), value: lit)
-                Rectangle().fill(Color.ink.opacity(0.1)).frame(height: 1)
-                    .padding(.leading, StatusBar.textStart(r.depth)).padding(.trailing, 16)
-                    .offset(y: r.bottom - 0.5)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+    }
+
+    /// Over the outline in harp mode: the touch that plays the keys. Rows underneath don't react.
+    private var harpStrings: some View {
+        let rows = harpRows
+        return Color.canvas.opacity(0.001)
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0)
             .onChanged { v in harpMove(to: v.location.y, rows) }
