@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import UniformTypeIdentifiers
 
 /// One continuous outline. Depth is shown by black bars at the left (one per level). The item's own bar carries
 /// its status, who holds it, and its mode; tapping the bars opens the item's menu. Everything else stays out of the
@@ -21,6 +22,9 @@ struct OutlineView: View {
     @FocusState private var searchFocused: Bool
     /// The on-screen keyboard is showing (iPhone/iPad).
     @State private var keyboardUp = false
+    /// Import: the file picker is up; and what went wrong with the last import, if anything.
+    @State private var importing = false
+    @State private var importFailure: String?
     @FocusState private var focused: UUID?
     /// Row that should switch to its text field and take focus. Focus can't be set on a field that isn't on screen yet,
     /// so the row shows its field first, then claims focus (see NodeRow.claimEdit).
@@ -140,6 +144,19 @@ struct OutlineView: View {
         #endif
         .background(Color.canvas)
         .navigationTitle("")
+        .fileImporter(isPresented: $importing, allowedContentTypes: Importer.fileTypes, allowsMultipleSelection: true) { result in
+            switch result {
+            case .failure(let e): importFailure = e.localizedDescription
+            case .success(let urls):
+                var last: UUID?
+                for url in urls {
+                    do { last = try Importer.importFile(url, under: zoomID, store: store) }
+                    catch { importFailure = "\(url.lastPathComponent): \(error.localizedDescription)" }
+                }
+                if let last { sel.open(last) }
+            }
+        }
+        .alert("Import failed", isPresented: Binding(get: { importFailure != nil }, set: { if !$0 { importFailure = nil } })) { Button("OK") {} } message: { Text(importFailure ?? "") }
         #if os(iOS)
         // The breadcrumb bar is the header (logo, path, filter): the system navigation bar is not shown.
         .toolbar(.hidden, for: .navigationBar)
@@ -194,6 +211,9 @@ struct OutlineView: View {
                 Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; modeFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
             }
             Divider()
+            // Import a CSV, text or Markdown file (a note exported from Notes, say): it becomes a new item, with the
+            // file's lines as its children. Zoomed in, it goes under the zoomed item.
+            Button { finishTyping(); importing = true } label: { Label("Import…", systemImage: "square.and.arrow.down") }
             Toggle("Show square legend", isOn: Binding(get: { showLegend }, set: { v in withAnimation(.snappy(duration: 0.2)) { showLegend = v } }))
             #if os(iOS)
             // The rest of the app (there is no tab bar): each opens as a sheet over the outline.
