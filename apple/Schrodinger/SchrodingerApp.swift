@@ -55,15 +55,17 @@ struct SchrodingerApp: App {
         // All data is on device. iCloud (CloudKit private database) sync is opt-in and only between the user's own devices.
         let types: [any PersistentModel.Type] = [Node.self, Proposal.self, ActivityEntry.self, Digest.self, WorkspaceFile.self, HarnessRun.self, Attachment.self]
         #if DEBUG
-        if CommandLine.arguments.contains("-initCloudKitSchema") { CloudSync.initializeSchema(types: types) }
+        // Pushes the record types to the CloudKit Development environment and quits (see init-cloudkit-schema.command).
+        if CommandLine.arguments.contains("-initCloudKitSchema") { exit(CloudSync.initializeSchema(types: types) ? 0 : 1) }
         #endif
         let sync = UserDefaults.standard.bool(forKey: "iCloudSync")
         let config = ModelConfiguration("Schrodinger", schema: schema, cloudKitDatabase: sync ? .private(CloudSync.containerID) : .none)
         let c: ModelContainer
-        // If the synced store can't be opened, a local one is used so the app still works; Settings says so.
+        // If the store can't be opened with sync, the same store is opened without it, so the app still works with the
+        // data already on this device (a separate local store would look empty); Settings says sync failed.
         var openError: Error?
         do { c = try ModelContainer(for: schema, configurations: [config]) }
-        catch { openError = error; c = try! ModelContainer(for: schema, configurations: [ModelConfiguration("Schrodinger-local", schema: schema, cloudKitDatabase: .none)]) }
+        catch { openError = error; c = try! ModelContainer(for: schema, configurations: [ModelConfiguration("Schrodinger", schema: schema, cloudKitDatabase: .none)]) }
         CloudSync.shared.opened(sync: sync, error: openError)
         c.mainContext.undoManager = UndoManager()   // enables undo/redo for every edit made through the main context
         return c

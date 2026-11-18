@@ -34,27 +34,44 @@ actor CalendarService {
         store.calendars(for: .event).filter(\.allowsContentModifications).map { ($0.calendarIdentifier, $0.title) }.sorted { $0.title < $1.title }
     }
 
-    /// Creates the item's event, or brings its existing one up to date. Returns the event's identifier.
+    /// Creates the item's event, or brings its existing one up to date. Returns the identifier to keep on the item.
     /// A dated item with no time is an all-day event; with a time it lasts one hour.
+    ///
+    /// The kept identifier is the event's external one (its CalDAV UID), which is the same on every device; the
+    /// local `eventIdentifier` differs per device. With iCloud sync on, keeping the local one made every other device
+    /// fail to find the event, create another, and sync its own identifier back: duplicate events without end.
+    /// Older items still hold a local identifier, so both are looked up.
     func upsert(eventID: String, calendarID: String, title: String, notes: String, date: Date, allDay: Bool) throws -> String {
         guard let cal = store.calendar(withIdentifier: calendarID), cal.allowsContentModifications else { throw CalendarError.denied }
-        let existing = eventID.isEmpty ? nil : store.event(withIdentifier: eventID)
+        let existing = event(eventID)
         let e = existing ?? EKEvent(eventStore: store)
         let start = allDay ? Calendar.current.startOfDay(for: date) : date
         let end = allDay ? start : start.addingTimeInterval(3600)
         if existing != nil, e.title == title, (e.notes ?? "") == notes, e.isAllDay == allDay, e.startDate == start, e.endDate == end,
-           e.calendar.calendarIdentifier == calendarID { return eventID }
+           e.calendar.calendarIdentifier == calendarID { return Self.keptID(e) ?? eventID }
         e.title = title; e.notes = notes.isEmpty ? nil : notes; e.isAllDay = allDay; e.startDate = start; e.endDate = end; e.calendar = cal
         try store.save(e, span: .thisEvent, commit: true)
-        return e.eventIdentifier
+        return Self.keptID(e) ?? eventID
     }
 
     /// Removes events this app made (an item was deleted, or its date was taken off).
     func remove(eventIDs: [String]) {
         guard Self.authorized else { return }
         for id in eventIDs where !id.isEmpty {
-            if let e = store.event(withIdentifier: id) { try? store.remove(e, span: .thisEvent, commit: true) }
+            if let e = event(id) { try? store.remove(e, span: .thisEvent, commit: true) }
         }
+    }
+
+    /// The event an item points at, by external identifier (same on all devices) or, for older items, local one.
+    private func event(_ id: String) -> EKEvent? {
+        guard !id.isEmpty else { return nil }
+        if let e = store.calendarItems(withExternalIdentifier: id).compactMap({ $0 as? EKEvent }).first { return e }
+        return store.event(withIdentifier: id)
+    }
+
+    private static func keptID(_ e: EKEvent) -> String? {
+        if let ext = e.calendarItemExternalIdentifier, !ext.isEmpty { return ext }
+        return e.eventIdentifier
     }
 
     func calendars() -> [(id: String, title: String)] {

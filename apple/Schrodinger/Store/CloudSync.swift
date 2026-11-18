@@ -64,32 +64,51 @@ final class CloudSync {
                     let n = err as NSError
                     return (n.userInfo["ServerErrorDescription"] as? String) ?? (n.userInfo[NSLocalizedDescriptionKey] as? String) ?? "\(n.domain) \(n.code)"
                 }
-                return "\(partial.count) records failed: " + Array(Set(msgs)).prefix(3).joined(separator: " · ")
+                return hint("\(partial.count) records failed: " + Array(Set(msgs)).prefix(3).joined(separator: " · "))
             }
             e = cur.userInfo[NSUnderlyingErrorKey] as? NSError
         }
         let server = ns.userInfo["ServerErrorDescription"] as? String
-        return [ns.localizedDescription, server].compactMap { $0 }.joined(separator: " — ")
+        return hint([ns.localizedDescription, server].compactMap { $0 }.joined(separator: " — "))
+    }
+
+    /// The common setup mistake, said plainly: TestFlight and App Store builds sync against the Production schema,
+    /// which has only the record types that were deployed to it.
+    nonisolated private static func hint(_ message: String) -> String {
+        let m = message.lowercased()
+        guard m.contains("production schema") || m.contains("cannot create new type") || m.contains("unknown record type") else { return message }
+        return message + " (The app's record types are missing from iCloud's Production schema; the developer needs to deploy it.)"
     }
 
     /// Creates the app's record types in the CloudKit Development environment, from the SwiftData models. Run once from
     /// a development build on a device signed in to iCloud (launch argument `-initCloudKitSchema`), then deploy the
     /// schema to Production in the CloudKit Console; TestFlight and App Store builds can only use a deployed schema.
-    /// Uses a scratch store, so no data is touched.
-    nonisolated static func initializeSchema(types: [any PersistentModel.Type]) {
-        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: types) else { print("CloudSync: no model"); return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("schema-init-\(UUID().uuidString).store")
-        let desc = NSPersistentStoreDescription(url: url)
-        desc.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: containerID)
-        desc.shouldAddStoreAsynchronously = false
-        let container = NSPersistentCloudKitContainer(name: "SchemaInit", managedObjectModel: model)
-        container.persistentStoreDescriptions = [desc]
-        var loadError: Error?
-        container.loadPersistentStores { _, e in loadError = e }
-        if let loadError { print("CloudSync: schema store failed: \(loadError)"); return }
-        do { try container.initializeCloudKitSchema(); print("CloudSync: schema initialized in Development") }
-        catch { print("CloudSync: schema init failed: \(describe(error))") }
-        if let store = container.persistentStoreCoordinator.persistentStores.first { try? container.persistentStoreCoordinator.remove(store) }
-        try? FileManager.default.removeItem(at: url)
+    /// Uses a scratch store, so no data is touched. Returns whether the schema was written.
+    nonisolated static func initializeSchema(types: [any PersistentModel.Type]) -> Bool {
+        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: types) else { print("CloudSync: no model"); return false }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("schema-init-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }   // the store and its -wal/-shm files
+        // The container must be gone before the app's own store is opened, so it lives only inside this pool.
+        return autoreleasepool {
+            let desc = NSPersistentStoreDescription(url: dir.appendingPathComponent("SchemaInit.store"))
+            desc.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: containerID)
+            desc.shouldAddStoreAsynchronously = false
+            let container = NSPersistentCloudKitContainer(name: "SchemaInit", managedObjectModel: model)
+            container.persistentStoreDescriptions = [desc]
+            var loadError: Error?
+            container.loadPersistentStores { _, e in loadError = e }
+            if let loadError { print("CloudSync: schema store failed: \(describe(loadError))"); return false }
+            defer { if let store = container.persistentStoreCoordinator.persistentStores.first { try? container.persistentStoreCoordinator.remove(store) } }
+            do {
+                try container.initializeCloudKitSchema()
+                let names = model.entities.compactMap(\.name).map { "CD_" + $0 }.sorted().joined(separator: ", ")
+                print("CloudSync: schema initialized in Development: \(names). Deploy it to Production in the CloudKit Console.")
+                return true
+            } catch {
+                print("CloudSync: schema init failed: \(describe(error))\n\(error)")
+                return false
+            }
+        }
     }
 }
