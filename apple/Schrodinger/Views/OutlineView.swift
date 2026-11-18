@@ -829,7 +829,8 @@ struct NodeRow: View {
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
-    private var titleFont: Font { Appearance.shared.font.font(node.isProject ? .title3 : .body, weight: node.isProject ? .semibold : .regular) }
+    /// One size and weight for every item's text, top level or not, title or notes.
+    private var titleFont: Font { Appearance.shared.font.font(.body) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
     private func toggleSelect() {
@@ -1007,7 +1008,7 @@ struct NodeRow: View {
             if open {
                 TextField("Notes", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(Appearance.shared.font.font(.callout))
+                    .font(titleFont)
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .focused($noteFocused)
                     // A list started here turns into child items, line by line as each is finished.
@@ -1306,7 +1307,7 @@ struct NodeRow: View {
                                   onDismiss: { withAnimation(.snappy(duration: 0.22)) { store.dismiss(p); store.save() } })
                 }
                 if let m = adviceNote {
-                    Text(m).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.5))
+                    Text(m).font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
