@@ -23,6 +23,23 @@ final class StoreTests: XCTestCase {
         XCTAssertThrowsError(try s.move(a, to: a1.id, position: 0))
     }
 
+    func testPruneDoneDatedRemovesOnlyOldCheckedLeaves() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let due = Date()
+        let oldDone = s.create(title: "old done", parentID: p.id, due: due)
+        let newDone = s.create(title: "new done", parentID: p.id, due: due)
+        let undated = s.create(title: "undated done", parentID: p.id)
+        let open = s.create(title: "open dated", parentID: p.id, due: due)
+        let parent = s.create(title: "dated parent", parentID: p.id, due: due)
+        _ = s.create(title: "child", parentID: parent.id)
+        for n in [oldDone, newDone, undated, parent] { s.update(n) { $0.state = .done } }
+        let tenDaysAgo = Date().addingTimeInterval(-10 * 86400)
+        for n in [oldDone, undated, open, parent] { n.updatedAt = tenDaysAgo }
+        XCTAssertEqual(s.pruneDoneDated(olderThan: 7), 1)
+        XCTAssertEqual(Set(s.children(of: p.id).map(\.title)), ["new done", "undated done", "open dated", "dated parent"])
+    }
+
     func testDeleteKeepingChildrenMovesThemUp() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P")

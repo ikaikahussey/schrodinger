@@ -44,8 +44,8 @@ struct OutlineView: View {
     @State private var plucked: UUID? = nil
     @State private var plucks = 0
 
-    enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week; var id: String { rawValue }
-        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week" } } }
+    enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week, done; var id: String { rawValue }
+        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week"; case .done: "Done" } } }
 
     private var store: Store { Store(ctx) }
     private var look: Appearance { Appearance.shared }
@@ -629,6 +629,8 @@ struct OutlineView: View {
         case .review: return n.state == .review || n.isYourTurn
         case .blocked: return n.state == .blocked
         case .week: return n.due.map { $0 < Date().addingTimeInterval(7 * 86400) } ?? false && n.state != .done
+        // Completed items, in place in the outline (checked-off dated items stay here until they are pruned, a week on).
+        case .done: return n.state == .done
         }
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
@@ -829,6 +831,8 @@ struct StatusBar: View {
     var depth: Int = 0
     /// The item has notes: a small dot at the mark's left end.
     var hasNotes = false
+    /// A check box sits in the mark's left end (dated items): no notes dot there, and a circle shows no AI glyph.
+    var checkable = false
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
@@ -857,7 +861,7 @@ struct StatusBar: View {
                 default:       shape.fill(color)
                 }
                 // AI involvement is a glyph in the mark's round end (next to the text); the mark never changes shape.
-                if let glyph = assignee.squareGlyph {
+                if let glyph = assignee.squareGlyph, !(checkable && depth == 0) {
                     Image(systemName: glyph)
                         .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
                         .foregroundStyle(solid ? Color.canvas : color)
@@ -866,7 +870,7 @@ struct StatusBar: View {
                 }
             }
             // Notes: a dot in the mark's left end (on a circle, its middle unless the AI glyph is there).
-            if hasNotes && !(depth == 0 && assignee.squareGlyph != nil) {
+            if hasNotes && !checkable && !(depth == 0 && assignee.squareGlyph != nil) {
                 Circle().fill(solid ? Color.canvas : color).frame(width: 5, height: 5)
                     .frame(width: Self.w, height: Self.h)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -889,11 +893,14 @@ struct DepthBars: View {
     var open = false
     /// The item has children that are hidden: a second oval peeks out below the mark, like a stack. Tap to show them.
     var childrenHidden = false
+    /// The item has a due date: a check box in the mark's round end. Tap it to check the item off (again: undo).
+    var onCheck: (() -> Void)? = nil
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
         // No blink here: the mark's strength carries the status, so it holds still.
-        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty)
+        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty,
+                  checkable: onCheck != nil)
             .background(alignment: .leading) {
                 if childrenHidden {
                     StatusBar.ownShape.fill(color.opacity(0.45))
@@ -902,11 +909,35 @@ struct DepthBars: View {
                 }
             }
             .animation(.snappy(duration: 0.22), value: childrenHidden)
+            .overlay(alignment: .leading) { if let onCheck { CheckBox(done: node.state == .done, tint: node.state == .review || node.state == .blocked ? color : .canvas, action: onCheck) } }
             .rotationEffect(.degrees(open ? 90 : 0), anchor: UnitPoint(x: StatusBar.w / 2 / StatusBar.width(depth), y: 0.5))
             .animation(.snappy(duration: 0.25), value: open)
             .padding(.leading, StatusBar.margin)
             .frame(width: StatusBar.textStart(depth), alignment: .leading)
             .contentShape(Rectangle())
+    }
+}
+
+/// The check box in a dated item's mark: a small rounded square in the background color; checked = filled with a tick.
+struct CheckBox: View {
+    let done: Bool
+    /// Drawn in the background color on a solid mark, in the mark's color on a hollow one.
+    var tint: Color = .canvas
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 2.5).fill(tint.opacity(done ? 1 : 0))
+                RoundedRectangle(cornerRadius: 2.5).strokeBorder(tint, lineWidth: 1.5)
+                if done { Image(systemName: "checkmark").font(.system(size: 7, weight: .black)).foregroundStyle(Color.ink) }
+            }
+            .frame(width: 10, height: 10)
+            .frame(width: StatusBar.w, height: StatusBar.h)
+            .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .help(done ? "Done (tap to undo)" : "Check off")
+        .accessibilityLabel(done ? "Done" : "Not done").accessibilityHint("Checks the item off").accessibilityAddTraits(.isButton)
     }
 }
 
@@ -1118,6 +1149,11 @@ struct NodeRow: View {
         endEdit(); noteFocused = false
         withAnimation(.snappy(duration: 0.22)) { sel.infoID = nil; if sel.nodeID == node.id { sel.nodeID = nil } }
     }
+    /// The check box of a dated item: done, or back to to-do.
+    private func toggleChecked() {
+        withAnimation(.snappy(duration: 0.2)) { store.update(node) { $0.state = $0.state == .done ? .todo : .done } }
+        store.save()
+    }
     private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
     /// SwiftData traps when a deleted model's attributes are read, and a row can be re-rendered once more after its node
@@ -1131,7 +1167,8 @@ struct NodeRow: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 0) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, childrenHidden: hasChildren && !childrenShown)
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, childrenHidden: hasChildren && !childrenShown,
+                      onCheck: node.due != nil && isLeafTask ? { toggleChecked() } : nil)
                 .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
                 // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
