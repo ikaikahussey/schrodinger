@@ -1277,12 +1277,12 @@ struct NodeRow: View {
                 FieldIcon(systemImage: "arrow.counterclockwise", width: ItemField.compact) { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
                 FieldIcon(systemImage: "checkmark.seal.fill", on: true, width: ItemField.compact) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
             }
-            // New child (down-right arrow) and new sibling (+), filled circles like the corner + button. An item with
-            // no text is removed when the keyboard leaves it, so it can't take a child or a sibling yet.
-            FieldCircle(systemImage: "arrow.turn.down.right", fill: PanelPalette.orange, compact: true) { commit(); onKey(.child) }
+            // New child (down-right arrow) and new sibling (+), bare glyphs like the others. An item with no text is
+            // removed when the keyboard leaves it, so it can't take a child or a sibling yet.
+            FieldIcon(systemImage: "arrow.turn.down.right", on: true, width: ItemField.compact) { commit(); onKey(.child) }
                 .disabled(empty)
                 .help("New child item").accessibilityLabel("New child item")
-            FieldCircle(systemImage: "plus", fill: PanelPalette.orange, compact: true) { commit(); onKey(.enter) }
+            FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
             // Done: close the item's field.
