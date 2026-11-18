@@ -81,7 +81,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, CGFloat(t.depth) * StatusBar.step).padding(.trailing, 16)
+                        .padding(.leading, StatusBar.column(t.depth)).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -379,9 +379,9 @@ struct OutlineView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        // The logo's ink starts where a top-level item's text starts: the circle's column, the squares' grab padding
-        // (12) and the row's spacing (2), less the drawing's own margin (whisker tips at x = 10 of its 64-unit box).
-        .padding(.leading, StatusBar.step + 12 + 2 - 30 * 10 / 64).padding(.trailing, 2)
+        // The logo's ink starts where a top-level item's text starts (one grid unit past its circle), less the
+        // drawing's own margin (whisker tips at x = 10 of its 64-unit box).
+        .padding(.leading, StatusBar.column(1) - 30 * 10 / 64).padding(.trailing, 2)
         .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
         .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(33) }
         .contentShape(Rectangle())
@@ -637,7 +637,7 @@ struct ProjectLine: View {
             }
         }
         .frame(height: 1.5)
-        .padding(.leading, StatusBar.step + 8).padding(.trailing, 4).padding(.bottom, 4)
+        .padding(.leading, StatusBar.column(1)).padding(.trailing, 4).padding(.bottom, 4)
         .opacity(progress.total == 0 ? 0 : 1)
     }
 }
@@ -656,9 +656,12 @@ struct StatusBar: View {
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
-    /// Horizontal distance from one depth square to the next (side + 1 px gap).
-    static let step: CGFloat = w + 1
-    /// The item's own mark is a circle (its ancestors' marks stay square).
+    /// The grid: a top-level circle starts `margin` from the left edge; each level is `unit` further in. A row's text
+    /// starts one unit after its circle, which is where its children's circles go.
+    static let margin: CGFloat = 12
+    static let unit: CGFloat = 26
+    /// Left edge of the circle at `depth`; the text of that row starts at `column(depth + 1)`.
+    static func column(_ depth: Int) -> CGFloat { margin + CGFloat(max(depth, 0)) * unit }
     static var ownShape: Circle { Circle() }
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
@@ -688,8 +691,8 @@ struct StatusBar: View {
     }
 }
 
-/// One square per depth level, flush with the left edge and 1 px apart: each ancestor's square in that ancestor's color,
-/// then the item's own square (StatusBar). Tap = actions.
+/// The row's circle, on the grid: indented one unit per level, so a child's circle sits right under the left edge of
+/// its parent's text. The space to its left is part of the touch target. Tap = actions.
 struct DepthBars: View {
     let node: Node
     let depth: Int
@@ -699,18 +702,11 @@ struct DepthBars: View {
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
-        HStack(alignment: .top, spacing: 1) {
-            ForEach(0..<max(depth, 0), id: \.self) { i in
-                Rectangle().fill(i < trail.count ? trail[i] : Color.ink).frame(width: StatusBar.w, height: StatusBar.h)
-                    .panelBlink(seed + i + 1)
-            }
-            StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
-                .panelBlink(seed)
-                // Top level: the circle sits half off the left edge of the screen, so only its right half shows.
-                .offset(x: depth == 0 ? -StatusBar.w / 2 : 0)
-        }
-        .frame(minWidth: CGFloat(depth + 1) * StatusBar.step, alignment: .leading)
-        .contentShape(Rectangle())
+        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color)
+            .panelBlink(seed)
+            .padding(.leading, StatusBar.column(depth))
+            .frame(width: StatusBar.column(depth + 1), alignment: .leading)
+            .contentShape(Rectangle())
     }
 }
 
@@ -937,9 +933,9 @@ struct NodeRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-        HStack(alignment: .rowLine, spacing: 2) {
+        HStack(alignment: .rowLine, spacing: 0) {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color)
-                .padding(.vertical, 4).padding(.trailing, 12)   // wider grab area (the squares are a touch target)
+                .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
                 // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
                 // move: drag.
