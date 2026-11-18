@@ -978,10 +978,10 @@ struct NodeRow: View {
                 .simultaneousGesture(handleGesture(onText: false))
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
-                .help(summary + (hasChildren ? (childrenShown ? " · tap to hide children" : " · tap to show children") : " · tap to open") + " · hold to zoom in · hold and drag to move")
+                .help(summary + (open ? " · tap to close" : hasChildren && childrenShown ? " · tap to hide children" : " · tap to open") + " · hold to zoom in · hold and drag to move")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary)
-                .accessibilityHint(hasChildren ? (childrenShown ? "Hides its children" : "Shows its children") : (open ? "Closes the item" : "Opens the item"))
+                .accessibilityHint(open ? "Closes the item" : hasChildren && childrenShown ? "Hides its children" : "Opens the item")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { commit(); toggleInfo() }
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
@@ -1180,11 +1180,12 @@ struct NodeRow: View {
         commit(); openItem()
     }
     /// Tap on the squares: open the item, or close it if it is open. Same hold guard as `tapped()`.
-    /// Tap on the oval: an item with children shows or hides them; one without opens (or closes) the item.
+    /// Tap on the oval: open the item (its notes and controls) and show its children. Tap again: close it and hide
+    /// them. A closed item whose children are showing just hides them, so folding it up is one tap.
     private func squareTapped() {
         if holdFired { holdFired = false; return }
         commit()
-        if hasChildren { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } else { toggleInfo() }
+        if !open && hasChildren && childrenShown { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } else { toggleInfo() }
     }
 
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
