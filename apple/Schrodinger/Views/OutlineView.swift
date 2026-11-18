@@ -188,6 +188,13 @@ struct OutlineView: View {
         }
         // Another screen (Inbox, Calendar) asked to show an item: make it visible and scroll to it.
         .onChange(of: sel.revealID) { _, id in reveal(id, proxy) }
+        .confirmationDialog(deleteAskTitle, isPresented: Binding(get: { sel.deleteAskID != nil }, set: { if !$0 { sel.deleteAskID = nil } }), titleVisibility: .visible) {
+            Button("Delete It and Its Children", role: .destructive) { confirmDelete(keepChildren: false) }
+            Button("Delete It, Keep Its Children") { confirmDelete(keepChildren: true) }
+            Button("Cancel", role: .cancel) { sel.deleteAskID = nil }
+        } message: {
+            Text("Kept children move up a level, into its place.")
+        }
         }
     }
 
@@ -204,6 +211,20 @@ struct OutlineView: View {
             try? await Task.sleep(for: .milliseconds(200))
             withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(id, anchor: .top) }
         }
+    }
+
+    private var deleteAskTitle: String {
+        let t = sel.deleteAskID.flatMap { store.node($0)?.title } ?? ""
+        return t.isEmpty ? "Delete this item?" : "Delete \u{201C}\(t)\u{201D}?"
+    }
+    private func confirmDelete(keepChildren: Bool) {
+        guard let id = sel.deleteAskID, let n = store.node(id) else { return }
+        sel.deleteAskID = nil
+        if sel.nodeID == id { sel.nodeID = nil }
+        if sel.infoID == id { sel.infoID = nil }
+        if focused == id { focused = nil }
+        if editRequest == id { editRequest = nil }
+        store.delete(n, keepChildren: keepChildren); store.save()
     }
 
     /// Name for an export: the zoomed item's title, or the app's name for everything.
@@ -990,7 +1011,6 @@ struct NodeRow: View {
     /// The notes as they were when the item opened. List lines typed since then become children when it closes;
     /// lines that were already there stay text.
     @State private var notesAtOpen = ""
-    @State private var confirmDelete = false
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
@@ -1419,12 +1439,9 @@ struct NodeRow: View {
             FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
-            // Delete; an item with children asks first, since they go with it.
-            FieldIcon(systemImage: "trash", width: ItemField.compact) { hasChildren ? (confirmDelete = true) : deleteItem() }
+            // Delete; an item with children asks whether they go too.
+            FieldIcon(systemImage: "trash", width: ItemField.compact) { askDelete() }
                 .help("Delete item").accessibilityLabel("Delete item")
-                .confirmationDialog("Delete \u{201C}\(title)\u{201D} and everything under it?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                    Button("Delete", role: .destructive) { deleteItem() }
-                }
             // Done: close the item's field.
             FieldIcon(systemImage: "checkmark", on: true, width: ItemField.compact) { doneItem() }.help("Done").accessibilityLabel("Done")
         }
@@ -1534,7 +1551,7 @@ struct NodeRow: View {
         Button(showNote ? "Edit notes" : "Add notes") { openNote() }
         Divider()
         Button(infoOpen ? "Hide info" : "Info") { toggleInfo() }
-        Button("Delete", role: .destructive) { deleteItem() }
+        Button("Delete", role: .destructive) { askDelete() }
     }
 
     /// Return in the notes: start a new line and keep typing. A list line just finished becomes a child item.
@@ -1547,11 +1564,19 @@ struct NodeRow: View {
     }
     private func openNote() { showNote = true; DispatchQueue.main.async { noteFocused = true } }
     /// Clear focus and selection first so nothing reads the node after it is gone, then delete.
-    private func deleteItem() {
+    /// Deletes at once when there are no children; otherwise asks whether they go too.
+    /// The question is asked by the outline (this row's field closes when the dialog takes focus).
+    private func askDelete() {
+        guard hasChildren else { deleteItem(); return }
+        commit(); endEdit(); noteFocused = false
+        sel.deleteAskID = node.id
+    }
+    /// `keepChildren`: the children move up a level, into the item's place among its siblings, before it goes.
+    private func deleteItem(keepChildren: Bool = false) {
         endEdit(); noteFocused = false
         if sel.nodeID == node.id { sel.nodeID = nil }
         if sel.infoID == node.id { sel.infoID = nil }
-        store.delete(node); store.save()
+        store.delete(node, keepChildren: keepChildren); store.save()
     }
     /// Where the row's notes are stored: a task's notes; for a top-level item, the text its agent works toward.
     private var noteSource: String { node.isProject ? node.goal : node.notes }

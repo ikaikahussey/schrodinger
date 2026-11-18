@@ -23,6 +23,24 @@ final class StoreTests: XCTestCase {
         XCTAssertThrowsError(try s.move(a, to: a1.id, position: 0))
     }
 
+    func testDeleteKeepingChildrenMovesThemUp() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let a = s.create(title: "A", parentID: p.id, position: 0)
+        _ = s.create(title: "A1", parentID: a.id, position: 0)
+        let a2 = s.create(title: "A2", parentID: a.id, position: 1)
+        _ = s.create(title: "A2x", parentID: a2.id)
+        _ = s.create(title: "B", parentID: p.id, position: 1)
+        s.delete(a, keepChildren: true)
+        XCTAssertEqual(s.children(of: p.id).map(\.title), ["A1", "A2", "B"])
+        XCTAssertEqual(s.children(of: a2.id).map(\.title), ["A2x"])
+        let b = s.children(of: p.id).last!
+        _ = s.create(title: "B1", parentID: b.id)
+        s.delete(b, keepChildren: false)
+        XCTAssertEqual(s.children(of: p.id).map(\.title), ["A1", "A2"])
+        XCTAssertEqual(s.descendants(of: p.id).count, 3)
+    }
+
     func testSharedAndAIFlowWithMockProvider() async throws {
         AppSettings.shared.provider = .mock
         let c = try makeContainer(); let s = Store(c.mainContext)

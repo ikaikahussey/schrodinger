@@ -153,6 +153,15 @@ struct Store {
         log(n, actor, "move", "→ \(parentID?.uuidString.prefix(8) ?? "root") @\(position)", undo: ["parent_id": oldParent?.uuidString as Any, "position": oldPos])
     }
 
+    /// Deletes an item. `keepChildren`: its children first move up a level, into its place among its siblings.
+    func delete(_ n: Node, keepChildren: Bool) {
+        if keepChildren {
+            let at = children(of: n.parentID).firstIndex { $0.id == n.id } ?? 0
+            for (i, c) in children(of: n.id).enumerated() { try? move(c, to: n.parentID, position: at + 1 + i) }
+        }
+        delete(n)
+    }
+
     func delete(_ n: Node) {
         // Events made for the deleted items go with them.
         let events = ([n] + descendants(of: n.id)).map(\.calendarEventID).filter { !$0.isEmpty }

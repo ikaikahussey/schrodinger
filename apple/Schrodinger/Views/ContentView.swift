@@ -26,6 +26,8 @@ final class Selection {
     var infoID: UUID? = nil
     /// Set when another screen asks the outline to show an item: the outline expands its parents and scrolls to it.
     var revealID: UUID? = nil
+    /// An item with children whose Delete was tapped: the outline asks whether its children go too.
+    var deleteAskID: UUID? = nil
     /// Show an item from anywhere in the app: switch to the outline and open its info.
     func open(_ id: UUID) { panel = .outline; nodeID = id; infoID = id; revealID = id }
 }
