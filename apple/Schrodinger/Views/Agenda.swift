@@ -98,7 +98,8 @@ struct AgendaTab: View {
     }
 }
 
-/// Pick the item's date, and a time if it has one. "Remove" takes the item off the calendar.
+/// Pick the item's date, and a time if it has one. "Remove Date" (shown when the item has one) clears it and takes the
+/// item off the calendar.
 struct DateSheet: View {
     let onSet: (Date?) -> Void
     private let had: Bool
@@ -119,12 +120,20 @@ struct DateSheet: View {
                 DatePicker("Date", selection: $day, displayedComponents: .date).datePickerStyle(.graphical)
                 Toggle("Time", isOn: $timed.animation(.snappy(duration: 0.2)))
                 if timed { DatePicker("At", selection: $day, displayedComponents: .hourAndMinute) }
+                if had {
+                    Button(role: .destructive) { onSet(nil); dismiss() } label: {
+                        Label("Remove Date", systemImage: "calendar.badge.minus").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.top, 12)
+                    .accessibilityHint("Clears the item's date")
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if had { Button("Remove", role: .destructive) { onSet(nil); dismiss() } } else { Button("Cancel") { dismiss() } }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { onSet(timed ? day : Calendar.current.startOfDay(for: day)); dismiss() }.fontWeight(.semibold)
