@@ -11,6 +11,18 @@ if [ "${SCHRODINGER_PULLED:-}" != 1 ]; then
   git pull --ff-only -q 2>/dev/null || true
   SCHRODINGER_PULLED=1 exec bash "$0" "$@"
 fi
+# Builds run on one Mac only (the Mac mini). On any other Mac this removes its build poller and exits.
+# Override with SCHRODINGER_BUILD_HOST=<LocalHostName> in ~/.schrodinger-asc.env.
+[ -f ~/.schrodinger-asc.env ] && grep -q '^SCHRODINGER_BUILD_HOST=' ~/.schrodinger-asc.env && \
+  eval "$(grep '^SCHRODINGER_BUILD_HOST=' ~/.schrodinger-asc.env)"
+BUILD_HOST="${SCHRODINGER_BUILD_HOST:-Ikaikas-Mac-mini}"
+THIS_HOST="$(scutil --get LocalHostName 2>/dev/null) $(hostname -s)"
+if ! echo " $THIS_HOST " | tr A-Z a-z | grep -q " $(echo "$BUILD_HOST" | tr A-Z a-z) "; then
+  echo "This Mac ($THIS_HOST) is not the build Mac ($BUILD_HOST). Removing this Mac's build poller; no build."
+  launchctl bootout "gui/$(id -u)/org.schrodinger.build" 2>/dev/null || true
+  rm -f ~/Library/LaunchAgents/org.schrodinger.build.plist
+  exit 0
+fi
 # Commits marked [skip ci] do not build or upload.
 git log -1 --pretty=%B | grep -q '\[skip ci\]' && { echo "[skip ci] — nothing to do"; exit 0; }
 LOG="$REPO/apple/build-log.txt"
