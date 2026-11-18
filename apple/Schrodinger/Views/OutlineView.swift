@@ -974,9 +974,9 @@ struct NodeRow: View {
                 .onKeyPress(.return, phases: .down) { p in if p.modifiers.contains(.shift) { commit(); openNote(); return .handled }; return .ignored }
                 #endif
             }
-            // The item's notes, read and edited here in the row. The field is there whenever there are notes, and
-            // also while the item is open so notes can be added.
-            if showNote || open {
+            // The item's notes, read and edited here in the row, only while the item is open. Closed, a row is just
+            // its title.
+            if open {
                 TextField("Notes", text: $note, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(Appearance.shared.font.font(.callout))
@@ -996,7 +996,7 @@ struct NodeRow: View {
                     }
                     .onSubmit { noteReturn() }
             }
-            if !attachments.isEmpty {
+            if open && !attachments.isEmpty {
                 AttachmentStrip(items: attachments, editing: open,
                                 onOpen: { a in if a.kind == .photo { viewing = a } else if let u = a.url { openURL(u) } },
                                 onDelete: { a in store.deleteAttachment(a); store.save() })
