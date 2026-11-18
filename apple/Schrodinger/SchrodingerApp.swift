@@ -34,11 +34,16 @@ struct SchrodingerApp: App {
 
     var body: some Scene {
         #if os(macOS)
-        // As on iPhone/iPad, the outline's own header (search, path, filters) is the top of the window: no title bar
-        // or toolbar.
-        WindowGroup { ContentView().environment(harness).task { harness.start() } }
+        // A standard Mac window: title bar with the close / minimize / zoom buttons, full screen (green button,
+        // ⌃⌘F, View > Enter Full Screen), resizable down to a minimum, several windows (File > New Window).
+        WindowGroup("Schrodinger") {
+            ContentView().environment(harness).task { harness.start() }
+                .frame(minWidth: 480, minHeight: 420)
+        }
             .modelContainer(container)
-            .windowStyle(.hiddenTitleBar)
+            .windowStyle(.titleBar)
+            .windowToolbarStyle(.unified(showsTitle: true))
+            .windowResizability(.contentMinSize)
             .defaultSize(width: 900, height: 820)
             .commands { UndoCommands() }
         Settings { SettingsView().modelContainer(container).environment(harness) }
