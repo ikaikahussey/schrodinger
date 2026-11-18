@@ -1019,17 +1019,19 @@ struct NodeRow: View {
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
             if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
-            if hasChildren && !childrenShown && !open {
-                // Children are hidden: tap the … to show them. Never shown while the children are on screen.
+            if hasChildren && !open {
+                // The item has children: the … shows them; turned upright, it hides them. (An open item has the same
+                // button in its field.)
                 Button { commit(); withAnimation(.snappy(duration: 0.22)) { toggleChildren() } } label: {
                     Text("\u{2026}").font(.title3.weight(.bold)).foregroundStyle(Color.ink.opacity(0.6))
+                        .rotationEffect(.degrees(childrenShown ? 90 : 0))
                         .frame(width: 36, height: 32)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-                .help("Show children")
-                .accessibilityLabel("Show children")
+                .help(childrenShown ? "Hide children" : "Show children")
+                .accessibilityLabel(childrenShown ? "Hide children" : "Show children")
             }
         }
         .padding(.vertical, 6)
