@@ -130,9 +130,11 @@ final class Proposal {
 
 /// A photo or a link attached to an item. Photos are kept outside the database file (external storage); with iCloud
 /// sync on they sync with the rest of the item's data.
+/// Kind `item` is a link between two items: `nodeID` is one, `urlString` holds the other's id. One record per pair;
+/// it shows on both items (see `Store.itemLinks`). Stored here so the iCloud schema needs no new record type or field.
 @Model
 final class Attachment {
-    enum Kind: String { case photo, link }
+    enum Kind: String { case photo, link, item }
     var id: UUID = UUID()
     var nodeID: UUID = UUID()
     var kindRaw: String = Kind.link.rawValue
@@ -145,6 +147,13 @@ final class Attachment {
     }
     var kind: Kind { Kind(rawValue: kindRaw) ?? .link }
     var url: URL? { URL(string: urlString) }
+    /// For a link between two items: the item on the other end from `nodeID`. Nil for photos and web links.
+    var linkedID: UUID? { kind == .item ? UUID(uuidString: urlString) : nil }
+    /// For a link between two items: the end that is not `id` (nil if `id` is on neither end).
+    func otherEnd(from id: UUID) -> UUID? {
+        guard let b = linkedID else { return nil }
+        return id == nodeID ? b : id == b ? nodeID : nil
+    }
     /// What a link chip shows: the site's name without "www.".
     var displayTitle: String {
         guard let host = url?.host() else { return urlString }

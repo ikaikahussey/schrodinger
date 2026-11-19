@@ -214,6 +214,25 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.attachments(for: t.id).isEmpty)
     }
 
+    func testItemLinks() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let a = s.create(title: "a", parentID: p.id), b = s.create(title: "b", parentID: p.id), x = s.create(title: "x", parentID: p.id)
+        XCTAssertNil(s.link(a.id, a.id))            // not to itself
+        XCTAssertNil(s.link(a.id, UUID()))          // not to an item that does not exist
+        let l = try XCTUnwrap(s.link(a.id, b.id))
+        XCTAssertEqual(s.link(b.id, a.id)?.id, l.id)   // already linked, from either side: no second link
+        s.link(x.id, a.id); s.save()
+        XCTAssertEqual(s.linkedItems(of: a.id).map(\.title), ["b", "x"])
+        XCTAssertEqual(s.linkedItems(of: b.id).map(\.title), ["a"])   // seen from both items
+        XCTAssertTrue(s.attachments(for: a.id).isEmpty)                // links are not photos or web links
+        s.unlink(b.id, a.id); s.save()
+        XCTAssertEqual(s.linkedItems(of: a.id).map(\.title), ["x"])
+        XCTAssertTrue(s.linkedItems(of: b.id).isEmpty)
+        s.delete(x); s.save()   // deleting an item removes its links, whichever side made them
+        XCTAssertTrue(s.itemLinks(of: a.id).isEmpty)
+    }
+
     func testUndoAndPathJail() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P"); let t = s.create(title: "t", parentID: p.id, assignee: .ai)

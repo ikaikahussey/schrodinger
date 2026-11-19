@@ -55,10 +55,25 @@ struct OutlineView: View {
     private var agendaShown: Bool { !calendared.isEmpty && !agendaPushed }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
+    /// The items each item is linked to. A link is one record and shows on both of its items.
+    private var linkMap: [UUID: [ItemLink]] {
+        let pairs = attachments.filter { $0.kind == .item }
+        guard !pairs.isEmpty else { return [:] }
+        let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var out: [UUID: [ItemLink]] = [:]
+        for l in pairs {
+            guard let other = l.linkedID, let a = byID[l.nodeID], let b = byID[other] else { continue }
+            out[a.id, default: []].append(ItemLink(link: l, item: b))
+            out[b.id, default: []].append(ItemLink(link: l, item: a))
+        }
+        return out
+    }
+
     var body: some View {
         let kids = childrenMap
         let roots = kids[nil] ?? []
-        let files = Dictionary(grouping: attachments, by: \.nodeID)
+        let files = Dictionary(grouping: attachments.filter { $0.kind != .item }, by: \.nodeID)
+        let links = linkMap
         // The AI's open suggestions, by the item they are about (shown in that item's field).
         let advice = Dictionary(grouping: openProposals.filter { $0.nodeID != nil }.sorted { $0.createdAt < $1.createdAt }, by: { $0.nodeID! })
         let zoomed = zoomID.flatMap { store.node($0) }
@@ -70,9 +85,9 @@ struct OutlineView: View {
                         // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
                         // reads the same as in the full outline.
                         let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, advice: advice, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, links: links, advice: advice, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, advice: advice, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, links: links, advice: advice, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
@@ -645,7 +660,7 @@ struct OutlineView: View {
     }
 
     /// `active`: the item's project is active (paused and archived projects don't run).
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], links: [UUID: [ItemLink]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
         let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
@@ -667,10 +682,11 @@ struct OutlineView: View {
                     runnable: active ? runnable(n, kids: kids) : [],
                     childrenShown: !n.collapsed || n.id == zoomID || searching,
                     attachments: files[n.id] ?? [],
+                    links: links[n.id] ?? [],
                     suggestions: advice[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, advice: advice, trail: trail + [own], context: context, active: active) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, trail: trail + [own], context: context, active: active) }
             }
         })
     }
@@ -1025,12 +1041,16 @@ struct NodeRow: View {
     var childrenShown = true
     /// The item's photos and links.
     var attachments: [Attachment] = []
+    /// The items this one is linked to.
+    var links: [ItemLink] = []
     /// The AI's open suggestions about this item, shown in its field with Accept and Dismiss buttons.
     var suggestions: [Proposal] = []
     @Environment(\.openURL) private var openURL
     @State private var pickedPhotos: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showCalendar = false
+    /// The list of items to link this one to is up.
+    @State private var showLinkPicker = false
     @State private var viewing: Attachment? = nil
     /// The AI is working on suggestions for this item (the lightbulb was tapped).
     /// One line under the suggestions: nothing new came back, or why the request failed.
@@ -1270,6 +1290,12 @@ struct NodeRow: View {
                                 onOpen: { a in if a.kind == .photo { viewing = a } else if let u = a.url { openURL(u) } },
                                 onDelete: { a in store.deleteAttachment(a); store.save() })
             }
+            if open && !links.isEmpty {
+                // Linked items: tap one to go to it; the x removes the link (from both items).
+                ItemLinkList(links: links,
+                             onOpen: { other in let id = other.id; commit(); sel.open(id) },
+                             onRemove: { l in store.deleteAttachment(l.link); store.save() })
+            }
             if open {
                 ItemSheetBody(node: node)   // the AI's draft, when there is one
                 suggestionList
@@ -1303,6 +1329,9 @@ struct NodeRow: View {
         }
         .photosPicker(isPresented: $showPhotos, selection: $pickedPhotos, maxSelectionCount: 6, matching: .images)
         .onChange(of: pickedPhotos) { _, items in importPhotos(items) }
+        .sheet(isPresented: $showLinkPicker) {
+            LinkPicker(nodeID: node.id, linked: Set(links.map(\.item.id))) { other in store.link(node.id, other); store.save() }
+        }
         .sheet(item: $viewing) { a in
             AttachmentViewer(attachment: a) { viewing = nil; store.deleteAttachment(a); store.save() }
         }
@@ -1314,7 +1343,7 @@ struct NodeRow: View {
                 // Left with no text at all: the item is removed (this is how an item is deleted on a touch screen).
                 // Not while its photo picker is up (it takes the keyboard away), nor once it holds a file or a child.
                 if !gone && title.trimmingCharacters(in: .whitespaces).isEmpty && !hasChildren && noteSource.isEmpty && node.artifact == nil
-                    && attachments.isEmpty && !showPhotos && !showCalendar && node.due == nil && store.children(of: node.id).isEmpty { deleteItem() }
+                    && attachments.isEmpty && links.isEmpty && !showPhotos && !showCalendar && !showLinkPicker && node.due == nil && store.children(of: node.id).isEmpty { deleteItem() }
             }
         }
         }
@@ -1456,13 +1485,17 @@ struct NodeRow: View {
                 if let due = node.due, node.state != .done {
                     Text(due.formatted(.dateTime.month(.abbreviated).day())).font(.caption2).foregroundStyle(due < Date() ? Color.red : Color.ink.opacity(0.45))
                 }
+                if !links.isEmpty {
+                    Image(systemName: ItemLink.symbol).font(.system(size: 9, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.45))
+                        .accessibilityLabel(links.count == 1 ? "1 linked item" : "\(links.count) linked items")
+                }
                 if node.isYourTurn && node.state != .done { Dot(label: "your turn", filled: true) }
             }
         }
     }
 
     /// The item field's controls, as bare glyphs on their own line under the title: who holds the item (tap to change), add
-    /// photos, calendar (give the item a date), ask the AI for suggestions. At the right: show/hide children (only
+    /// photos, calendar (give the item a date), link to another item, ask the AI for suggestions. At the right: show/hide children (only
     /// when there are some), new child, and Done. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
@@ -1477,6 +1510,10 @@ struct NodeRow: View {
             FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil, width: ItemField.compact) { commit(); showCalendar = true }
                 .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
                 .accessibilityLabel(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
+            // Link this item to another one. Not while it has no text: it would have no name in the other item's list.
+            FieldIcon(systemImage: ItemLink.symbol, on: !links.isEmpty, width: ItemField.compact) { commit(); showLinkPicker = true }
+                .disabled(empty)
+                .help("Link to another item").accessibilityLabel("Link to another item")
             if node.state == .review {
                 // An AI draft is waiting: approve it, or send it back to be redone.
                 FieldIcon(systemImage: "arrow.counterclockwise", width: ItemField.compact) { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
@@ -1604,6 +1641,7 @@ struct NodeRow: View {
         Button("Move down") { onKey(.altDown) }
         Button("Add item below") { onKey(.enter) }
         Button(showNote ? "Edit notes" : "Add notes") { openNote() }
+        Button { showLinkPicker = true } label: { Label("Link to Item…", systemImage: ItemLink.symbol) }
         Divider()
         Button(infoOpen ? "Hide info" : "Info") { toggleInfo() }
         Button("Delete", role: .destructive) { askDelete() }
