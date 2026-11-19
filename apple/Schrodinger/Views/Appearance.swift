@@ -63,12 +63,22 @@ enum AppFontFamily: String, CaseIterable, Identifiable {
         case .system, .rounded: nil; case .helveticaNeue: "Helvetica Neue"; case .avenirNext: "Avenir Next"; case .futura: "Futura"; case .gillSans: "Gill Sans"
         }
     }
-    func font(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+    @MainActor func font(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+        #if os(macOS)
+        // The Mac has no Dynamic Type: sizes are explicit, times the text size chosen in View ▸ Bigger / Smaller.
+        let size = Self.size(style) * Appearance.shared.textScale
+        switch self {
+        case .system: return .system(size: size, weight: weight, design: .default)
+        case .rounded: return .system(size: size, weight: weight, design: .rounded)
+        default: return .custom(familyName ?? "", fixedSize: size).weight(weight)
+        }
+        #else
         switch self {
         case .system: return .system(style, design: .default, weight: weight)
         case .rounded: return .system(style, design: .rounded, weight: weight)
         default: return .custom(familyName ?? "", size: Self.size(style), relativeTo: style).weight(weight)
         }
+        #endif
     }
     /// Default point sizes for each text style; Dynamic Type scales from these.
     static func size(_ s: Font.TextStyle) -> CGFloat {
@@ -90,6 +100,14 @@ final class Appearance {
     var palette: PaletteKind { didSet { d.set(palette.rawValue, forKey: "palette") } }
     var font: AppFontFamily { didSet { d.set(font.rawValue, forKey: "fontFamily") } }
     var sounds: Bool { didSet { d.set(sounds, forKey: "outlineSounds") } }
+    /// Text size on the Mac, as a multiple of the standard size (View ▸ Bigger / Smaller / Actual Size).
+    /// iPhone and iPad follow the system's Dynamic Type instead.
+    var textScale: CGFloat { didSet { d.set(Double(textScale), forKey: "textScale") } }
+    static let textScales: [CGFloat] = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
+    var canEnlargeText: Bool { textScale < Self.textScales.last! }
+    var canShrinkText: Bool { textScale > Self.textScales.first! }
+    func enlargeText() { if let next = Self.textScales.first(where: { $0 > textScale + 0.001 }) { textScale = next } }
+    func shrinkText() { if let prev = Self.textScales.last(where: { $0 < textScale - 0.001 }) { textScale = prev } }
     /// Custom scheme colors, stored as resolved sRGB values.
     var customModes: [Color.Resolved] { didSet { store(customModes, "customModeColors") } }
     var customContexts: [Color.Resolved] { didSet { store(customContexts, "customContextColors") } }
@@ -98,6 +116,7 @@ final class Appearance {
         palette = PaletteKind(rawValue: d.string(forKey: "palette") ?? "") ?? .retro70s   // default scheme
         font = AppFontFamily(rawValue: d.string(forKey: "fontFamily") ?? "") ?? .helveticaNeue
         sounds = d.object(forKey: "outlineSounds") as? Bool ?? true
+        textScale = (d.object(forKey: "textScale") as? Double).map { CGFloat($0) } ?? 1
         let env = EnvironmentValues()
         customModes = Self.load("customModeColors", count: Palette.modeCount) ?? Palette.retro70s.modes.map { $0.resolve(in: env) }
         customContexts = Self.load("customContextColors", count: Palette.contextCount) ?? Palette.retro70s.contexts.map { $0.resolve(in: env) }
