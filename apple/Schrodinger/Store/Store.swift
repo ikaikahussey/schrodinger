@@ -154,24 +154,120 @@ struct Store {
     }
 
     /// Deletes an item. `keepChildren`: its children first move up a level, into its place among its siblings.
-    func delete(_ n: Node, keepChildren: Bool) {
+    func delete(_ n: Node, keepChildren: Bool, actor: Actor = .human) {
         if keepChildren {
             let at = children(of: n.parentID).firstIndex { $0.id == n.id } ?? 0
             for (i, c) in children(of: n.id).enumerated() { try? move(c, to: n.parentID, position: at + 1 + i) }
         }
-        delete(n)
+        delete(n, actor: actor)
     }
 
-    func delete(_ n: Node) {
+    /// Deletes an item and everything under it. Each deleted item leaves one "delete" entry behind (its text and
+    /// where it was), which is what History shows struck through; the rest of its activity goes with it.
+    func delete(_ n: Node, actor: Actor = .human) {
+        let victims = [n] + descendants(of: n.id)
         // Events made for the deleted items go with them.
-        let events = ([n] + descendants(of: n.id)).map(\.calendarEventID).filter { !$0.isEmpty }
+        let events = victims.map(\.calendarEventID).filter { !$0.isEmpty }
         if !events.isEmpty { Task { await CalendarService.shared.remove(eventIDs: events) } }
-        for d in descendants(of: n.id) { for f in attachments(for: d.id) { ctx.delete(f) }; ctx.delete(d) }
-        for f in attachments(for: n.id) { ctx.delete(f) }
-        for a in activity(for: n.id, limit: 10_000) { ctx.delete(a) }
         let parent = n.parentID
-        ctx.delete(n)
-        for (i, s) in children(of: parent).enumerated() { s.position = i }
+        for v in victims {
+            for f in attachments(for: v.id) { ctx.delete(f) }
+            for a in activity(for: v.id, limit: 10_000) { ctx.delete(a) }
+            ctx.insert(ActivityEntry(nodeID: v.id, actor: actor, action: HistoryAction.delete, detail: v.title, undo: [
+                "title": v.title, "parent_id": v.parentID?.uuidString as Any, "position": v.position,
+                "state": v.stateRaw, "created_at": v.createdAt.timeIntervalSince1970]))
+            ctx.delete(v)
+        }
+        for (i, s) in children(of: parent).filter({ $0.id != n.id }).enumerated() { s.position = i }
+    }
+
+    // MARK: - History (what was added, deleted, renamed, completed or moved since a date)
+    /// The outline as History shows it: every current item in outline order, plus the items deleted since `since`
+    /// in the place they used to be. Each row says what happened to it in that time. `changesOnly` leaves out
+    /// items that did not change (their changed descendants keep them in, for context).
+    func history(since: Date, changesOnly: Bool = false) -> [HistoryRow] {
+        let nodes = allNodes()
+        let live = Set(nodes.map(\.id))
+        let d = FetchDescriptor<ActivityEntry>(predicate: #Predicate { $0.createdAt >= since }, sortBy: [SortDescriptor(\.createdAt)])
+        let entries = (try? ctx.fetch(d)) ?? []
+        var byNode: [UUID: [ActivityEntry]] = [:]
+        for e in entries { byNode[e.nodeID, default: []].append(e) }
+
+        struct Item { let row: HistoryRow; let parentID: UUID?; let position: Int }
+        var items: [Item] = []
+        for n in nodes {
+            let es = byNode[n.id] ?? []
+            var changes: Set<HistoryChange> = []
+            var oldTitle: String? = nil
+            let added = n.createdAt >= since || es.contains { $0.action == "create" }
+            if added { changes.insert(.added) }
+            else {
+                // Renamed: its text at the start of the period (from the first change that recorded it) differs from now.
+                if let first = es.first(where: { $0.action == "update" && $0.undo?["title"] is String }),
+                   let was = first.undo?["title"] as? String, was != n.title {
+                    if was.isEmpty { changes.insert(.edited) } else { changes.insert(.renamed); oldTitle = was }
+                }
+                // Moved: under a different item than at the start of the period (reordering in place does not count).
+                if let first = es.first(where: { $0.action == "move" }), let u = first.undo,
+                   (u["parent_id"] as? String).flatMap(UUID.init(uuidString:)) != n.parentID { changes.insert(.moved) }
+            }
+            // Completed: done now, and not done at the start of the period.
+            if n.state == .done, let first = es.first(where: { $0.action == "update" && $0.undo?["state"] is String }),
+               first.undo?["state"] as? String != TaskState.done.rawValue { changes.insert(.completed) }
+            else if n.state == .done && added && !n.isProject { changes.insert(.completed) }
+            if changes.isEmpty && es.contains(where: { $0.action == "update" }) { changes.insert(.edited) }
+            let when = es.last?.createdAt ?? (added ? n.createdAt : nil)
+            items.append(Item(row: HistoryRow(id: n.id, depth: 0, title: n.title, oldTitle: oldTitle, changes: changes, when: when, done: n.state == .done, deleted: false),
+                              parentID: n.parentID, position: n.position))
+        }
+        // Deleted items. An item typed and removed again with no text leaves nothing to show.
+        let tombs = entries.filter { $0.action == HistoryAction.delete && !live.contains($0.nodeID) && !$0.detail.trimmingCharacters(in: .whitespaces).isEmpty }
+        let tombIDs = Set(tombs.map(\.nodeID))
+        for t in tombs {
+            let u = t.undo ?? [:]
+            var parent = (u["parent_id"] as? String).flatMap(UUID.init(uuidString:))
+            // Its parent is gone and out of the period: show it at the top level.
+            if let p = parent, !live.contains(p), !tombIDs.contains(p) { parent = nil }
+            items.append(Item(row: HistoryRow(id: t.nodeID, depth: 0, title: t.detail, oldTitle: nil, changes: [.deleted], when: t.createdAt,
+                                              done: u["state"] as? String == TaskState.done.rawValue, deleted: true),
+                              parentID: parent, position: u["position"] as? Int ?? 0))
+        }
+        // A deleted item sorts just before the item that now has its old place.
+        let kids = Dictionary(grouping: items, by: { $0.parentID }).mapValues { g in
+            g.sorted { a, b in
+                if a.position != b.position { return a.position < b.position }
+                if a.row.deleted != b.row.deleted { return a.row.deleted }
+                return (a.row.when ?? .distantPast) < (b.row.when ?? .distantPast)
+            }
+        }
+        var out: [HistoryRow] = []
+        var seen: Set<UUID> = []
+        @discardableResult func walk(_ parent: UUID?, _ depth: Int) -> Bool {
+            var any = false
+            for it in kids[parent] ?? [] where !seen.contains(it.row.id) {
+                seen.insert(it.row.id)
+                let at = out.count
+                var row = it.row; row.depth = depth
+                out.append(row)
+                let below = walk(it.row.id, depth + 1)
+                if changesOnly && row.changes.isEmpty && !below { out.removeSubrange(at...) } else { any = true }
+            }
+            return any
+        }
+        walk(nil, 0)
+        return out
+    }
+
+    /// Deleted-item entries older than `days` are dropped (History reaches back that far at most). Run at launch.
+    @discardableResult
+    func pruneHistory(olderThan days: Int = 90, now: Date = Date()) -> Int {
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        let del = HistoryAction.delete
+        let d = FetchDescriptor<ActivityEntry>(predicate: #Predicate { $0.action == del && $0.createdAt < cutoff })
+        let old = (try? ctx.fetch(d)) ?? []
+        for a in old { ctx.delete(a) }
+        if !old.isEmpty { save() }
+        return old.count
     }
 
     // MARK: - Review / shared flow
@@ -308,12 +404,30 @@ struct Store {
         let done = TaskState.done.rawValue
         let d = FetchDescriptor<Node>(predicate: #Predicate { $0.stateRaw == done && $0.due != nil && $0.parentID != nil })
         let old = ((try? ctx.fetch(d)) ?? []).filter { $0.updatedAt < cutoff && children(of: $0.id).isEmpty }
-        for n in old { delete(n) }
+        for n in old { delete(n, actor: .harness) }
         if !old.isEmpty { save() }
         return old.count
     }
 
     func save() { try? ctx.save() }
+}
+
+enum HistoryAction { static let delete = "delete" }
+
+enum HistoryChange: String, CaseIterable, Hashable { case added, deleted, renamed, completed, moved, edited }
+
+/// One line of History: an item of the outline (or one deleted in the period) and what happened to it.
+struct HistoryRow: Identifiable, Equatable {
+    let id: UUID
+    var depth: Int
+    let title: String
+    /// Its text before it was renamed in the period (nil: not renamed).
+    let oldTitle: String?
+    let changes: Set<HistoryChange>
+    /// When it last changed in the period.
+    let when: Date?
+    let done: Bool
+    let deleted: Bool
 }
 
 enum StoreError: LocalizedError {

@@ -41,7 +41,7 @@ struct ActivityLine: View {
             Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
             Text("\(entry.actorRaw) \(entry.action) \(entry.detail)").font(.caption)
             Spacer()
-            if entry.undo != nil { Button("undo") { try? Store(ctx).applyUndo(entry); Store(ctx).save() }.font(.caption2) }
+            if entry.undo != nil && entry.action != HistoryAction.delete { Button("undo") { try? Store(ctx).applyUndo(entry); Store(ctx).save() }.font(.caption2) }
         }
     }
 }

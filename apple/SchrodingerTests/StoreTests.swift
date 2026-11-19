@@ -58,6 +58,68 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.descendants(of: p.id).count, 3)
     }
 
+    func testDeleteLeavesOneEntryPerDeletedItem() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let a = s.create(title: "A", parentID: p.id)
+        let a1 = s.create(title: "A1", parentID: a.id)
+        s.update(a) { $0.title = "A renamed" }
+        let ids = [a.id, a1.id]
+        s.delete(a); s.save()
+        for id in ids {
+            let left = s.activity(for: id)
+            XCTAssertEqual(left.map(\.action), [HistoryAction.delete])
+        }
+        XCTAssertEqual(s.activity(for: ids[0]).first?.detail, "A renamed")
+        XCTAssertEqual(s.activity(for: ids[1]).first?.undo?["parent_id"] as? String, ids[0].uuidString)
+        // Old entries are dropped after 90 days; recent ones stay.
+        XCTAssertEqual(s.pruneHistory(olderThan: 90), 0)
+        XCTAssertEqual(s.pruneHistory(olderThan: 90, now: Date().addingTimeInterval(91 * 86400)), 2)
+    }
+
+    func testHistoryMarksAddedDeletedRenamedCompleted() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let longAgo = Date().addingTimeInterval(-30 * 86400)
+        let p = s.create(title: "P")
+        let keep = s.create(title: "keep", parentID: p.id)
+        let rename = s.create(title: "old name", parentID: p.id)
+        let finish = s.create(title: "finish", parentID: p.id)
+        let gone = s.create(title: "gone", parentID: p.id)
+        let goneChild = s.create(title: "gone child", parentID: gone.id)
+        let goneID = gone.id, goneChildID = goneChild.id
+        // Everything so far happened a month ago.
+        for n in [p, keep, rename, finish, gone, goneChild] { n.createdAt = longAgo }
+        for e in s.recentActivity(limit: 1000) { e.createdAt = longAgo }
+        s.save()
+        let since = Date().addingTimeInterval(-86400)
+
+        s.update(rename) { $0.title = "new name" }
+        s.update(finish) { $0.state = .done }
+        s.delete(gone)
+        let fresh = s.create(title: "fresh", parentID: p.id)
+        let blank = s.create(title: "", parentID: p.id)
+        s.delete(blank)   // typed nothing, removed: leaves no trace
+        s.save()
+
+        let rows = s.history(since: since)
+        XCTAssertEqual(rows.map(\.title), ["P", "keep", "new name", "finish", "gone", "gone child", "fresh"])
+        XCTAssertEqual(rows.map(\.depth), [0, 1, 1, 1, 1, 2, 1])
+        func row(_ id: UUID) -> HistoryRow { rows.first { $0.id == id }! }
+        XCTAssertTrue(row(p.id).changes.isEmpty)
+        XCTAssertTrue(row(keep.id).changes.isEmpty)
+        XCTAssertEqual(row(rename.id).changes, [.renamed]); XCTAssertEqual(row(rename.id).oldTitle, "old name")
+        XCTAssertEqual(row(finish.id).changes, [.completed]); XCTAssertTrue(row(finish.id).done)
+        XCTAssertEqual(row(goneID).changes, [.deleted]); XCTAssertTrue(row(goneID).deleted)
+        XCTAssertTrue(row(goneChildID).deleted)
+        XCTAssertEqual(row(fresh.id).changes, [.added])
+        XCTAssertEqual(HistoryView.summary(rows), "1 added · 2 deleted · 1 renamed · 1 completed")
+
+        // Changes only: unchanged items go, except those holding a changed item.
+        XCTAssertEqual(s.history(since: since, changesOnly: true).map(\.title), ["P", "new name", "finish", "gone", "gone child", "fresh"])
+        // Nothing happened in the last minute of a period that starts in the future.
+        XCTAssertTrue(s.history(since: Date().addingTimeInterval(60), changesOnly: true).isEmpty)
+    }
+
     func testSharedAndAIFlowWithMockProvider() async throws {
         AppSettings.shared.provider = .mock
         let c = try makeContainer(); let s = Store(c.mainContext)
