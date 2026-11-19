@@ -76,6 +76,7 @@ struct SchrodingerApp: App {
         CloudSync.shared.opened(sync: sync, error: openError)
         Store(c.mainContext).migrateModesToTags()   // items from before modes became tags
         Store(c.mainContext).pruneDoneDated()       // checked-off dated items, a week after they were done
+        Store(c.mainContext).pruneHistory()         // deleted-item history, 90 days back
         c.mainContext.undoManager = UndoManager()   // enables undo/redo for every edit made through the main context
         return c
     }

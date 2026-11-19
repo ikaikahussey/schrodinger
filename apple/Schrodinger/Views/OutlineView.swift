@@ -398,6 +398,8 @@ struct OutlineView: View {
             Button { finishTyping(); sel.panel = .inbox } label: {
                 Label(openProposals.isEmpty ? "Inbox" : "Inbox (\(openProposals.count))", systemImage: "tray")
             }
+            // What was added, deleted, renamed and completed lately, shown on the outline itself.
+            Button { finishTyping(); sel.panel = .history } label: { Label("History", systemImage: "clock.arrow.circlepath") }
             #if os(macOS)
             SettingsLink { Label("Settings…", systemImage: "gear") }
             #else

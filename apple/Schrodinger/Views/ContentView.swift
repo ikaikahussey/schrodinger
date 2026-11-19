@@ -2,15 +2,15 @@ import SwiftUI
 import SwiftData
 
 enum Panel: String, CaseIterable, Identifiable {
-    case outline, batch, inbox, calendar, digest, activity, settings
+    case outline, batch, inbox, calendar, digest, activity, history, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
-    // The outline is the app; the others open as a sheet over it (from the header's menu: Inbox, and Settings on
+    // The outline is the app; the others open as a sheet over it (from the header's menu: Inbox, History, and Settings on
     // iPhone/iPad). Batch, Calendar, Digest and Activity are kept in code but not reachable from the menu.
     var icon: String {
         switch self {
         case .outline: "list.bullet.indent"; case .batch: "square.stack.3d.up"
-        case .inbox: "tray"; case .calendar: "calendar"; case .digest: "doc.text"; case .activity: "clock"; case .settings: "gear"
+        case .inbox: "tray"; case .calendar: "calendar"; case .digest: "doc.text"; case .activity: "clock"; case .history: "clock.arrow.circlepath"; case .settings: "gear"
         }
     }
 }
@@ -67,6 +67,7 @@ struct ContentView: View {
         case .calendar: CalendarView(sel: sel)
         case .digest: DigestView(sel: sel)
         case .activity: ActivityView()
+        case .history: HistoryView(sel: sel)
         case .settings: SettingsView()
         }
     }
