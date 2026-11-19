@@ -25,7 +25,8 @@ struct Store {
 
     // MARK: - Attachments (photos and links on an item)
     func attachments(for nodeID: UUID) -> [Attachment] {
-        (try? ctx.fetch(FetchDescriptor<Attachment>(predicate: #Predicate { $0.nodeID == nodeID }, sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+        let item = Attachment.Kind.item.rawValue   // links between items are not attachments: see itemLinks(of:)
+        return (try? ctx.fetch(FetchDescriptor<Attachment>(predicate: #Predicate { $0.nodeID == nodeID && $0.kindRaw != item }, sortBy: [SortDescriptor(\.createdAt)]))) ?? []
     }
     @discardableResult
     func addPhoto(_ data: Data, to nodeID: UUID) -> Attachment {
@@ -42,6 +43,31 @@ struct Store {
         return a
     }
     func deleteAttachment(_ a: Attachment) { ctx.delete(a) }
+
+    // MARK: - Links between two items
+    /// Every link the item is part of, oldest first. A link has no direction: it is found from either of its items.
+    func itemLinks(of id: UUID) -> [Attachment] {
+        let item = Attachment.Kind.item.rawValue, other = id.uuidString
+        let made = (try? ctx.fetch(FetchDescriptor<Attachment>(predicate: #Predicate { $0.kindRaw == item && $0.nodeID == id }))) ?? []
+        let received = (try? ctx.fetch(FetchDescriptor<Attachment>(predicate: #Predicate { $0.kindRaw == item && $0.urlString == other }))) ?? []
+        return (made + received).sorted { $0.createdAt < $1.createdAt }
+    }
+    /// The items linked to this one (links whose other item no longer exists are skipped).
+    func linkedItems(of id: UUID) -> [Node] { itemLinks(of: id).compactMap { $0.otherEnd(from: id) }.compactMap { node($0) } }
+    /// Links two items. Returns the link (the existing one if they were already linked); nil if they are the same
+    /// item or either does not exist.
+    @discardableResult
+    func link(_ a: UUID, _ b: UUID) -> Attachment? {
+        guard a != b, node(a) != nil, node(b) != nil else { return nil }
+        if let existing = itemLinks(of: a).first(where: { $0.otherEnd(from: a) == b }) { return existing }
+        let l = Attachment(nodeID: a, kind: .item, urlString: b.uuidString)
+        ctx.insert(l)
+        return l
+    }
+    /// Removes the link between two items, from either side.
+    func unlink(_ a: UUID, _ b: UUID) {
+        for l in itemLinks(of: a) where l.otherEnd(from: a) == b { ctx.delete(l) }
+    }
     func descendants(of id: UUID) -> [Node] {
         var out: [Node] = []
         var queue = children(of: id)
@@ -169,6 +195,10 @@ struct Store {
         // Events made for the deleted items go with them.
         let events = victims.map(\.calendarEventID).filter { !$0.isEmpty }
         if !events.isEmpty { Task { await CalendarService.shared.remove(eventIDs: events) } }
+        // Links to and from the deleted items go too (collected by id: a link between two of them is found twice).
+        var links: [UUID: Attachment] = [:]
+        for v in victims { for l in itemLinks(of: v.id) { links[l.id] = l } }
+        for l in links.values { ctx.delete(l) }
         let parent = n.parentID
         for v in victims {
             for f in attachments(for: v.id) { ctx.delete(f) }

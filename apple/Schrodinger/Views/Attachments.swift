@@ -109,6 +109,8 @@ struct AttachmentStrip: View {
             .foregroundStyle(Color.ink.opacity(0.85))
             .contentShape(Capsule())
             .accessibilityLabel("Link: " + a.displayTitle)
+        case .item:
+            EmptyView()   // links between items are listed by ItemLinkList, not here
         }
     }
 }
