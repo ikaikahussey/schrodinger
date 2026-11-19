@@ -43,6 +43,12 @@ final class AppSettings {
     var iCloudSync: Bool { didSet { d.set(iCloudSync, forKey: "iCloudSync") } }   // takes effect on next launch
     /// The calendar that calendared items are added to as events; empty = none chosen (no calendar is touched).
     var syncCalendarID: String { didSet { d.set(syncCalendarID, forKey: "syncCalendarID") } }
+    /// Notifications for dated items (see Reminders). Off until turned on in Settings, which asks for permission.
+    var remindersOn: Bool { didSet { d.set(remindersOn, forKey: "remindersOn") } }
+    /// Minutes before a timed item's time that its notification goes off (0 = at the time).
+    var reminderLeadMinutes: Int { didSet { d.set(reminderLeadMinutes, forKey: "reminderLead") } }
+    /// Hour of the day an all-day item's notification goes off.
+    var allDayReminderHour: Int { didSet { d.set(allDayReminderHour, forKey: "allDayReminderHour") } }
     var anthropicKey: String {
         get { Keychain.get("anthropic_api_key") ?? "" }
         set { Keychain.set(newValue, for: "anthropic_api_key") }
@@ -57,6 +63,9 @@ final class AppSettings {
         agentMaxTurns = d.object(forKey: "agentMaxTurns") as? Int ?? 12
         iCloudSync = d.bool(forKey: "iCloudSync")
         syncCalendarID = d.string(forKey: "syncCalendarID") ?? ""
+        remindersOn = d.bool(forKey: "remindersOn")
+        reminderLeadMinutes = d.object(forKey: "reminderLead") as? Int ?? 0
+        allDayReminderHour = d.object(forKey: "allDayReminderHour") as? Int ?? 9
     }
 
     func makeProvider() -> any LanguageModelProvider {

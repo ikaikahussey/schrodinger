@@ -13,6 +13,7 @@ struct SchrodingerApp: App {
         let c = AppData.container
         container = c
         _harness = State(initialValue: HarnessEngine(container: c))
+        Reminders.configure()
         #if os(iOS)
         let engine = HarnessEngine(container: c)
         // The handler is written in this main-actor context, so Swift checks at run time that it runs on the main actor.
@@ -26,6 +27,7 @@ struct SchrodingerApp: App {
                 // iOS calls the expiration handler on a queue of its choosing: keep it free of actor isolation.
                 task.expirationHandler = { @Sendable in work.cancel() }
                 _ = await work.value
+                await Reminders.syncAll(container: c)
                 task.setTaskCompleted(success: true)
             }
         }

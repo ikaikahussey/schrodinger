@@ -191,6 +191,7 @@ struct SettingsView: View {
                 if let last = harness.lastRun { Text("Last run \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
             CalendarSyncSection()
+            RemindersSection()
             AppearanceSection()
             Section("Data") {
                 Toggle("Sync between my devices via iCloud", isOn: $settings.iCloudSync)
@@ -251,6 +252,34 @@ struct CalendarSyncSection: View {
             Text("An item you give a date (the calendar button in its field) is added to this calendar as an event and kept up to date. Nothing else in your calendar is changed.").font(.caption).foregroundStyle(.secondary)
         }
         .task { if connected { calendars = await CalendarService.shared.writableCalendars() } }
+    }
+}
+
+/// Notifications for dated items. Permission is asked for here, when the user turns them on.
+struct RemindersSection: View {
+    @State private var settings = AppSettings.shared
+    @State private var denied = false
+    var body: some View {
+        Section("Notifications") {
+            Toggle("Notify me when dated items are due", isOn: Binding(get: { settings.remindersOn }, set: { on in
+                guard on else { settings.remindersOn = false; return }
+                Task { @MainActor in if await Reminders.requestAccess() { settings.remindersOn = true; denied = false } else { denied = true } }
+            }))
+            if settings.remindersOn {
+                Picker("Items with a time", selection: $settings.reminderLeadMinutes) {
+                    Text("At the time").tag(0)
+                    ForEach([5, 15, 30, 60, 120], id: \.self) { m in Text(m < 60 ? "\(m) min before" : "\(m / 60) hr before").tag(m) }
+                }
+                Picker("All-day items", selection: $settings.allDayReminderHour) {
+                    ForEach(5...12, id: \.self) { h in Text(Self.hourLabel(h)).tag(h) }
+                }
+            }
+            if denied { Text("Notifications are off for Schrodinger. Allow them in Settings \u{2192} Notifications.").font(.caption).foregroundStyle(.red) }
+            Text("Each item with a date that isn't done notifies you once, with Done and Remind me in 1 hour. The app icon shows how many are due today or overdue.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private static func hourLabel(_ h: Int) -> String {
+        (Calendar.current.date(bySettingHour: h, minute: 0, second: 0, of: Date()) ?? Date()).formatted(date: .omitted, time: .shortened)
     }
 }
 

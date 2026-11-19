@@ -143,6 +143,8 @@ struct OutlineView: View {
         }
         // Calendared items are mirrored to the calendar chosen in Settings (if any) whenever one of them changes.
         .task(id: CalendarSync.signature(all) + AppSettings.shared.syncCalendarID) { await CalendarSync.syncAll(container: ctx.container) }
+        // Notifications for dated items are rescheduled whenever one of them (or the notification settings) changes.
+        .task(id: Reminders.signature(all)) { await Reminders.syncAll(container: ctx.container) }
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in

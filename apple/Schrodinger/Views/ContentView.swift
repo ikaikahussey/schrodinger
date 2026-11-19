@@ -33,6 +33,8 @@ final class Selection {
 struct ContentView: View {
     @Environment(HarnessEngine.self) private var harness
     @State private var sel = Selection()
+    @State private var router = ReminderRouter.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         // The same on every platform: no sidebar or tab bar, the outline is the app. Inbox (and, on iPhone/iPad,
@@ -55,6 +57,10 @@ struct ContentView: View {
             }
         .environment(sel)
         .font(Appearance.shared.font.font(.body))
+        // A tapped notification opens its item.
+        .onChange(of: router.openID, initial: true) { _, id in if let id { sel.open(id); router.openID = nil } }
+        // Back in the foreground: time has passed, so the badge and the next notifications are brought up to date.
+        .onChange(of: scenePhase) { _, p in if p == .active { Task { await Reminders.syncAll(container: AppData.container) } } }
         // No global Run button: an item shows a play button when the AI has something to run on it (see NodeRow).
     }
 
