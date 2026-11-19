@@ -1207,12 +1207,13 @@ struct NodeRow: View {
                     .simultaneousGesture(handleGesture(onText: true))
                     #endif
             } else {
-            // Open: the title, with the item's controls on the same line, at its right end.
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
+            // Open: the title at the field's full width, with the item's controls on their own line below it.
+            VStack(alignment: .leading, spacing: 6) {
             TextField("", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(titleFont)
-                .fixedSize(horizontal: false, vertical: true)   // wraps to as many lines as it needs beside the controls
+                .fixedSize(horizontal: false, vertical: true)   // wraps to as many lines as it needs
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .strikethrough(done)
                 .foregroundStyle(done ? Color.ink.opacity(0.4) : Color.ink)
                 .focused(focused, equals: node.id)
@@ -1458,7 +1459,7 @@ struct NodeRow: View {
         }
     }
 
-    /// The item field's controls, as bare glyphs along its bottom edge: who holds the item (tap to change), add
+    /// The item field's controls, as bare glyphs on their own line under the title: who holds the item (tap to change), add
     /// photos, calendar (give the item a date), ask the AI for suggestions. At the right: show/hide children (only
     /// when there are some), new child, and Done. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
@@ -1487,7 +1488,9 @@ struct NodeRow: View {
             FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
-            // Delete; an item with children asks whether they go too.
+            Spacer(minLength: 12)
+            // Delete; an item with children asks whether they go too. Kept apart from the editing controls, at the
+            // right next to Done.
             FieldIcon(systemImage: "trash", width: ItemField.compact) { askDelete() }
                 .help("Delete item").accessibilityLabel("Delete item")
             // Done: close the item's field.
@@ -1495,9 +1498,9 @@ struct NodeRow: View {
                 .keyboardShortcut(.escape, modifiers: [])
                 .help("Done (Esc)").accessibilityLabel("Done")
         }
-        .fixedSize()
-        // The last glyph's right edge sits near the field's right edge.
-        .padding(.trailing, -(ItemField.compact - 18) / 2)
+        .frame(maxWidth: .infinity)
+        // The first glyph lines up with the text's left edge; the last sits near the field's right edge.
+        .padding(.horizontal, -(ItemField.compact - 18) / 2)
     }
     /// Who holds the item: me, then the AI, then both, then me again.
     private func cycleAssignee() {
