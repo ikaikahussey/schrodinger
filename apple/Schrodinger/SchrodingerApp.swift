@@ -45,7 +45,7 @@ struct SchrodingerApp: App {
             .windowToolbarStyle(.unified(showsTitle: true))
             .windowResizability(.contentMinSize)
             .defaultSize(width: 900, height: 820)
-            .commands { UndoCommands() }
+            .commands { UndoCommands(); TextSizeCommands() }
         Settings { SettingsView().modelContainer(container).environment(harness) }
         #else
         WindowGroup { ContentView().environment(harness).task { harness.start() } }
@@ -80,3 +80,25 @@ struct SchrodingerApp: App {
         return c
     }
 }
+
+#if os(macOS)
+/// View ▸ Bigger (⌘+), Smaller (⌘−), Actual Size (⌘0): the size of the outline's text, kept between launches.
+struct TextSizeCommands: Commands {
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            let look = Appearance.shared
+            Divider()
+            Button("Bigger") { look.enlargeText() }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(!look.canEnlargeText)
+            Button("Smaller") { look.shrinkText() }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(!look.canShrinkText)
+            Button("Actual Size") { look.textScale = 1 }
+                .keyboardShortcut("0", modifiers: .command)
+                .disabled(look.textScale == 1)
+            Divider()
+        }
+    }
+}
+#endif
