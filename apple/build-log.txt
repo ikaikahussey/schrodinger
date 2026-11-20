@@ -1,0 +1,163 @@
+=== Fri Nov 20 12:39:07 HST 2026 ===
+Xcode: /Applications/Xcode-beta.app
+Xcode 27.3
+Build version 27C5020n
+ASC key: HCR695GXUA (present)  team: 3D52FT6PP7
+--- git pull
+Already up to date.
+--- xcodegen
+/opt/homebrew/bin/xcodegen
+⚙️  Generating plists...
+⚙️  Generating project...
+⚙️  Writing project...
+Created project at /Users/ikaika/Documents/VIBE/schrodinger/apple/Schrodinger.xcodeproj
+--- build macOS (compile check)
+** BUILD SUCCEEDED **
+--- build iOS (compile check)
+** BUILD SUCCEEDED **
+--- tests macOS
+Test Case '-[SchrodingerTests.StoreTests testItemAdvisorFilesSuggestionsAndAcceptApplies]' started.
+Test Case '-[SchrodingerTests.StoreTests testItemAdvisorFilesSuggestionsAndAcceptApplies]' passed (0.006 seconds).
+Test Case '-[SchrodingerTests.StoreTests testItemLinks]' started.
+Test Case '-[SchrodingerTests.StoreTests testItemLinks]' passed (0.006 seconds).
+Test Case '-[SchrodingerTests.StoreTests testLinksComeOutOfText]' started.
+Test Case '-[SchrodingerTests.StoreTests testLinksComeOutOfText]' passed (0.000 seconds).
+Test Case '-[SchrodingerTests.StoreTests testListLinesBecomeItems]' started.
+Test Case '-[SchrodingerTests.StoreTests testListLinesBecomeItems]' passed (0.000 seconds).
+Test Case '-[SchrodingerTests.StoreTests testModesBecomeTags]' started.
+Test Case '-[SchrodingerTests.StoreTests testModesBecomeTags]' passed (0.003 seconds).
+Test Case '-[SchrodingerTests.StoreTests testProposalsOnlyApplyOnAccept]' started.
+Test Case '-[SchrodingerTests.StoreTests testProposalsOnlyApplyOnAccept]' passed (0.005 seconds).
+Test Case '-[SchrodingerTests.StoreTests testPruneDoneDatedRemovesOnlyOldCheckedLeaves]' started.
+Test Case '-[SchrodingerTests.StoreTests testPruneDoneDatedRemovesOnlyOldCheckedLeaves]' passed (0.004 seconds).
+Test Case '-[SchrodingerTests.StoreTests testRecommendedTasksAreFiledOnceAndAcceptAddsThem]' started.
+Test Case '-[SchrodingerTests.StoreTests testRecommendedTasksAreFiledOnceAndAcceptAddsThem]' passed (0.005 seconds).
+Test Case '-[SchrodingerTests.StoreTests testSavedViewMatchingNamingAndDecoding]' started.
+Test Case '-[SchrodingerTests.StoreTests testSavedViewMatchingNamingAndDecoding]' passed (0.001 seconds).
+Test Case '-[SchrodingerTests.StoreTests testSavedViewsSaveReplaceRenameDelete]' started.
+Test Case '-[SchrodingerTests.StoreTests testSavedViewsSaveReplaceRenameDelete]' passed (0.005 seconds).
+Test Case '-[SchrodingerTests.StoreTests testTagsAreDetected]' started.
+Test Case '-[SchrodingerTests.StoreTests testTagsAreDetected]' passed (0.002 seconds).
+Test Case '-[SchrodingerTests.StoreTests testTreeProgressAndMoveGuard]' started.
+Test Case '-[SchrodingerTests.StoreTests testTreeProgressAndMoveGuard]' passed (0.003 seconds).
+Test Case '-[SchrodingerTests.StoreTests testUndoAndPathJail]' started.
+Test Case '-[SchrodingerTests.StoreTests testUndoAndPathJail]' passed (0.002 seconds).
+	 Executed 23 tests, with 0 failures (0 unexpected) in 0.100 (0.103) seconds
+	 Executed 33 tests, with 0 failures (0 unexpected) in 0.116 (0.122) seconds
+	 Executed 33 tests, with 0 failures (0 unexpected) in 0.116 (0.122) seconds
+** TEST SUCCEEDED **
+--- signing prep (device registration + certificates via App Store Connect API)
+device: already registered (00008132-0002658111F9001C)
+cert: Apple Development present (build keychain)
+cert: Apple Distribution present (build keychain)
+cert: 3rd Party Mac Developer Installer present (build keychain)
+identities:
+  1) 8E16C7B29432509D88CACE80319506A7B305EEE7 "Apple Development: Created via API (9CLX5GTX69)"
+  2) EB7A9018A2BE699562FA250B64B2EDB1E74896DC "Apple Distribution: Ikaika Hussey (3D52FT6PP7)"
+  3) 2D8E0298E5DB60F72FE58D4DCED517535C743373 "3rd Party Mac Developer Installer: Ikaika Hussey (3D52FT6PP7)"
+profiles: reusing Schrodinger iOS App Store
+profiles: reusing Schrodinger macOS App Store
+--- archive iOS
+** ARCHIVE SUCCEEDED **
+--- upload iOS (profile: Schrodinger iOS App Store)
+** EXPORT SUCCEEDED **
+2026-11-20 12:40:14.770 xcodebuild[27966:3938119] Starting upload
+2026-11-20 12:40:16.293 xcodebuild[27966:3938120] Progress 0%: Preparing to upload ‘Schrodinger.ipa’…
+2026-11-20 12:41:08.946 xcodebuild[27966:3938147] Progress 0%: Requesting upload instructions from App Store Connect…
+2026-11-20 12:41:10.191 xcodebuild[27966:3938147] Progress 0%: Preparing file for upload to App Store Connect…
+2026-11-20 12:41:10.197 xcodebuild[27966:3938147] Progress 0%: Preparing file for upload to App Store Connect…
+2026-11-20 12:41:10.607 xcodebuild[27966:3938147] Progress 0%: Uploading to App Store Connect…
+2026-11-20 12:41:10.608 xcodebuild[27966:3938147] Progress 0%: Uploading to App Store Connect…
+2026-11-20 12:41:10.931 xcodebuild[27966:3938147] Progress 92%: Uploading to App Store Connect…
+2026-11-20 12:41:10.932 xcodebuild[27966:3938147] Progress 92%: Uploading to App Store Connect…
+2026-11-20 12:41:11.327 xcodebuild[27966:3938147] Progress 100%: Uploading to App Store Connect…
+2026-11-20 12:41:11.328 xcodebuild[27966:3938147] Progress 100%: Uploading to App Store Connect…
+2026-11-20 12:41:11.681 xcodebuild[27966:3938147] Progress 0%: Getting upload status…
+2026-11-20 12:41:11.681 xcodebuild[27966:3938147] Progress 0%: Uploading to App Store Connect…
+2026-11-20 12:41:12.128 xcodebuild[27966:3938147] Progress 0%: Completing upload…
+2026-11-20 12:41:13.752 xcodebuild[27966:3938147] Progress 0%: Uploading “Schrodinger.ipa” is complete.
+2026-11-20 12:41:13.753 xcodebuild[27966:3938147] Progress 0%: Uploading “Schrodinger.ipa” is complete.
+2026-11-20 12:41:13.753 xcodebuild[27966:3938147] Progress 100%: Uploading “Schrodinger.ipa” is complete.
+2026-11-20 12:41:13.947 xcodebuild[27966:3938147] Progress 100%: Uploaded package is processing.
+2026-11-20 12:41:13.953 xcodebuild[27966:3938147] Progress 100%: Upload succeeded.
+Uploaded Schrodinger_iOS
+--- archive macOS
+** ARCHIVE SUCCEEDED **
+--- upload macOS (profile: Schrodinger macOS App Store)
+** EXPORT SUCCEEDED **
+2026-11-20 12:41:51.966 xcodebuild[28090:3940697] Starting upload
+2026-11-20 12:41:53.547 xcodebuild[28090:3940716] Progress 0%: Preparing to upload ‘Schrodinger.pkg’…
+2026-11-20 12:42:47.204 xcodebuild[28090:3940736] Progress 0%: Requesting upload instructions from App Store Connect…
+2026-11-20 12:42:48.349 xcodebuild[28090:3940736] Progress 0%: Preparing file for upload to App Store Connect…
+2026-11-20 12:42:48.353 xcodebuild[28090:3940736] Progress 0%: Preparing file for upload to App Store Connect…
+2026-11-20 12:42:48.773 xcodebuild[28090:3940736] Progress 0%: Uploading to App Store Connect…
+2026-11-20 12:42:48.774 xcodebuild[28090:3940736] Progress 0%: Uploading to App Store Connect…
+2026-11-20 12:42:49.095 xcodebuild[28090:3940736] Progress 45%: Uploading to App Store Connect…
+2026-11-20 12:42:49.096 xcodebuild[28090:3940736] Progress 45%: Uploading to App Store Connect…
+2026-11-20 12:42:49.530 xcodebuild[28090:3940736] Progress 100%: Uploading to App Store Connect…
+2026-11-20 12:42:50.326 xcodebuild[28090:3940736] Progress 0%: Getting upload status…
+2026-11-20 12:42:50.326 xcodebuild[28090:3940736] Progress 0%: Uploading to App Store Connect…
+2026-11-20 12:42:50.744 xcodebuild[28090:3940736] Progress 0%: Completing upload…
+2026-11-20 12:42:52.376 xcodebuild[28090:3940736] Progress 0%: Uploading “Schrodinger.pkg” is complete.
+2026-11-20 12:42:52.377 xcodebuild[28090:3940736] Progress 100%: Uploading “Schrodinger.pkg” is complete.
+2026-11-20 12:42:52.562 xcodebuild[28090:3940736] Progress 100%: Uploaded package is processing.
+2026-11-20 12:42:52.569 xcodebuild[28090:3940736] Progress 100%: Upload succeeded.
+Uploaded Schrodinger_macOS
+--- TestFlight status (waits up to 10 min for Apple to process)
+--- TestFlight builds for app 6834190372 (12 most recent)
+  MAC_OS 1.0 (202611202036)  VALID       uploaded 2026-11-20T12:43
+  IOS    1.0 (202611202036)  VALID       uploaded 2026-11-20T12:41
+  MAC_OS 1.0 (202611201051)  VALID       uploaded 2026-11-20T02:57
+  IOS    1.0 (202611201051)  VALID       uploaded 2026-11-20T02:55
+  MAC_OS 1.0 (202611201042)  VALID       uploaded 2026-11-20T02:52
+  IOS    1.0 (202611201042)  VALID       uploaded 2026-11-20T02:50
+  MAC_OS 1.0 (202611201038)  VALID       uploaded 2026-11-20T02:48
+  IOS    1.0 (202611201038)  VALID       uploaded 2026-11-20T02:45
+  MAC_OS 1.0 (202611192114)  VALID       uploaded 2026-11-19T13:19
+  IOS    1.0 (202611192114)  VALID       uploaded 2026-11-19T13:17
+  MAC_OS 1.0 (202611190124)  VALID       uploaded 2026-11-18T17:34
+  IOS    1.0 (202611190124)  VALID       uploaded 2026-11-18T17:30
+--- build 202611202235: 0 uploaded, 0 processed
+--- beta groups: 1
+  test (internal=True, allBuilds=True) testers: ikaikahussey@gmail.com, jtal04@gmail.com
+  team members eligible as internal testers: ikaikahussey@gmail.com, jtal04@gmail.com
+--- crash reports
+TestFlight crash submissions: 1
+== 2026-11-16T03:45:47  iPhone15_2 27.0  build ?  comment: Crashed 
+Hardware Model:      iPhone15,2
+Version:             1.1.0 (202611151638)
+OS Version:          iPhone OS 27.0 (24A5408d)
+Baseband Version:    6.00.01
+Report Version:      104
+Exception Type:  EXC_BREAKPOINT (SIGTRAP)
+Exception Codes: 0x0000000000000001, 0x00000001b78b062c
+Termination Reason: SIGNAL 5 Trace/BPT trap: 5
+Triggered by Thread:  9
+Thread 9 Crashed:
+0   libdispatch.dylib             	0x00000001b78b062c _dispatch_assert_queue_fail + 120 (:-1)
+1   libdispatch.dylib             	0x00000001b787c728 dispatch_assert_queue + 196 (:-1)
+2   libswift_Concurrency.dylib    	0x000000018ac0008c _swift_task_checkIsolatedSwift + 48 (:-1)
+3   libswift_Concurrency.dylib    	0x000000018abd6d6c swift_task_isCurrentExecutorWithFlagsImpl(swift::SerialExecutorRef, swift::swift_task_is_current_executor_flag) + 356 (:-1)
+4   Schrodinger                   	0x00000001047926c4 closure #1 in SchrodingerApp.init() + 160 (<stdin>:0)
+5   Schrodinger                   	0x00000001046fbab0 <deduplicated_symbol> + 44
+6   BackgroundTasks               	0x00000001b8a3839c __41-[BGTaskScheduler _runTask:registration:]_block_invoke_3.107 + 204 (:-1)
+7   libdispatch.dylib             	0x00000001b7878ccc _dispatch_call_block_and_release + 32 (:-1)
+8   libdispatch.dylib             	0x00000001b7892fc0 _dispatch_client_callout + 16 (:-1)
+9   libdispatch.dylib             	0x00000001b788187c _dispatch_continuation_invoke_inline + 240 (:-1)
+10  libdispatch.dylib             	0x00000001b788187c _dispatch_continuation_pop_inline + 276 (:-1)
+11  libdispatch.dylib             	0x00000001b788187c _dispatch_lane_drain + 604 (:-1)
+12  libdispatch.dylib             	0x00000001b788187c _dispatch_lane_serial_drain + 644 (:-1)
+13  libdispatch.dylib             	0x00000001b7882470 _dispatch_lane_invoke2 + 56 (:-1)
+14  libdispatch.dylib             	0x00000001b7882470 _dispatch_queue_class_invoke + 264 (:-1)
+15  libdispatch.dylib             	0x00000001b7882470 _dispatch_lane_invoke + 312 (:-1)
+16  libdispatch.dylib             	0x00000001b788cc98 _dispatch_root_queue_drain_deferred_wlh + 248 (:-1)
+17  libdispatch.dylib             	0x00000001b788c6bc _dispatch_wlh_worker_thread + 28 (:-1)
+18  libdispatch.dylib             	0x00000001b788c6bc _dispatch_workloop_worker_thread + 640 (:-1)
+19  libsystem_pthread.dylib       	0x00000001894fb238 _pthread_wqthread + 292 (:-1)
+20  libsystem_pthread.dylib       	0x00000001894fa910 start_wqthread + 8 (:-1)
+Thread 10:
+Thread 11:
+Thread 12:
+Thread 13:
+macOS crash reports on this Mac: 0
+=== done Fri Nov 20 12:43:56 HST 2026 ===
