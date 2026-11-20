@@ -670,7 +670,7 @@ struct OutlineView: View {
         let hidden = ((filter != .all || tagFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
-            NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
+            NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, childCount: children.count, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) },
@@ -1024,6 +1024,8 @@ struct NodeRow: View {
     var trail: [Color] = []
     var color: Color = .ink
     let hasChildren: Bool
+    /// How many items sit directly under this one (shown as a badge in the control strip).
+    var childCount = 0
     let leafCount: (done: Int, total: Int)
     var sel: Selection
     var focused: FocusState<UUID?>.Binding
@@ -1497,8 +1499,8 @@ struct NodeRow: View {
     }
 
     /// The item field's controls, as bare glyphs on their own line under the title: who holds the item (tap to change), add
-    /// photos, calendar (give the item a date), link to another item, ask the AI for suggestions. At the right: show/hide children (only
-    /// when there are some), new child, and Done. Approve / Redo join them at the right while an AI draft awaits
+    /// photos, calendar (give the item a date), link to another item, new child, new item below. At the right: the
+    /// child count (a badge, only when there are children; tap it to show or hide them), Delete, and Done. Approve / Redo join them at the right while an AI draft awaits
     /// review. Links have no button: a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
         let empty = title.trimmingCharacters(in: .whitespaces).isEmpty
@@ -1530,6 +1532,11 @@ struct NodeRow: View {
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
             Spacer(minLength: 12)
+            // How many children the item has: filled while they are on screen, outlined while hidden. Tap: show/hide.
+            if childCount > 0 {
+                ChildCountBadge(count: childCount, shown: childrenShown) { withAnimation(.snappy(duration: 0.22)) { toggleChildren() } }
+                    .padding(.trailing, 6)
+            }
             // Delete; an item with children asks whether they go too. Kept apart from the editing controls, at the
             // right next to Done.
             FieldIcon(systemImage: "trash", width: ItemField.compact) { askDelete() }

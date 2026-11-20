@@ -122,6 +122,48 @@ struct FieldCircle: View {
     }
 }
 
+/// The child count in the control strip: a two-part capsule in the scheme's main color. The left block carries the
+/// outline glyph, the right the number in the panel's condensed bold digits, two wide ("03") so the badge keeps its
+/// size as the count changes. Filled while the children are on screen, outlined while they are hidden; tap to
+/// show or hide them.
+struct ChildCountBadge: View {
+    let count: Int
+    /// The children are on screen.
+    var shown = true
+    let action: () -> Void
+
+    private var fill: Color { PanelPalette.orange }
+    private var digits: String { count < 10 ? "0\(count)" : "\(count)" }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 0) {
+                // Left block: always solid, with the glyph cut in the color that reads on it.
+                Image(systemName: "list.bullet.indent")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(PanelPalette.text(on: fill))
+                    .frame(width: 22, height: 20)
+                    .background { fill.panelBlink(41) }
+                // Right block: the number. Solid when the children are shown, open when they are hidden.
+                Text(digits)
+                    .font(PanelPalette.label(.caption).monospacedDigit())
+                    .foregroundStyle(shown ? PanelPalette.text(on: fill) : Color.ink.opacity(0.85))
+                    .padding(.leading, 5).padding(.trailing, 8)
+                    .frame(minWidth: 26, minHeight: 20)
+                    .background { if shown { fill.opacity(0.78) } }
+            }
+            .clipShape(Capsule())
+            .overlay { Capsule().strokeBorder(fill, lineWidth: 1.5) }
+            .frame(height: 22)
+            .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .help("\(count) " + (count == 1 ? "child" : "children") + (shown ? " · tap to hide" : " · tap to show"))
+        .accessibilityLabel("\(count) " + (count == 1 ? "child" : "children"))
+        .accessibilityHint(shown ? "Hides the children" : "Shows the children")
+    }
+}
+
 /// One AI suggestion in the item field: what it is, what accepting it would do, and the two buttons that answer it
 /// (accept, dismiss). A remark with nothing to apply has only dismiss.
 struct SuggestionRow: View {
