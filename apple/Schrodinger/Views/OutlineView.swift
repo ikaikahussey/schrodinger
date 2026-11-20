@@ -14,6 +14,12 @@ struct OutlineView: View {
     @Query(filter: #Predicate<Proposal> { $0.statusRaw == "open" }) private var openProposals: [Proposal]
     /// Photos and links on items, oldest first; grouped by item in `body`.
     @Query(sort: [SortDescriptor(\Attachment.createdAt)]) private var attachments: [Attachment]
+    /// Workspace files; the saved views are the ones on their reserved shelf (see `SavedView`).
+    @Query(sort: [SortDescriptor(\WorkspaceFile.path)]) private var workspaceFiles: [WorkspaceFile]
+    /// Saved views: the name prompt is up; the name being typed; and the view being renamed (nil: saving a new one).
+    @State private var namingView = false
+    @State private var viewName = ""
+    @State private var renamingView: SavedView? = nil
     @State private var filter: Filter = .all
     /// Show only items with this tag (nil: any).
     @State private var tagFilter: String? = nil
@@ -191,6 +197,13 @@ struct OutlineView: View {
         .fileExporter(isPresented: $exportingCSV, item: CSVExport(text: exportingCSV ? Exporter.csv(zoomID, store: store) : ""),
                       contentTypes: [.commaSeparatedText], defaultFilename: exportName) { result in
             if case .failure(let e) = result { importFailure = e.localizedDescription }
+        }
+        .alert(viewPromptTitle, isPresented: $namingView) {
+            TextField("Name", text: $viewName)
+            Button(viewPromptButton) { commitViewName() }
+            Button("Cancel", role: .cancel) { renamingView = nil }
+        } message: {
+            Text(viewPromptMessage)
         }
         .alert("Import failed", isPresented: Binding(get: { importFailure != nil }, set: { if !$0 { importFailure = nil } })) { Button("OK") {} } message: { Text(importFailure ?? "") }
         // iPhone/iPad: the breadcrumb bar is the header (logo, path, filter); the system navigation bar is not shown.
@@ -399,6 +412,27 @@ struct OutlineView: View {
                 Divider()
                 Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; tagFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
             }
+            // Saved views: a search, filter and zoom kept under a name. Tap one to return to it.
+            let views = savedViews
+            if !views.isEmpty {
+                Section("Saved views") {
+                    ForEach(views) { v in
+                        Button { apply(v) } label: { if isCurrent(v) { Label(v.name, systemImage: "checkmark") } else { Text(v.name) } }
+                    }
+                }
+            }
+            Button { beginSaveView() } label: { Label("Save this view\u{2026}", systemImage: "bookmark") }
+                .disabled(!canSaveView)
+            if !views.isEmpty {
+                Menu {
+                    ForEach(views) { v in
+                        Menu(v.name) {
+                            Button { beginRename(v) } label: { Label("Rename\u{2026}", systemImage: "pencil") }
+                            Button(role: .destructive) { deleteView(v) } label: { Label("Delete", systemImage: "trash") }
+                        }
+                    }
+                } label: { Label("Edit saved views", systemImage: "bookmark.slash") }
+            }
             Divider()
             // Import a CSV, text or Markdown file (a note exported from Notes, say): it becomes a new item, with the
             // file's lines as its children. Zoomed in, it goes under the zoomed item.
@@ -582,13 +616,34 @@ struct OutlineView: View {
         .accessibilityLabel("Search")
     }
 
-    /// Tag buttons, shown under the header while searching. Tap one to add or remove it from the search.
+    /// Saved-view and tag buttons, shown under the header while searching. Tap a saved view to go to it (hold or
+    /// right-click it to rename or delete); tap a tag to add or remove it from the search.
     @ViewBuilder private var tagBar: some View {
         let tags = allTags
-        if (searchFocused || searching) && !tags.isEmpty {
+        let views = savedViews
+        if (searchFocused || searching) && !(tags.isEmpty && views.isEmpty) {
             let active = Set(searchTerms.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()) })
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
+                    ForEach(views) { v in
+                        let on = isCurrent(v)
+                        let fill = on ? PanelPalette.peach : PanelPalette.lavender
+                        Button { apply(v) } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: on ? "bookmark.fill" : "bookmark").font(.system(size: 9, weight: .heavy))
+                                Text(v.name.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1)
+                            }
+                            .foregroundStyle(PanelPalette.text(on: fill))
+                            .padding(.horizontal, 9).frame(height: 24)
+                            .background { fill.panelBlink(50 + v.position) }
+                        }
+                        .contextMenu {
+                            Button { beginRename(v) } label: { Label("Rename\u{2026}", systemImage: "pencil") }
+                            Button(role: .destructive) { deleteView(v) } label: { Label("Delete", systemImage: "trash") }
+                        }
+                        .accessibilityLabel("Saved view: " + v.name)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
                     ForEach(tags, id: \.self) { t in
                         let on = active.contains(t)
                         let fill = on ? PanelPalette.peach : PanelPalette.color(for: t)
@@ -610,6 +665,56 @@ struct OutlineView: View {
             .transition(.opacity)
         }
     }
+    // MARK: Saved views
+
+    private var savedViews: [SavedView] { SavedView.all(in: workspaceFiles) }
+    /// There is something to save: a search, a filter, a tag, or a zoom.
+    private var canSaveView: Bool { !SavedView.isPlain(search: search, filter: filter.rawValue, tag: tagFilter, zoomID: zoomID) }
+    /// The outline is showing exactly this saved view. A view whose zoomed item is gone counts as not zoomed.
+    private func isCurrent(_ v: SavedView) -> Bool {
+        var e = v
+        e.zoomID = v.zoomID.flatMap { store.node($0)?.id }
+        return canSaveView && e.matches(search: search, filter: filter.rawValue, tag: tagFilter, zoomID: zoomID)
+    }
+    private var viewPromptTitle: String { renamingView == nil ? "Save this view" : "Rename saved view" }
+    private var viewPromptButton: String { renamingView == nil ? "Save" : "Rename" }
+    private var viewPromptMessage: String {
+        renamingView == nil ? "Saves the current search, filter and zoom. A view already saved under this name is replaced."
+                            : "Another saved view can't have the same name."
+    }
+    /// Go to a saved view: its zoom, filter, tag and search replace the current ones.
+    private func apply(_ v: SavedView) {
+        finishTyping()
+        // An item deleted since the view was saved: the rest of the view still applies, on the whole outline.
+        let target = v.zoomID.flatMap { store.node($0)?.id }
+        if target != zoomID { zoom(to: target) }
+        withAnimation(.snappy(duration: 0.25)) {
+            filter = Filter(rawValue: v.filter) ?? .all
+            tagFilter = v.tag
+            search = v.search
+        }
+    }
+    private func beginSaveView() {
+        finishTyping()
+        renamingView = nil
+        // Saving again while on a saved view offers its name (which updates it).
+        viewName = savedViews.first(where: isCurrent)?.name ?? SavedView.suggestedName(
+            search: search, filterLabel: filter == .all ? nil : filter.label, tag: tagFilter,
+            zoomTitle: zoomID.flatMap { store.node($0) }.map { $0.title.isEmpty ? "Untitled" : $0.title })
+        namingView = true
+    }
+    private func beginRename(_ v: SavedView) {
+        finishTyping()
+        renamingView = v; viewName = v.name; namingView = true
+    }
+    private func commitViewName() {
+        if let v = renamingView { store.renameView(v.id, to: viewName) }
+        else { store.saveView(name: viewName, search: search, filter: filter.rawValue, tag: tagFilter, zoomID: zoomID) }
+        renamingView = nil
+        store.save()
+    }
+    private func deleteView(_ v: SavedView) { store.deleteView(v.id); store.save() }
+
     /// Open an item with the keyboard in its text.
     private func beginEdit(_ id: UUID) { sel.nodeID = id; sel.infoID = id; editRequest = id }
     /// Done: put the keyboard away and close the open item.
