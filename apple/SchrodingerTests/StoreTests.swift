@@ -416,3 +416,31 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(SavedView(json: "not json"))
     }
 }
+
+/// The glyphs in an item's mark (date, notes, links, photos): which ones an item has, and which fit.
+final class MarkIndicatorTests: XCTestCase {
+    func testPresentListsWhatTheItemHasInOrder() {
+        XCTAssertEqual(MarkIndicator.present(hasDate: false, hasNotes: false, webLinks: 0, itemLinks: 0, photos: 0, checkable: false), [])
+        XCTAssertEqual(MarkIndicator.present(hasDate: true, hasNotes: true, webLinks: 2, itemLinks: 1, photos: 3, checkable: false),
+                       [.date, .note, .link, .itemLink, .photo])
+        // The check box already says "dated": no date glyph beside it.
+        XCTAssertEqual(MarkIndicator.present(hasDate: true, hasNotes: true, webLinks: 0, itemLinks: 1, photos: 0, checkable: true), [.note, .itemLink])
+    }
+
+    func testOnlyAsManyAsFitAreDrawn() {
+        let all = MarkIndicator.allCases
+        func fit(_ depth: Int, check: Bool = false, ai: Bool = false) -> [MarkIndicator] {
+            MarkIndicator.fitting(all, width: Double(16 * (depth + 1)), cell: 16, checkable: check, aiGlyph: ai)
+        }
+        XCTAssertEqual(fit(0), [.date])                        // a circle holds one
+        XCTAssertEqual(fit(0, check: true), [])                // the check box fills a circle
+        XCTAssertEqual(fit(0, ai: true), [])
+        XCTAssertEqual(fit(1), [.date, .note])
+        XCTAssertEqual(fit(1, check: true), [.date])
+        XCTAssertEqual(fit(1, check: true, ai: true), [])
+        XCTAssertEqual(fit(2), [.date, .note, .link, .itemLink])
+        XCTAssertEqual(fit(2, check: true, ai: true), [.date])
+        XCTAssertEqual(fit(4), all)
+        XCTAssertEqual(MarkIndicator.fitting([.note], width: 16, cell: 16, checkable: false, aiGlyph: false), [.note])
+    }
+}
