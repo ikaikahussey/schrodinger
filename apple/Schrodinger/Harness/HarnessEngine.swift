@@ -4,14 +4,14 @@ import SwiftData
 import BackgroundTasks
 #endif
 
-/// Master harness: runs one sub-agent per active project, concurrently, entirely on device.
+/// Housekeeping over the outline, on a timer while the app is open (and on iOS background refresh): notices about
+/// stale and blocked items, prep tasks for calendar events, and each project's digest. It calls no model. The AI's
+/// own work (handed-off items, recommended tasks) is done by `JobQueue`.
 @MainActor
 @Observable
 final class HarnessEngine {
     let container: ModelContainer
     private(set) var running = false
-    /// Items the current run is limited to (nil = everything). Rows use it to show which play button is working.
-    private(set) var runningScope: Set<UUID>? = nil
     private(set) var lastRun: Date? = nil
     private(set) var lastResults: [String] = []
     private var timer: Timer? = nil
@@ -19,13 +19,13 @@ final class HarnessEngine {
     init(container: ModelContainer) { self.container = container }
 
     // MARK: Scheduling
-    /// Runs one project's agent and records the run. Static and MainActor-isolated so the task group captures only Sendable values.
+    /// Runs one project's housekeeping and records the run.
     @MainActor
-    static func runProject(container: ModelContainer, projectID: UUID, title: String, provider: any LanguageModelProvider, only: Set<UUID>? = nil) async -> String {
+    static func runProject(container: ModelContainer, projectID: UUID, title: String) async -> String {
         let store = Store(container.mainContext)
         let run = store.startRun(projectID: projectID)
         do {
-            let out = try await ProjectAgent(container: container, projectID: projectID, provider: provider, only: only).run()
+            let out = try await ProjectAgent(container: container, projectID: projectID, provider: MockProvider()).run()
             run.status = "ok"; run.log = out.joined(separator: "\n")
         } catch { run.status = "error"; run.log = error.localizedDescription }
         run.finishedAt = Date()
@@ -54,36 +54,28 @@ final class HarnessEngine {
 
     // MARK: Run
     @discardableResult
-    func runOnce(projectID: UUID? = nil, only: Set<UUID>? = nil) async -> [String] {
+    func runOnce(projectID: UUID? = nil) async -> [String] {
         if running { return ["already running"] }
-        running = true; runningScope = only
-        defer { running = false; runningScope = nil }
+        running = true
+        defer { running = false }
         let store = Store(container.mainContext)
-        let projects = store.projects().filter { $0.projectStatus == .active && (projectID == nil || $0.id == projectID) }
-        let provider = AppSettings.shared.makeProvider()
-        let container = self.container
-        let ids = projects.map { ($0.id, $0.title) }
+        let ids = store.projects().filter { $0.projectStatus == .active && (projectID == nil || $0.id == projectID) }.map { ($0.id, $0.title) }
         var results: [String] = []
-        await withTaskGroup(of: String.self) { group in
-            for (pid, title) in ids {
-                group.addTask { await HarnessEngine.runProject(container: container, projectID: pid, title: title, provider: provider, only: only) }
-            }
-            for await r in group { results.append(r) }
-        }
+        for (pid, title) in ids { results.append(await HarnessEngine.runProject(container: container, projectID: pid, title: title)) }
         lastRun = Date(); lastResults = results
+        // Recommendations ride along: about once a day, when they are on.
+        JobQueue.shared.suggestIfDue()
         return results
     }
 }
 
-/// One project's sub-agent. Allowed to: execute its AI tasks (and the AI part of shared tasks), file proposals,
-/// write the digest. Never changes structure or human tasks.
+/// One project's housekeeping pass (notices, calendar prep tasks, the digest), and the in-app draft used when the
+/// model runs in the app's own process. It never changes structure or the owner's tasks.
 @MainActor
 struct ProjectAgent {
     let container: ModelContainer
     let projectID: UUID
     let provider: any LanguageModelProvider
-    /// When set, only these items' AI work is executed (an item's play button). Proposals and the digest still run.
-    var only: Set<UUID>? = nil
 
     /// The AI has something to do on this item now: an AI item not yet started, or the AI's part of a shared item.
     static func aiTurn(_ t: Node) -> Bool {
@@ -99,32 +91,6 @@ struct ProjectAgent {
 
         let tasks = s.descendants(of: projectID)
         let leaves = s.leaves(under: projectID)
-        // Snapshot of states before this run; structural heuristics judge the task as the human left it, not as the agent changed it.
-        let stateBefore = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.state) })
-
-        // 1. Execute ready AI work.
-        let ready = leaves.filter { Self.aiTurn($0) && s.depsSatisfied($0) && (only?.contains($0.id) ?? true) }
-            .sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
-            .prefix(settings.maxTasksPerRun)
-        for t in ready {
-            let originalState = t.state
-            s.update(t, actor: .ai, detail: "picked up by sub-agent") { $0.state = .in_progress }
-            s.save()
-            do {
-                let result = try await draft(project: project, task: t, siblings: tasks.filter { $0.id != t.id })
-                if t.assignee == .shared {
-                    s.update(t, actor: .ai, detail: "AI part done — your turn (\(result.log.count) tool calls)") { $0.state = .in_progress; $0.aiStatus = .done; $0.artifact = result.artifact }
-                } else {
-                    s.update(t, actor: .ai, detail: "draft ready for review (\(result.log.count) tool calls)") { $0.state = .review; $0.artifact = result.artifact }
-                }
-                out.append("drafted: \(t.title)")
-            } catch {
-                s.update(t, actor: .ai, detail: "draft failed: \(error.localizedDescription)") { $0.state = originalState }
-                out.append("failed: \(t.title): \(error.localizedDescription)")
-            }
-            s.save()
-        }
-
         // 2. Blocked chains and AI work waiting on human tasks.
         let byID = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
         var waitingOnHuman: [Node] = []
@@ -142,7 +108,7 @@ struct ProjectAgent {
             s.propose(projectID: projectID, nodeID: t.id, type: .stale, summary: "\"\(t.title)\" has had no activity for \(settings.staleDays)+ days")
         }
 
-        // 4. Structural proposals (heuristics + model).
+        // 4. An empty project, or one with nothing open and the goal not reached.
         let open = tasks.filter { $0.state != .done }
         let progress = s.progress(of: projectID)
         if tasks.isEmpty {
@@ -150,14 +116,6 @@ struct ProjectAgent {
         } else if open.isEmpty && progress.pct < 100 {
             s.propose(projectID: projectID, nodeID: nil, type: .no_path, summary: "No open tasks but goal not complete — add tasks toward: \(project.goal.isEmpty ? project.title : project.goal)")
         }
-        let parents = Set(tasks.compactMap(\.parentID))
-        for t in open where !parents.contains(t.id) && t.assignee == .ai && (stateBefore[t.id]?.notStarted ?? false) && (t.title.count > 70 || t.title.range(of: "\\band\\b", options: [.regularExpression, .caseInsensitive]) != nil) {
-            let parts = t.title.components(separatedBy: " and ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            let subs = (parts.count > 1 ? parts : [t.title + " — part 1", t.title + " — part 2"]).map { ["title": $0, "assignee": "ai"] }
-            s.propose(projectID: projectID, nodeID: t.id, type: .decompose, summary: "\"\(t.title)\" looks like more than one step — split it?", payload: ["subtasks": subs])
-        }
-        await modelProposals(project: project, open: open, progress: progress, store: s)
-
         // 4b. Calendar-driven prep proposals (only calendars linked to this project).
         if !project.calendarIDs.isEmpty {
             let evs = await CalendarService.shared.events(days: 7, calendarIDs: project.calendarIDs)
@@ -204,33 +162,15 @@ struct ProjectAgent {
         """
     }
 
-    private func draft(project: Node, task: Node, siblings: [Node]) async throws -> DraftResult {
+    func draft(project: Node, task: Node) async throws -> DraftResult {
         let tools = AgentTools.make(container: container, projectID: projectID, taskID: task.id)
         var lines = ["Task: \(task.title)"]
         if !task.tags.isEmpty { lines.append("Tags: " + task.tags.sorted().map { "#" + $0 }.joined(separator: " ")) }
         if let d = task.due { lines.append("Due: \(d.dayString)") }
+        if !task.notes.isEmpty { lines.append("Notes:\n\(task.notes)") }
         if !task.acceptanceNote.isEmpty { lines.append("Prior review notes from the owner (address these):\n\(task.acceptanceNote)") }
         if task.assignee == .shared { lines.append("This task is SHARED: you do the preparatory part (research, drafting, checklists, materials) and the owner finishes it in person. Produce everything the owner needs to complete their part, and state clearly what remains for them.") }
         lines.append("Use project_context first. Use web_fetch for anything factual you are not sure of. Save working notes with write_file. When the deliverable is ready, call finish with the full draft (or, if you have no finish tool, reply with the full draft). If the task needs information only the owner has, draft what you can and list the questions under \"Needs from you\".")
         return try await provider.draft(DraftRequest(system: systemPrompt(project), prompt: lines.joined(separator: "\n\n"), tools: tools, maxTurns: AppSettings.shared.agentMaxTurns))
-    }
-
-    private func modelProposals(project: Node, open: [Node], progress: Store.Progress, store s: Store) async {
-        if provider is MockProvider { return }
-        let list = open.map { "- [\($0.id.uuidString.prefix(8))] \($0.title) (\($0.assigneeRaw), \($0.stateRaw))" }.joined(separator: "\n")
-        let prompt = """
-        Open tasks:\n\(list)\nProgress: \(progress.done)/\(progress.total) leaf tasks done.
-        Return ONLY a JSON array. Each item: {"type":"decompose"|"new_task"|"reassign","node_prefix":string|null,"summary":string,"payload":object}.
-        decompose payload {"subtasks":[{"title","assignee":"ai"|"human"|"shared"}]}; new_task payload {"title","assignee"}; reassign payload {"assignee"}. Return [] if nothing is needed. Max 5 items.
-        """
-        guard let text = try? await provider.complete(system: systemPrompt(project), prompt: prompt),
-              let r = text.range(of: "\\[[\\s\\S]*\\]", options: .regularExpression),
-              let arr = (try? JSONSerialization.jsonObject(with: Data(text[r].utf8))) as? [[String: Any]] else { return }
-        for item in arr.prefix(5) {
-            guard let typeRaw = item["type"] as? String, let type = ProposalType(rawValue: typeRaw), let summary = item["summary"] as? String else { continue }
-            let prefix = item["node_prefix"] as? String
-            let node = prefix.flatMap { pf in open.first { $0.id.uuidString.hasPrefix(pf) } }
-            s.propose(projectID: projectID, nodeID: node?.id, type: type, summary: summary, payload: item["payload"] as? [String: Any] ?? [:])
-        }
     }
 }

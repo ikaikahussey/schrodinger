@@ -213,7 +213,7 @@ struct SuggestionRow: View {
     }
 }
 
-/// In the item field, above its controls: the AI's draft, when it has written one. The item's notes are not repeated
+/// In the item field, above its controls: the AI's result, when it has handed one in. The item's notes are not repeated
 /// here; they are read and edited inline in the row.
 struct ItemSheetBody: View {
     @Bindable var node: Node
@@ -226,7 +226,7 @@ struct ItemSheetBody: View {
     @ViewBuilder private var content: some View {
         if let a = node.artifact, !a.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                Text(node.state == .review ? "DRAFT · AWAITING REVIEW" : "DRAFT")
+                Text(node.state == .review ? "RESULT · NEEDS YOU" : "RESULT")
                     .font(PanelPalette.label(.caption2)).foregroundStyle(Color.ink.opacity(0.55))
                 ScrollView {
                     Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(Color.ink)

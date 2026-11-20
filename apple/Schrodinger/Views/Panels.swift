@@ -85,8 +85,10 @@ struct InboxView: View {
     @Query(filter: #Predicate<Proposal> { $0.statusRaw == "open" }, sort: [SortDescriptor(\Proposal.createdAt, order: .reverse)]) private var open: [Proposal]
     var body: some View {
         let s = Store(ctx)
+        // Recommended tasks are answered in the outline itself, where they would go; the Inbox holds the notices.
+        let open = self.open.filter { $0.type != .new_task }
         List {
-            if open.isEmpty { Text("Nothing pending. The harness proposes structural changes here; nothing is applied until you accept.").foregroundStyle(.secondary) }
+            if open.isEmpty { Text("Nothing pending. Notices about stale and blocked items appear here. Recommended tasks appear in the outline, where they would go.").foregroundStyle(.secondary) }
             ForEach(open) { p in
                 VStack(alignment: .leading, spacing: 6) {
                     Text("\(p.typeRaw.replacingOccurrences(of: "_", with: " ")) · \(s.node(p.projectID)?.title ?? "")").font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
@@ -94,7 +96,6 @@ struct InboxView: View {
                     if p.type == .decompose, let subs = p.payload["subtasks"] as? [[String: Any]] {
                         Text(subs.map { "• \($0["title"] ?? "") (\($0["assignee"] ?? "ai"))" }.joined(separator: "\n")).font(.caption.monospaced())
                     }
-                    if p.type == .new_task { Text("• \(p.payload["title"] ?? "") (\(p.payload["assignee"] ?? "ai"))").font(.caption.monospaced()) }
                     HStack {
                         Button(p.isInformational ? "Acknowledge" : "Accept") { try? s.accept(p); s.save() }.buttonStyle(.borderedProminent)
                         Button("Dismiss") { s.dismiss(p); s.save() }
@@ -179,16 +180,20 @@ struct SettingsView: View {
                 let av = AppleIntelligenceProvider.availability
                 Text(av.available ? "Apple Intelligence is available on this device." : "Apple Intelligence unavailable: \(av.reason)").font(.caption).foregroundStyle(.secondary)
                 if settings.provider == .claude {
-                    SecureField("Anthropic API key (stored in this device's Keychain)", text: $key).onChange(of: key) { _, v in settings.anthropicKey = v }
+                    SecureField("Anthropic API key", text: $key).onChange(of: key) { _, v in settings.anthropicKey = v }
                     TextField("Model", text: $settings.claudeModel)
+                    Text("The key is kept in the Keychain and, with iCloud Keychain on, is shared with your other devices: enter it once. An item handed to Claude is one request that finishes even with the app closed. Web search in hand-offs needs to be enabled for your organization in the Anthropic Console.").font(.caption).foregroundStyle(.secondary)
+                } else if settings.provider == .apple {
+                    Text("Apple Intelligence works on handed-off items only while the app is open.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section("Harness") {
-                Stepper("Run every \(settings.harnessIntervalMinutes) min", value: $settings.harnessIntervalMinutes, in: 5...720, step: 5).onChange(of: settings.harnessIntervalMinutes) { harness.start() }
-                Stepper("Max AI tasks per run: \(settings.maxTasksPerRun)", value: $settings.maxTasksPerRun, in: 1...10)
+            Section("Hand-offs and recommendations") {
+                Toggle("Recommend new tasks", isOn: $settings.suggestionsOn)
+                Text("After a handed-off item comes back, and about once a day, the AI looks over the outline and recommends tasks. They appear in the outline as dimmed lines to keep or dismiss.").font(.caption).foregroundStyle(.secondary)
                 Stepper("Stale after \(settings.staleDays) days", value: $settings.staleDays, in: 1...30)
-                Stepper("Agent max turns: \(settings.agentMaxTurns)", value: $settings.agentMaxTurns, in: 2...30)
-                if let last = harness.lastRun { Text("Last run \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
+                Stepper("Check for stale and blocked items every \(settings.harnessIntervalMinutes) min", value: $settings.harnessIntervalMinutes, in: 5...720, step: 5).onChange(of: settings.harnessIntervalMinutes) { harness.start() }
+                Stepper("On-device agent max turns: \(settings.agentMaxTurns)", value: $settings.agentMaxTurns, in: 2...30)
+                if let last = harness.lastRun { Text("Last check \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
             CalendarSyncSection()
             RemindersSection()

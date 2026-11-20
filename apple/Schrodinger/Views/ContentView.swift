@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 enum Panel: String, CaseIterable, Identifiable {
-    case outline, batch, inbox, calendar, digest, activity, history, settings
+    case outline, batch, inbox, results, calendar, digest, activity, history, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
     // The outline is the app; the others open as a sheet over it (from the header's menu: Inbox, History, and Settings on
@@ -10,7 +10,7 @@ enum Panel: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .outline: "list.bullet.indent"; case .batch: "square.stack.3d.up"
-        case .inbox: "tray"; case .calendar: "calendar"; case .digest: "doc.text"; case .activity: "clock"; case .history: "clock.arrow.circlepath"; case .settings: "gear"
+        case .inbox: "tray"; case .results: "sparkles"; case .calendar: "calendar"; case .digest: "doc.text"; case .activity: "clock"; case .history: "clock.arrow.circlepath"; case .settings: "gear"
         }
     }
 }
@@ -60,8 +60,11 @@ struct ContentView: View {
         // A tapped notification opens its item.
         .onChange(of: router.openID, initial: true) { _, id in if let id { sel.open(id); router.openID = nil } }
         // Back in the foreground: time has passed, so the badge and the next notifications are brought up to date.
-        .onChange(of: scenePhase) { _, p in if p == .active { Task { await Reminders.syncAll(container: AppData.container) } } }
-        // No global Run button: an item shows a play button when the AI has something to run on it (see NodeRow).
+        // It is also when the AI looks over the outline for tasks to recommend (about once a day, when that is on).
+        .onChange(of: scenePhase, initial: true) { _, p in
+            if p == .active { Task { await Reminders.syncAll(container: AppData.container) }; JobQueue.shared.suggestIfDue() }
+        }
+        // No global Run button: an item is handed to the AI from its own row or field (see NodeRow).
     }
 
     @ViewBuilder
@@ -70,6 +73,7 @@ struct ContentView: View {
         case .outline: OutlineView(sel: sel)
         case .batch: BatchView(sel: sel)
         case .inbox: InboxView(sel: sel)
+        case .results: ResultsView(sel: sel)
         case .calendar: CalendarView(sel: sel)
         case .digest: DigestView(sel: sel)
         case .activity: ActivityView()

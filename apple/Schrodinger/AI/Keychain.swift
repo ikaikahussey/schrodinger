@@ -1,29 +1,56 @@
 import Foundation
 import Security
 
-/// API keys live in the Keychain on this device only (no iCloud Keychain sync: kSecAttrSynchronizable is not set).
+/// API keys live in the Keychain and sync between the user's own devices through iCloud Keychain (end-to-end
+/// encrypted; needs iCloud Keychain turned on). A key entered on one device is there on the others. Where a synced
+/// item can't be stored (iCloud Keychain off, or a build without the entitlement), the key is kept on this device only.
 enum Keychain {
     private static let service = "org.schrodinger.app"
 
+    /// The item as it was stored before keys synced: this device only.
+    private static func local(_ key: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: key]
+    }
+    /// The synced item.
+    private static func synced(_ key: String) -> [String: Any] {
+        var q = local(key)
+        q[kSecAttrSynchronizable as String] = true
+        q[kSecUseDataProtectionKeychain as String] = true
+        return q
+    }
+    private static func read(_ query: [String: Any]) -> String? {
+        var q = query
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+    @discardableResult
+    private static func addSynced(_ value: String, for key: String) -> Bool {
+        var add = synced(key)
+        add[kSecValueData as String] = Data(value.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
     static func set(_ value: String, for key: String) {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: key]
-        if value.isEmpty { SecItemDelete(query as CFDictionary); return }
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = query
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(add as CFDictionary, nil)
-        }
+        SecItemDelete(synced(key) as CFDictionary)
+        SecItemDelete(local(key) as CFDictionary)
+        if value.isEmpty { return }
+        if addSynced(value, for: key) { return }
+        var add = local(key)
+        add[kSecValueData as String] = Data(value.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
     }
 
     static func get(_ key: String) -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: key,
-                                    kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-        return String(data: d, encoding: .utf8)
+        if let v = read(synced(key)) { return v }
+        guard let v = read(local(key)) else { return nil }
+        // A key saved before keys synced: move it into the synced keychain so the other devices get it.
+        if addSynced(v, for: key) { SecItemDelete(local(key) as CFDictionary) }
+        return v
     }
 }
 
@@ -40,6 +67,9 @@ final class AppSettings {
     var staleDays: Int { didSet { d.set(staleDays, forKey: "staleDays") } }
     var maxTasksPerRun: Int { didSet { d.set(maxTasksPerRun, forKey: "maxTasksPerRun") } }
     var agentMaxTurns: Int { didSet { d.set(agentMaxTurns, forKey: "agentMaxTurns") } }
+    /// The AI recommends new tasks (after a hand-off finishes and about once a day); they show in the outline as
+    /// dimmed rows to keep or dismiss.
+    var suggestionsOn: Bool { didSet { d.set(suggestionsOn, forKey: "suggestionsOn") } }
     var iCloudSync: Bool { didSet { d.set(iCloudSync, forKey: "iCloudSync") } }   // takes effect on next launch
     /// The calendar that calendared items are added to as events; empty = none chosen (no calendar is touched).
     var syncCalendarID: String { didSet { d.set(syncCalendarID, forKey: "syncCalendarID") } }
@@ -55,12 +85,15 @@ final class AppSettings {
     }
 
     private init() {
-        provider = ProviderKind(rawValue: d.string(forKey: "provider") ?? "") ?? (AppleIntelligenceProvider.availability.available ? .apple : .mock)
+        // No provider chosen on this device yet: a Claude key that arrived from another device (iCloud Keychain) selects Claude.
+        provider = ProviderKind(rawValue: d.string(forKey: "provider") ?? "")
+            ?? (!(Keychain.get("anthropic_api_key") ?? "").isEmpty ? .claude : AppleIntelligenceProvider.availability.available ? .apple : .mock)
         claudeModel = d.string(forKey: "claudeModel") ?? "claude-sonnet-4-5"
         harnessIntervalMinutes = d.object(forKey: "harnessInterval") as? Int ?? 30
         staleDays = d.object(forKey: "staleDays") as? Int ?? 5
         maxTasksPerRun = d.object(forKey: "maxTasksPerRun") as? Int ?? 3
         agentMaxTurns = d.object(forKey: "agentMaxTurns") as? Int ?? 12
+        suggestionsOn = d.object(forKey: "suggestionsOn") as? Bool ?? true
         iCloudSync = d.bool(forKey: "iCloudSync")
         syncCalendarID = d.string(forKey: "syncCalendarID") ?? ""
         remindersOn = d.bool(forKey: "remindersOn")

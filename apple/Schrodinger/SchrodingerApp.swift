@@ -8,12 +8,17 @@ import BackgroundTasks
 struct SchrodingerApp: App {
     let container: ModelContainer
     @State private var harness: HarnessEngine
+    #if os(iOS)
+    // iOS hands a finished background transfer (a handed-off item's reply) to the app delegate.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
 
     init() {
         let c = AppData.container
         container = c
         _harness = State(initialValue: HarnessEngine(container: c))
         Reminders.configure()
+        JobQueue.shared.resume()   // the AI's work queue: replies that came in while the app was closed, interrupted jobs
         #if os(iOS)
         let engine = HarnessEngine(container: c)
         // The handler is written in this main-actor context, so Swift checks at run time that it runs on the main actor.
