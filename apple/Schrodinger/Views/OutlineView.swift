@@ -570,6 +570,8 @@ struct OutlineView: View {
     /// Search, the header's first block, flush with the left edge. The logo sits at its start (tap it to leave a
     /// zoom). Type words to match text; tap a tag button (or type #tag) to match tags. No color: a neutral fill.
     private static let searchHeight: CGFloat = 44
+    /// Leading inset + logo (30) + spacing (8) + spacing (8) + glyph (24 + 8) + trailing inset (2), rounded up.
+    private static let searchMinWidth: CGFloat = (StatusBar.margin - 30 * 10 / 64 + 30 + 8 + 8 + 32 + 2).rounded(.up)
     private func searchField(_ z: Node?) -> some View {
         let h = Self.searchHeight
         let fill = Color.primary.opacity(searching || searchFocused ? 0.12 : 0.07)
@@ -609,7 +611,11 @@ struct OutlineView: View {
         // The logo's ink starts where the top-level circles start, less the drawing's own margin (whisker tips at
         // x = 10 of its 64-unit box).
         .padding(.leading, StatusBar.margin - 30 * 10 / 64).padding(.trailing, 2)
-        .frame(minWidth: 60, maxWidth: .infinity).frame(height: h)
+        // The minimum holds the logo and the trailing glyph with the text field squeezed to nothing, so a wide
+        // breadcrumb can never squeeze the block narrower than its fixed contents; leading alignment keeps the
+        // logo pinned to the left edge if anything does overflow (it used to center and push the logo off screen).
+        .frame(minWidth: Self.searchMinWidth, maxWidth: .infinity, alignment: .leading).frame(height: h)
+        .clipped()
         .background { UnevenRoundedRectangle(bottomTrailingRadius: h / 2, topTrailingRadius: h / 2).fill(fill).panelBlink(33) }
         .contentShape(Rectangle())
         .onTapGesture { searchFocused = true }
