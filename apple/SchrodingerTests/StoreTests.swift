@@ -120,69 +120,145 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.history(since: Date().addingTimeInterval(60), changesOnly: true).isEmpty)
     }
 
-    func testSharedAndAIFlowWithMockProvider() async throws {
+    /// A handed-off item, with a model that runs in the app (the mock): the draft comes back for review; a shared
+    /// item becomes the owner's turn; review notes go into the redo.
+    func testInProcessHandoffWithMockProvider() async throws {
         AppSettings.shared.provider = .mock
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P"); p.goal = "ship"
         let ai = s.create(title: "first", parentID: p.id, assignee: .ai)
-        let dep = s.create(title: "second", parentID: p.id, assignee: .ai); dep.deps = [ai.id]
         let sh = s.create(title: "Meet funder #meeting", parentID: p.id, assignee: .shared)
         let hum = s.create(title: "human thing", parentID: p.id, assignee: .human)
         s.save()
-        let out = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
-        XCTAssertTrue(out.contains { $0.hasPrefix("drafted: first") })
+        XCTAssertTrue(ProjectAgent.aiTurn(ai)); XCTAssertTrue(ProjectAgent.aiTurn(sh)); XCTAssertFalse(ProjectAgent.aiTurn(hum))
+        let r = try await InProcessAgent.handoff(nodeID: ai.id, container: c, provider: MockProvider())
+        XCTAssertFalse(r.done, "an in-app draft goes to the owner for review")
+        XCTAssertEqual(s.applyHandoff(r, to: ai), .needsYou)
         XCTAssertEqual(ai.state, .review)
-        XCTAssertEqual(dep.state, .unset, "dependent task not picked up")
+        XCTAssertFalse(ProjectAgent.aiTurn(ai), "nothing left to hand off on a drafted item")
         XCTAssertEqual(hum.state, .unset)
+        let r2 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: MockProvider())
+        XCTAssertEqual(s.applyHandoff(r2, to: sh), .yourTurn)
         XCTAssertEqual(sh.state, .in_progress); XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.isYourTurn)
         XCTAssertTrue(s.byTag(assignee: .human).contains { $0.tag == "#meeting" && $0.tasks.contains { $0.0.id == sh.id } })
-        // reject with note → redraft includes note
+        // reject with note → redo includes the note
         try s.reject(ai, note: "make it shorter")
-        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
+        let r3 = try await InProcessAgent.handoff(nodeID: ai.id, container: c, provider: MockProvider())
+        s.applyHandoff(r3, to: ai)
         XCTAssertTrue(ai.artifact?.contains("make it shorter") ?? false)
         try s.approve(ai)
-        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
-        XCTAssertEqual(dep.state, .review)
-        // send shared back → AI redoes once
+        XCTAssertEqual(ai.state, .done)
+        // send shared back → the AI's part is pending again
         try s.sendBackToAI(sh, note: "add parking")
         XCTAssertEqual(sh.aiStatus, .pending)
-        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
+        let r4 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: MockProvider())
+        s.applyHandoff(r4, to: sh)
         XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.artifact?.contains("add parking") ?? false)
+        // Housekeeping writes the digest.
+        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
         XCTAssertFalse(s.digests(for: p.id).isEmpty)
     }
 
     func testProposalsOnlyApplyOnAccept() async throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
-        let p = s.create(title: "Grant")
-        let big = s.create(title: "Research rules and draft budget", parentID: p.id, assignee: .ai)
         let empty = s.create(title: "Empty")
         s.save()
-        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
         _ = try await ProjectAgent(container: c, projectID: empty.id, provider: MockProvider()).run()
-        let inbox = s.inbox()
-        let dec = try XCTUnwrap(inbox.first { $0.type == .decompose && $0.nodeID == big.id })
-        let nt = try XCTUnwrap(inbox.first { $0.type == .new_task && $0.projectID == empty.id })
-        XCTAssertTrue(s.children(of: big.id).isEmpty)
-        try s.accept(dec)
-        XCTAssertEqual(s.children(of: big.id).map(\.title), ["Research rules", "draft budget"])
+        let nt = try XCTUnwrap(s.inbox().first { $0.type == .new_task && $0.projectID == empty.id })
+        XCTAssertEqual(s.suggestionParent(of: nt), empty.id, "a recommendation with no place of its own goes under its project")
+        XCTAssertTrue(s.children(of: empty.id).isEmpty)
         s.dismiss(nt)
         _ = try await ProjectAgent(container: c, projectID: empty.id, provider: MockProvider()).run()
         XCTAssertFalse(s.inbox().contains { $0.type == .new_task && $0.projectID == empty.id }, "dismissed proposals are not re-raised")
     }
 
-    /// An item's play button runs only that item's AI work.
-    func testRunScopedToOneItem() async throws {
-        AppSettings.shared.provider = .mock
+    /// What the model hands in is read defensively and applied to the item as in-app changes.
+    func testHandoffResultIsParsedAndApplied() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
-        let p = s.create(title: "P"); p.goal = "ship"
-        let a = s.create(title: "one", parentID: p.id, assignee: .ai)
-        let b = s.create(title: "two", parentID: p.id, assignee: .ai)
+        let p = s.create(title: "Grant")
+        let t = s.create(title: "Find the deadline", parentID: p.id, assignee: .ai)
+        let r = HandoffResult.parse([
+            "summary": " Found it. ", "result_markdown": "Due March 3.", "done": true,
+            "child_items": [["title": "Email the program officer", "assignee": "human", "due": "2027-03-01", "notes": "Ask about page limits"],
+                            ["title": "  ", "assignee": "ai"], ["title": "Draft the budget", "assignee": "nobody"]],
+            "notes_append": "Deadline: March 3", "links": ["https://example.org/rfp", "not a link"], "questions": []])
+        XCTAssertEqual(r.summary, "Found it.")
+        XCTAssertEqual(r.children.map(\.title), ["Email the program officer", "Draft the budget"])
+        XCTAssertEqual(r.children.map(\.assignee), [.human, .human])
+        XCTAssertNotNil(r.children[0].due)
+        XCTAssertNil(HandoffResult.day("soon"))
+        XCTAssertEqual(s.applyHandoff(r, to: t), .done)
+        XCTAssertEqual(t.artifact, "Due March 3.")
+        XCTAssertEqual(t.notes, "Deadline: March 3")
+        XCTAssertEqual(s.children(of: t.id).map(\.title), ["Email the program officer", "Draft the budget"])
+        XCTAssertEqual(s.children(of: t.id).first?.notes, "Ask about page limits")
+        XCTAssertEqual(s.attachments(for: t.id).map(\.urlString), ["https://example.org/rfp"])
+        XCTAssertEqual(t.state, .in_progress, "finished, but with follow-up steps under it, the item stays open")
+        // Applying the same result again adds nothing twice.
+        s.applyHandoff(r, to: t)
+        XCTAssertEqual(s.children(of: t.id).count, 2)
+        XCTAssertEqual(s.attachments(for: t.id).count, 1)
+        // Finished with nothing left: done. Questions: back to the owner, listed on the item.
+        let plain = s.create(title: "Look up the address", parentID: p.id, assignee: .ai)
+        XCTAssertEqual(s.applyHandoff(HandoffResult(summary: "ok", markdown: "1 Main St", done: true), to: plain), .done)
+        XCTAssertEqual(plain.state, .done)
+        let asks = s.create(title: "Book the room", parentID: p.id, assignee: .ai)
+        XCTAssertEqual(s.applyHandoff(HandoffResult(markdown: "Options", done: true, questions: ["Which day?"]), to: asks), .needsYou)
+        XCTAssertEqual(asks.state, .review)
+        XCTAssertTrue(asks.artifact?.contains("Which day?") ?? false)
+    }
+
+    /// The reply to a hand-off request: the tool call is the result; a paused turn is continued; text is a fallback.
+    func testClaudeRepliesAreRead() throws {
+        let body = ClaudeRequest.handoffBody(model: "m", system: "s", prompt: "p", serverTools: true)
+        XCTAssertTrue(ClaudeRequest.hasServerTools(body))
+        let bare = ClaudeRequest.withoutServerTools(body)
+        XCTAssertFalse(ClaudeRequest.hasServerTools(bare))
+        XCTAssertEqual((bare["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }, [ClaudeRequest.submitResult])
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: body))
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: ClaudeRequest.suggestBody(model: "m", system: "s", prompt: "p")))
+
+        let done: [String: Any] = ["stop_reason": "tool_use", "content": [["type": "text", "text": "Handing in."],
+            ["type": "tool_use", "id": "t1", "name": ClaudeRequest.submitResult, "input": ["summary": "x", "result_markdown": "y", "done": true]]]]
+        guard case .tool(let name, let input) = ClaudeRequest.interpret(done) else { return XCTFail("expected the tool call") }
+        XCTAssertEqual(name, ClaudeRequest.submitResult)
+        XCTAssertTrue(HandoffResult.parse(input).done)
+
+        let paused: [String: Any] = ["stop_reason": "pause_turn", "content": [["type": "server_tool_use", "id": "s1", "name": "web_search", "input": ["query": "q"]]]]
+        guard case .paused(let content) = ClaudeRequest.interpret(paused) else { return XCTFail("expected a paused turn") }
+        let next = ClaudeRequest.continued(body, assistantContent: content)
+        XCTAssertEqual((next["messages"] as? [[String: Any]])?.map { $0["role"] as? String }, ["user", "assistant"])
+
+        guard case .text(let text) = ClaudeRequest.interpret(["stop_reason": "end_turn", "content": [["type": "text", "text": "Just "], ["type": "text", "text": "text."]]]) else { return XCTFail("expected text") }
+        XCTAssertEqual(text, "Just text.")
+        guard case .empty = ClaudeRequest.interpret([:]) else { return XCTFail("expected nothing") }
+        XCTAssertEqual(ClaudeRequest.errorMessage(["error": ["message": "bad key"]]), "bad key")
+    }
+
+    /// Recommended tasks: filed under the item the model names, never twice, never a task the outline already has.
+    func testRecommendedTasksAreFiledOnceAndAcceptAddsThem() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "Grant"); p.goal = "Win the grant"
+        let a = s.create(title: "Write narrative", parentID: p.id)
         s.save()
-        XCTAssertTrue(ProjectAgent.aiTurn(a)); XCTAssertTrue(ProjectAgent.aiTurn(b))
-        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider(), only: [a.id]).run()
-        XCTAssertEqual(a.state, .review, "the chosen item was drafted")
-        XCTAssertEqual(b.state, .unset, "other AI items were left alone")
-        XCTAssertFalse(ProjectAgent.aiTurn(a), "nothing left to run on a drafted item")
+        let outline = SuggestBrief.outline(store: s)
+        XCTAssertTrue(outline.contains("[\(a.id.uuidString.prefix(8))] Write narrative"))
+        XCTAssertTrue(outline.contains("goal: Win the grant"))
+        let pid = String(a.id.uuidString.prefix(8))
+        let items: [[String: Any]] = [
+            ["parent_id": pid, "title": "Collect letters of support", "assignee": "human", "reason": "The narrative cites them."],
+            ["parent_id": "[\(pid.lowercased())]", "title": "collect letters of support!", "assignee": "ai", "reason": "again"],
+            ["parent_id": pid, "title": "Write Narrative", "assignee": "ai", "reason": "already there"],
+            ["parent_id": "00000000", "title": "Nowhere", "assignee": "ai", "reason": "no such item"]]
+        XCTAssertEqual(SuggestBrief.file(items, store: s), 1)
+        let g = try XCTUnwrap(s.openSuggestions().first)
+        XCTAssertEqual(s.suggestionParent(of: g), a.id)
+        XCTAssertTrue(s.children(of: a.id).isEmpty, "nothing is added until it is kept")
+        try s.accept(g)
+        XCTAssertEqual(s.children(of: a.id).map(\.title), ["Collect letters of support"])
+        XCTAssertEqual(s.children(of: a.id).first?.assignee, .human)
+        XCTAssertEqual(SuggestBrief.file(items, store: s), 0, "kept or dismissed, it is not recommended again")
+        XCTAssertEqual(SuggestBrief.parse("Here: [{\"title\": \"x\"}] ok").count, 1)
     }
 
     func testTagsAreDetected() throws {

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// One continuous outline. Depth is shown by black bars at the left (one per level). The item's own bar carries
 /// its status and who holds it; tapping the bars opens the item's menu. Everything else stays out of the
-/// way of the text. Top-level items are projects (the harness runs one agent per top-level item).
+/// way of the text. Top-level items are projects. Tasks the AI recommends show as dimmed rows where they would go.
 struct OutlineView: View {
     @Environment(\.modelContext) private var ctx
     @Bindable var sel: Selection
@@ -82,6 +82,9 @@ struct OutlineView: View {
         let links = linkMap
         // The AI's open suggestions, by the item they are about (shown in that item's field).
         let advice = Dictionary(grouping: openProposals.filter { $0.nodeID != nil }.sorted { $0.createdAt < $1.createdAt }, by: { $0.nodeID! })
+        // Tasks the AI recommends, by the item they would go under (shown there as dimmed rows). Not while filtering
+        // or searching: those views show what is in the outline.
+        let ghosts: [UUID: [Proposal]] = filtering || searching ? [:] : Dictionary(grouping: openProposals.filter { $0.type == .new_task }.sorted { $0.createdAt < $1.createdAt }, by: { store.suggestionParent(of: $0) })
         let zoomed = zoomID.flatMap { store.node($0) }
         ScrollViewReader { proxy in
         ScrollView {
@@ -91,9 +94,9 @@ struct OutlineView: View {
                         // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
                         // reads the same as in the full outline.
                         let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, links: links, advice: advice, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, links: links, advice: advice, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                     }
                 }
                 .id(zoomID)
@@ -446,8 +449,19 @@ struct OutlineView: View {
             // The rest of the app (there is no tab bar or sidebar): Inbox opens as a sheet over the outline. Settings
             // does too on iPhone/iPad; on the Mac it is the Settings window (⌘,).
             Divider()
+            // What was handed to the AI and what came back.
+            Button { finishTyping(); sel.panel = .results } label: {
+                let n = JobQueue.shared.unseen.count
+                Label(n == 0 ? "Results" : "Results (\(n))", systemImage: "sparkles")
+            }
+            // Have the AI look over the outline now and recommend tasks (they appear in place, dimmed).
+            Button { finishTyping(); JobQueue.shared.suggest() } label: {
+                Label(JobQueue.shared.suggesting ? "Recommending tasks\u{2026}" : "Recommend tasks", systemImage: "lightbulb")
+            }
+            .disabled(JobQueue.shared.suggesting)
             Button { finishTyping(); sel.panel = .inbox } label: {
-                Label(openProposals.isEmpty ? "Inbox" : "Inbox (\(openProposals.count))", systemImage: "tray")
+                let notices = openProposals.filter { $0.type != .new_task }.count
+                Label(notices == 0 ? "Inbox" : "Inbox (\(notices))", systemImage: "tray")
             }
             // What was added, deleted, renamed and completed lately, shown on the outline itself.
             Button { finishTyping(); sel.panel = .history } label: { Label("History", systemImage: "clock.arrow.circlepath") }
@@ -773,7 +787,7 @@ struct OutlineView: View {
     }
 
     /// `active`: the item's project is active (paused and archived projects don't run).
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], links: [UUID: [ItemLink]], advice: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], links: [UUID: [ItemLink]], advice: [UUID: [Proposal]], ghosts: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
         let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
@@ -799,7 +813,13 @@ struct OutlineView: View {
                     suggestions: advice[n.id] ?? [])
                 .id(n.id)   // scroll target for reveal()
             if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, trail: trail + [own], context: context, active: active) }
+                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: trail + [own], context: context, active: active) }
+                // Recommended tasks for this item, after its children: keep one (it becomes an item here) or dismiss it.
+                ForEach(ghosts[n.id] ?? []) { g in
+                    GhostRow(proposal: g, depth: depth + 1,
+                             onAccept: { withAnimation(.snappy(duration: 0.22)) { try? store.accept(g); store.save() } },
+                             onDismiss: { withAnimation(.snappy(duration: 0.22)) { store.dismiss(g); store.save() } })
+                }
             }
         })
     }
@@ -1174,7 +1194,7 @@ struct NodeRow: View {
     var onPinch: (Bool) -> Void = { _ in }
     /// The page handles a quick right swipe as "back" (zoomed in), so the row must not also indent on it.
     var swipeBack = false
-    /// Items the AI can work on now, in this item or under it. Non-empty = show the play button.
+    /// Items the AI can be handed now, in this item or under it. Non-empty = show the play button.
     var runnable: [UUID] = []
     /// The item's children are on screen (it is expanded, or it is the item zoomed into).
     var childrenShown = true
@@ -1196,7 +1216,7 @@ struct NodeRow: View {
     @State private var adviceNote: String? = nil
     /// Children made from list lines typed in this field, innermost last, so an indented line nests under the one above.
     @State private var listTrail: [(indent: Int, id: UUID)] = []
-    @Environment(HarnessEngine.self) private var harness
+    private var jobs: JobQueue { JobQueue.shared }
     @State private var runFailure: String? = nil
     @State private var title: String = ""
     @State private var pull: CGFloat = 0
@@ -1266,40 +1286,44 @@ struct NodeRow: View {
     /// The item is open: its row is the item field (text, notes, and the controls along the field's bottom edge).
     private var open: Bool { infoOpen || editing }
 
-    /// This row's work is part of the run in progress.
-    private var runningHere: Bool {
-        guard harness.running else { return false }
-        guard let scope = harness.runningScope else { return true }
-        return runnable.contains { scope.contains($0) }
-    }
-    /// Play: have the AI do its work on this item (for a parent, on the ready items under it). Shown only when
-    /// there is something to run.
-    @ViewBuilder private var runButton: some View {
-        if runningHere {
-            ProgressView().controlSize(.small).frame(width: 28, height: 22).accessibilityLabel("Running")
-        } else {
-            Button { run() } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.ink)
-                    .frame(width: 28, height: 22)
-                    .contentShape(Rectangle().inset(by: -6))
-            }
-            .buttonStyle(.plain)
-            .disabled(harness.running)
-            .opacity(harness.running ? 0.3 : 1)
-            .help(runnable.count == 1 ? "Run: have the AI work on this" : "Run: have the AI work on \(runnable.count) items here")
-            .accessibilityLabel(runnable.count == 1 ? "Run" : "Run \(runnable.count) items")
+    /// The AI is working on this item now.
+    private var working: Bool { jobs.isLive(node.id) }
+    /// The AI's side of the row, at its right end: working (a spinner), failed (a warning; tap for why and to try
+    /// again), a result not opened yet (tap to open it), or the play button when there is something to hand off.
+    @ViewBuilder private var aiControl: some View {
+        if working {
+            ProgressView().controlSize(.small).frame(width: 28, height: 22).accessibilityLabel("The AI is working on this")
+        } else if let failed = jobs.failure(for: node.id) {
+            rowGlyph("exclamationmark.triangle.fill", label: "The hand-off failed", help: "The hand-off failed: tap for details") { runFailure = failed.error }
+        } else if jobs.unseen.contains(node.id) {
+            rowGlyph("sparkles.rectangle.stack.fill", label: "New result", help: "The AI's result is in: tap to open") { commit(); openItem() }
+        } else if !runnable.isEmpty {
+            rowGlyph("play.fill", label: runnable.count == 1 ? "Hand off" : "Hand off \(runnable.count) items",
+                     help: runnable.count == 1 ? "Hand this to the AI" : "Hand the \(runnable.count) AI items here to the AI") { run() }
         }
     }
+    private var showsAIControl: Bool { working || jobs.failure(for: node.id) != nil || jobs.unseen.contains(node.id) || !runnable.isEmpty }
+    private func rowGlyph(_ name: String, label: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.ink)
+                .frame(width: 28, height: 22)
+                .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(label)
+    }
+    /// Play: hand the AI its work on this item (for a parent, the ready AI items under it). Each becomes a job.
     private func run() {
         commit()
-        let ids = Set(runnable), project = store.project(of: node).id
-        Task { @MainActor in
-            let out = await harness.runOnce(projectID: project, only: ids)
-            let bad = out.flatMap { $0.components(separatedBy: "\n") }.filter { $0.hasPrefix("failed:") || $0.contains(": error") }
-            if !bad.isEmpty { runFailure = bad.joined(separator: "\n") }
-        }
+        jobs.handOff(runnable)
+    }
+    /// The paper plane in the item's field: hand this item to the AI now, whoever held it.
+    private func handOff() {
+        commit(); commitNote(convertLists: false)
+        jobs.handOff([node.id])
     }
     /// A tap on the item, on its text or on its squares, opens it: the item field and the children are shown.
     private func openItem() {
@@ -1464,16 +1488,18 @@ struct NodeRow: View {
             .alignmentGuide(.rowLine) { d in let top = open ? ItemField.top : 0; return (d[.firstTextBaseline] - top) * 0.65 + top }
             Spacer(minLength: 6)
             marker.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] }
-            if !runnable.isEmpty { runButton.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
+            if showsAIControl { aiControl.alignmentGuide(.rowLine) { d in d[VerticalAlignment.center] } }
         }
         .padding(.vertical, 6)
         .onAppear { title = node.title; note = noteSource; showNote = !noteSource.isEmpty; notesAtOpen = noteSource }
         .onChange(of: node.title) { _, v in if v != title { title = v } }
         // Opening the item remembers its notes; closing it saves the notes and turns list lines typed since into children.
         .onChange(of: infoOpen) { _, open in
-            if open { notesAtOpen = noteSource } else { commitNote(convertLists: true); adviceNote = nil; listTrail = [] }
+            if open { notesAtOpen = noteSource; jobs.markSeen(node.id) } else { commitNote(convertLists: true); adviceNote = nil; listTrail = [] }
         }
         .onChange(of: noteSource) { _, v in if v != note && !noteFocused { note = v; showNote = !v.isEmpty } }
+        // A result that comes in while the item is open has been seen.
+        .onChange(of: jobs.unseen) { _, u in if infoOpen && u.contains(node.id) { jobs.markSeen(node.id) } }
         .onChange(of: handleActive) { _, active in if !active { finishDrag() } }
         .sensoryFeedback(.impact(weight: .medium), trigger: lifting) { _, now in now }
         .sheet(isPresented: $showCalendar) {
@@ -1487,7 +1513,10 @@ struct NodeRow: View {
         .sheet(item: $viewing) { a in
             AttachmentViewer(attachment: a) { viewing = nil; store.deleteAttachment(a); store.save() }
         }
-        .alert("Run failed", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) { Button("OK") {} } message: { Text(runFailure ?? "") }
+        .alert("The hand-off did not finish", isPresented: Binding(get: { runFailure != nil }, set: { if !$0 { runFailure = nil } })) {
+            Button("Try again") { jobs.retry(node.id) }
+            Button("OK", role: .cancel) { jobs.dismissFailure(node.id) }
+        } message: { Text(runFailure ?? "") }
         .onChange(of: focused.wrappedValue) { old, new in
             if new == node.id { sel.nodeID = node.id; sel.infoID = node.id; if editRequest == node.id { editRequest = nil } }
             if old == node.id && new != node.id {
@@ -1657,6 +1686,11 @@ struct NodeRow: View {
                 FieldIcon(systemImage: node.assignee.icon, on: true, width: ItemField.compact) { cycleAssignee() }
                     .help("Responsible: " + node.assignee.label + " (tap to change)")
                     .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
+                // Hand the item to the AI now: it works on it (with the app closed too, on Claude) and the result comes
+                // back onto the item.
+                FieldIcon(systemImage: "paperplane.fill", on: true, width: ItemField.compact) { handOff() }
+                    .disabled(empty || working)
+                    .help(working ? "The AI is working on this" : "Hand off to the AI").accessibilityLabel("Hand off to the AI")
             }
             FieldIcon(systemImage: "photo", width: ItemField.compact) { showPhotos = true }.help("Add photos").accessibilityLabel("Add photos")
             FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil, width: ItemField.compact) { commit(); showCalendar = true }
@@ -1667,9 +1701,10 @@ struct NodeRow: View {
                 .disabled(empty)
                 .help("Link to another item").accessibilityLabel("Link to another item")
             if node.state == .review {
-                // An AI draft is waiting: approve it, or send it back to be redone.
-                FieldIcon(systemImage: "arrow.counterclockwise", width: ItemField.compact) { try? store.reject(node, note: ""); store.save() }.help("Have the AI redo the draft").accessibilityLabel("Redo draft")
-                FieldIcon(systemImage: "checkmark.seal.fill", on: true, width: ItemField.compact) { try? store.approve(node); store.save() }.help("Approve the draft").accessibilityLabel("Approve draft")
+                // The AI's result is waiting: approve it (the item is done), or have it redone (answers and
+                // corrections typed in the notes go along).
+                FieldIcon(systemImage: "arrow.counterclockwise", width: ItemField.compact) { commitNote(convertLists: false); try? store.reject(node, note: ""); store.save(); jobs.handOff([node.id]) }.help("Have the AI redo it").accessibilityLabel("Redo")
+                FieldIcon(systemImage: "checkmark.seal.fill", on: true, width: ItemField.compact) { try? store.approve(node); store.save() }.help("Approve the result").accessibilityLabel("Approve result")
             }
             // New child (down-right arrow) and new sibling (+), bare glyphs like the others. An item with no text is
             // removed when the keyboard leaves it, so it can't take a child or a sibling yet.
@@ -1873,6 +1908,43 @@ struct NodeRow: View {
             }
             store.save(); title = t
         }
+    }
+}
+
+/// A task the AI recommends, shown where it would go in the outline: dimmed, with the reason under it. The plus
+/// keeps it (it becomes an item there); the x dismisses it (it is not recommended again).
+struct GhostRow: View {
+    let proposal: Proposal
+    let depth: Int
+    let onAccept: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        // Reading a deleted model traps; the row can render once more after it is answered.
+        if proposal.isDeleted || proposal.modelContext == nil { EmptyView() } else { content }
+    }
+
+    private var content: some View {
+        let pl = proposal.payload
+        let title = pl["title"] as? String ?? proposal.summary
+        let reason = pl["reason"] as? String ?? (proposal.summary == title ? "" : proposal.summary)
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "sparkle").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.4)).padding(.top, 5)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !reason.isEmpty {
+                    Text(reason).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            FieldIcon(systemImage: "plus", on: true, width: 34, action: onAccept).help("Keep: add this task").accessibilityLabel("Keep recommended task")
+            FieldIcon(systemImage: "xmark", width: 34, action: onDismiss).help("Dismiss").accessibilityLabel("Dismiss recommended task")
+        }
+        .padding(.leading, max(0, StatusBar.textStart(depth) - 16))
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
     }
 }
 

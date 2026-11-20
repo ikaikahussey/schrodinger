@@ -161,6 +161,32 @@ enum Reminders {
     }
 }
 
+/// Notifications for the AI's finished work: one when a handed-off item comes back (done, needing the owner, or
+/// failed). Tapping it opens the item. Local notifications, like the rest.
+@MainActor
+enum ResultNotifier {
+    /// Asks for permission to notify, once, the first time something is handed off.
+    static func prepare() async {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
+        let center = UNUserNotificationCenter.current()
+        if await center.notificationSettings().authorizationStatus == .notDetermined { _ = await Reminders.requestAccess() }
+    }
+
+    static func post(title: String, body: String, nodeID: UUID) async {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
+        let center = UNUserNotificationCenter.current()
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else { return }
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        c.sound = .default
+        c.threadIdentifier = "results"
+        c.userInfo = ["node": nodeID.uuidString]
+        try? await center.add(UNNotificationRequest(identifier: "result.\(nodeID.uuidString)", content: c, trigger: nil))
+    }
+}
+
 /// Carries a tapped notification's item to the outline, which opens it.
 @MainActor
 @Observable
