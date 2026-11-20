@@ -365,4 +365,54 @@ final class StoreTests: XCTestCase {
         try s.accept(note)
         XCTAssertEqual(t.notes, "Done = confirmed booking")
     }
+
+    func testSavedViewsSaveReplaceRenameDelete() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        XCTAssertTrue(s.savedViews().isEmpty)
+        XCTAssertNil(s.saveView(name: "  ", search: "x", filter: "all", tag: nil, zoomID: nil))
+        let calls = try XCTUnwrap(s.saveView(name: "Calls", search: " #call  bob ", filter: "mine", tag: nil, zoomID: p.id))
+        let week = try XCTUnwrap(s.saveView(name: "Week", search: "", filter: "week", tag: "errand", zoomID: nil))
+        s.save()
+        XCTAssertEqual(s.savedViews().map(\.name), ["Calls", "Week"])
+        XCTAssertEqual(s.savedViews()[0], SavedView(id: calls.id, name: "Calls", search: "#call  bob", filter: "mine", zoomID: p.id, position: 0))
+        // Same name, any case: replaced in place.
+        let again = try XCTUnwrap(s.saveView(name: "calls", search: "alice", filter: "all", tag: nil, zoomID: nil))
+        s.save()
+        XCTAssertEqual(again.id, calls.id)
+        XCTAssertEqual(s.savedViews().map(\.name), ["calls", "Week"])
+        XCTAssertEqual(s.savedViews()[0].search, "alice")
+        XCTAssertNil(s.savedViews()[0].zoomID)
+        // Rename: not to blank, not to a name in use.
+        XCTAssertFalse(s.renameView(week.id, to: "CALLS"))
+        XCTAssertFalse(s.renameView(week.id, to: " "))
+        XCTAssertTrue(s.renameView(week.id, to: "This week"))
+        s.save()
+        XCTAssertEqual(s.savedViews().map(\.name), ["calls", "This week"])
+        s.deleteView(calls.id); s.save()
+        XCTAssertEqual(s.savedViews().map(\.id), [week.id])
+        // Saved views are not project files, and project files are not saved views.
+        s.writeFile(p.id, "views/notes.json", "{}"); s.save()
+        XCTAssertEqual(s.savedViews().count, 1)
+        XCTAssertEqual(s.files(for: p.id).count, 1)
+    }
+
+    func testSavedViewMatchingNamingAndDecoding() throws {
+        let z = UUID()
+        let v = SavedView(name: "V", search: "Bob  #Call", filter: "mine", tag: "x", zoomID: z)
+        XCTAssertTrue(v.matches(search: " bob #call ", filter: "mine", tag: "x", zoomID: z))
+        XCTAssertFalse(v.matches(search: "bob", filter: "mine", tag: "x", zoomID: z))
+        XCTAssertFalse(v.matches(search: "bob #call", filter: "all", tag: "x", zoomID: z))
+        XCTAssertFalse(v.matches(search: "bob #call", filter: "mine", tag: "x", zoomID: nil))
+        XCTAssertTrue(SavedView.isPlain(search: " # ", filter: "all", tag: nil, zoomID: nil))
+        XCTAssertFalse(SavedView.isPlain(search: "", filter: "all", tag: nil, zoomID: z))
+        XCTAssertEqual(SavedView.suggestedName(search: " bob  #call ", filterLabel: "Mine", tag: "x", zoomTitle: "Campaign"), "Campaign \u{00B7} Mine \u{00B7} #x \u{00B7} bob #call")
+        XCTAssertEqual(SavedView.suggestedName(search: "", filterLabel: nil, tag: nil, zoomTitle: nil), "")
+        XCTAssertEqual(SavedView(json: v.json), v)
+        // Keys missing from an older or newer build's record take defaults.
+        let partial = try XCTUnwrap(SavedView(json: "{\"name\":\"N\",\"search\":\"q\"}"))
+        XCTAssertEqual(partial.filter, "all")
+        XCTAssertNil(partial.zoomID)
+        XCTAssertNil(SavedView(json: "not json"))
+    }
 }

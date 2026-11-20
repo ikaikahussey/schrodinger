@@ -6,6 +6,7 @@ Native SwiftUI app. One codebase, two platforms (iOS 26, macOS 26).
 - **AI from the device**: calls go straight from the app to the model. Providers: **Apple Intelligence** (on-device FoundationModels, nothing leaves the device), **Claude** (Anthropic API over HTTPS; key stored in this device's Keychain, not synced), and an offline mock.
 - **Harness**: one sub-agent per active project, concurrent, draft-only tools (`project_context`, `web_fetch`, workspace `read/write/list_files`, `calendar_events`, `finish`). Runs on a timer while the app is open, on iOS also via Background App Refresh, and on demand.
 - **Calendar**: EventKit — agenda of events + due tasks, "Add to calendar" for due-dated tasks, project-linked calendars generate prep-task proposals.
+- **Saved views**: header menu → Save this view… keeps the current search, filter, tag and zoom under a name. Saved views are listed in the same menu and as buttons under the search field; hold (or right-click) a button to rename or delete it. They are stored with the rest of the data (and sync with it), with no extra iCloud record type.
 - **History**: header menu → History shows the outline marked up with what changed (today, 7 days, 30 days): added items in green, deleted items struck through where they were, renamed items with their old text, completed items checked. Deleted items are remembered for 90 days.
 - **Same model as the web app**: numbered outline, `@ai` / `@me` / `@both` and `#mode` tags, shared tasks (AI preps → "your turn"), review/inbox/digest/undo.
 
