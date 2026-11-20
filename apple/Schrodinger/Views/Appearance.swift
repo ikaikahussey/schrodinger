@@ -134,7 +134,7 @@ final class Appearance {
     ///            in every project;
     ///   status → strength: no status yet is a pale tint, to-do / in progress full strength, done faded;
     ///   holder → darkness: the AI's items are a darker shade (shared, a little darker).
-    /// (Notes are a dot inside the mark; review / blocked are an outline / dashed outline. See StatusBar.)
+    /// (Date, notes, links and photos are glyphs inside the mark; review / blocked are an outline / dashed outline. See StatusBar.)
     /// A gray scheme (Mono, Swiss black) keeps status and holder as strength, so it still follows light and dark mode.
     func itemColor(depth: Int, state: TaskState, assignee: Assignee) -> Color {
         let base = contextColor(max(depth, 0))

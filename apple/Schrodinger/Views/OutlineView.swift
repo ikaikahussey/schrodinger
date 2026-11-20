@@ -954,9 +954,10 @@ struct StatusBar: View {
     var color: Color = .ink
     /// Indent level: 0 is a circle; deeper, the mark is a rounded bar (depth + 1) diameters long.
     var depth: Int = 0
-    /// The item has notes: a small dot at the mark's left end.
-    var hasNotes = false
-    /// A check box sits in the mark's left end (dated items): no notes dot there, and a circle shows no AI glyph.
+    /// What the item carries (date, notes, links, photos): small glyphs in the mark, from its left end. Only as many
+    /// as fit are drawn (see MarkIndicator.fitting).
+    var indicators: [MarkIndicator] = []
+    /// A check box sits in the mark's left end (dated items): the glyphs start after it, and a circle shows no AI glyph.
     var checkable = false
     /// Side of each square.
     static let h: CGFloat = 16
@@ -973,6 +974,15 @@ struct StatusBar: View {
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
     private var solid: Bool { isProject || (state != .review && state != .blocked) }
+    /// The AI glyph is drawn in the mark's right end (never on a top-level item, nor on a circle with a check box).
+    static func showsAIGlyph(assignee: Assignee, isProject: Bool, depth: Int, checkable: Bool) -> Bool {
+        !isProject && assignee.squareGlyph != nil && !(checkable && depth == 0)
+    }
+    /// The indicators that fit in a mark at `depth`, in drawing order.
+    static func shown(_ indicators: [MarkIndicator], assignee: Assignee, isProject: Bool, depth: Int, checkable: Bool) -> [MarkIndicator] {
+        MarkIndicator.fitting(indicators, width: Double(width(depth)), cell: Double(w), checkable: checkable,
+                              aiGlyph: showsAIGlyph(assignee: assignee, isProject: isProject, depth: depth, checkable: checkable))
+    }
 
     var body: some View {
         let shape = Self.ownShape
@@ -994,11 +1004,20 @@ struct StatusBar: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
-            // Notes: a dot in the mark's left end (on a circle, its middle unless the AI glyph is there).
-            if hasNotes && !checkable && !(depth == 0 && assignee.squareGlyph != nil) {
-                Circle().fill(solid ? Color.canvas : color).frame(width: 5, height: 5)
-                    .frame(width: Self.w, height: Self.h)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // What the item carries: glyphs from the mark's left end (after the check box, if there is one).
+            let shown = Self.shown(indicators, assignee: assignee, isProject: isProject, depth: depth, checkable: checkable)
+            if !shown.isEmpty {
+                HStack(spacing: 0) {
+                    ForEach(shown) { i in
+                        Image(systemName: i.symbol)
+                            .font(.system(size: 7, weight: .heavy))
+                            .foregroundStyle(solid ? Color.canvas : color)
+                            .frame(width: CGFloat(MarkIndicator.pitch), height: Self.h)
+                            .accessibilityLabel(i.label)
+                    }
+                }
+                .padding(.leading, checkable ? Self.w : CGFloat(MarkIndicator.endInset))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(width: Self.width(depth), height: Self.h)
@@ -1020,11 +1039,13 @@ struct DepthBars: View {
     var childrenHidden = false
     /// The item has a due date: a check box in the mark's round end. Tap it to check the item off (again: undo).
     var onCheck: (() -> Void)? = nil
+    /// What the item carries (date, notes, links, photos), drawn as glyphs in the mark.
+    var indicators: [MarkIndicator] = []
     /// Each item blinks on its own timing (stable for the item, different from its neighbours).
     private var seed: Int { Int(node.id.uuid.0) + Int(node.id.uuid.15) * 3 }
     var body: some View {
         // No blink here: the mark's strength carries the status, so it holds still.
-        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, hasNotes: !node.notes.isEmpty,
+        StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, indicators: indicators,
                   checkable: onCheck != nil)
             .background(alignment: .leading) {
                 if childrenHidden {
@@ -1108,7 +1129,10 @@ struct BarLegend: View {
             row(mark(1, .todo, .shared), "both")
             row(mark(1, .review, .human), "review")
             row(mark(1, .blocked, .human), "blocked")
-            row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, hasNotes: true), "has notes")
+            Text("Glyphs in the mark are what the item has:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
+            ForEach(MarkIndicator.allCases) { i in
+                row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, indicators: [i]), i.label)
+            }
         }
         .padding(.leading, 16)
     }
@@ -1190,6 +1214,19 @@ struct NodeRow: View {
     /// One size and weight for every item's text, top level or not, title or notes.
     private var titleFont: Font { Appearance.shared.font.font(.body) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
+    /// A dated item with no children has a check box in its mark.
+    private var checkable: Bool { node.due != nil && isLeafTask }
+    /// What the item carries, for the glyphs in its mark. A top-level item's notes are its goal (see noteSource).
+    private var indicators: [MarkIndicator] {
+        MarkIndicator.present(hasDate: node.due != nil,
+                              hasNotes: !noteSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                              webLinks: attachments.filter { $0.kind == .link }.count, itemLinks: links.count,
+                              photos: attachments.filter { $0.kind == .photo }.count, checkable: checkable)
+    }
+    /// The linked-items glyph is in the mark (false when the mark is too short for it).
+    private var linkShownInMark: Bool {
+        StatusBar.shown(indicators, assignee: node.assignee, isProject: node.isProject, depth: depth, checkable: checkable).contains(.itemLink)
+    }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
     private func toggleSelect() {
         withAnimation(.easeOut(duration: 0.15)) {
@@ -1299,7 +1336,7 @@ struct NodeRow: View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 0) {
             DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, childrenHidden: hasChildren && !childrenShown,
-                      onCheck: node.due != nil && isLeafTask ? { toggleChecked() } : nil)
+                      onCheck: checkable ? { toggleChecked() } : nil, indicators: indicators)
                 .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
                 // Tap: open the item (again: close it). Hold: zoom in (on the zoomed item: zoom out). Hold and
@@ -1594,7 +1631,7 @@ struct NodeRow: View {
                 if let due = node.due, node.state != .done {
                     Text(due.formatted(.dateTime.month(.abbreviated).day())).font(.caption2).foregroundStyle(due < Date() ? Color.red : Color.ink.opacity(0.45))
                 }
-                if !links.isEmpty {
+                if !links.isEmpty && !linkShownInMark {   // normally a glyph in the mark; here only when it has no room
                     Image(systemName: ItemLink.symbol).font(.system(size: 9, weight: .semibold)).foregroundStyle(Color.ink.opacity(0.45))
                         .accessibilityLabel(links.count == 1 ? "1 linked item" : "\(links.count) linked items")
                 }
