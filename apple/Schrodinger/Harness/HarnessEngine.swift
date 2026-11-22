@@ -5,8 +5,8 @@ import BackgroundTasks
 #endif
 
 /// Housekeeping over the outline, on a timer while the app is open (and on iOS background refresh): notices about
-/// stale and blocked items, prep tasks for calendar events, and each project's digest. It calls no model. The AI's
-/// own work (handed-off items, recommended tasks) is done by `JobQueue`.
+/// stale and blocked items, and each project's digest. It calls no model and adds nothing to the outline. The AI
+/// acts only when asked: its work (an item handed off, tasks recommended on request) is done by `JobQueue`.
 @MainActor
 @Observable
 final class HarnessEngine {
@@ -63,13 +63,11 @@ final class HarnessEngine {
         var results: [String] = []
         for (pid, title) in ids { results.append(await HarnessEngine.runProject(container: container, projectID: pid, title: title)) }
         lastRun = Date(); lastResults = results
-        // Recommendations ride along: about once a day, when they are on.
-        JobQueue.shared.suggestIfDue()
         return results
     }
 }
 
-/// One project's housekeeping pass (notices, calendar prep tasks, the digest), and the in-app draft used when the
+/// One project's housekeeping pass (notices, the digest), and the in-app draft used when the
 /// model runs in the app's own process. It never changes structure or the owner's tasks.
 @MainActor
 struct ProjectAgent {
@@ -108,26 +106,11 @@ struct ProjectAgent {
             s.propose(projectID: projectID, nodeID: t.id, type: .stale, summary: "\"\(t.title)\" has had no activity for \(settings.staleDays)+ days")
         }
 
-        // 4. An empty project, or one with nothing open and the goal not reached.
+        // 4. Nothing open and the goal not reached. (No tasks are proposed here: the AI weighs in only when asked.)
         let open = tasks.filter { $0.state != .done }
         let progress = s.progress(of: projectID)
-        if tasks.isEmpty {
-            s.propose(projectID: projectID, nodeID: nil, type: .new_task, summary: "Project has no tasks. Suggest: \"Define first milestone for \(project.title)\"", payload: ["title": "Define first milestone for \(project.title)", "assignee": "human"])
-        } else if open.isEmpty && progress.pct < 100 {
+        if !tasks.isEmpty && open.isEmpty && progress.pct < 100 {
             s.propose(projectID: projectID, nodeID: nil, type: .no_path, summary: "No open tasks but goal not complete — add tasks toward: \(project.goal.isEmpty ? project.title : project.goal)")
-        }
-        // 4b. Calendar-driven prep proposals (only calendars linked to this project).
-        if !project.calendarIDs.isEmpty {
-            let evs = await CalendarService.shared.events(days: 7, calendarIDs: project.calendarIDs)
-            func norm(_ x: String) -> String { x.lowercased().replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
-            for e in evs {
-                let key = norm(e.title)
-                let covered = tasks.contains { norm($0.title).contains(key) || (!norm($0.title).isEmpty && key.contains(norm($0.title))) }
-                if !covered && !key.isEmpty {
-                    s.propose(projectID: projectID, nodeID: nil, type: .new_task, summary: "Calendar: \"\(e.title)\" on \(e.start.dayString) has no related task — add a prep task?",
-                              payload: ["title": "Prepare for: \(e.title)", "assignee": "ai", "tags": ["meeting"], "due": e.start.timeIntervalSince1970])
-                }
-            }
         }
 
         // 5. Digest.
