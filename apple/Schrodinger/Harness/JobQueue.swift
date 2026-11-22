@@ -32,7 +32,7 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
     var live: Bool { status == .queued || status == .working }
 }
 
-/// The AI's work queue. Handing an item off makes a job and starts it at once; jobs run side by side and do not
+/// The AI's work queue. Nothing enters it unless the owner asks. Handing an item off makes a job and starts it at once; jobs run side by side and do not
 /// wait for each other. When a job finishes, its result is applied to the outline, the item is marked as having an
 /// unseen result, and a notification is posted.
 @MainActor
@@ -48,7 +48,6 @@ final class JobQueue {
     @ObservationIgnored private var resumed = false
     @ObservationIgnored private var inProcessBusy = false
     private var container: ModelContainer { AppData.container }
-    private static let lastSuggestKey = "lastSuggest"
 
     private init() {}
 
@@ -89,24 +88,13 @@ final class JobQueue {
         Task { await ResultNotifier.prepare() }
     }
 
-    /// Asks the AI to look over the outline and recommend tasks.
+    /// Asks the AI to look over the outline and recommend tasks. Only ever called from the menu command: the AI
+    /// does not do this on its own.
     func suggest() {
         resume()
         guard !suggesting else { return }
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSuggestKey)
         jobs.insert(AgentJob(kind: .suggest, title: "Recommend tasks"), at: 0)
         trim(); persist(); pump()
-    }
-
-    /// The same, when it is time: recommendations are on, a model is set up, and the last pass was `hours` ago or more.
-    func suggestIfDue(hours: Double = 20) {
-        let settings = AppSettings.shared
-        guard settings.suggestionsOn, !(settings.makeProvider() is MockProvider) else { return }
-        let last = UserDefaults.standard.double(forKey: Self.lastSuggestKey)
-        guard Date().timeIntervalSince1970 - last >= hours * 3600 else { return }
-        // Enough waiting for an answer already.
-        guard Store(container.mainContext).openSuggestions().count < 8 else { return }
-        suggest()
     }
 
     /// Runs a failed item again.
@@ -259,8 +247,6 @@ final class JobQueue {
         case .yourTurn: "Your turn: \(title)"
         }
         Task { await ResultNotifier.post(title: heading, body: line, nodeID: nodeID) }
-        // What was just finished often says what comes next.
-        suggestIfDue(hours: 1)
     }
 
     private func recommended(_ id: UUID, _ items: [[String: Any]]) {

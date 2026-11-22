@@ -88,7 +88,7 @@ struct InboxView: View {
         // Recommended tasks are answered in the outline itself, where they would go; the Inbox holds the notices.
         let open = self.open.filter { $0.type != .new_task }
         List {
-            if open.isEmpty { Text("Nothing pending. Notices about stale and blocked items appear here. Recommended tasks appear in the outline, where they would go.").foregroundStyle(.secondary) }
+            if open.isEmpty { Text("Nothing pending. Notices about stale and blocked items appear here.").foregroundStyle(.secondary) }
             ForEach(open) { p in
                 VStack(alignment: .leading, spacing: 6) {
                     Text("\(p.typeRaw.replacingOccurrences(of: "_", with: " ")) · \(s.node(p.projectID)?.title ?? "")").font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
@@ -187,9 +187,8 @@ struct SettingsView: View {
                     Text("Apple Intelligence works on handed-off items only while the app is open.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section("Hand-offs and recommendations") {
-                Toggle("Recommend new tasks", isOn: $settings.suggestionsOn)
-                Text("After a handed-off item comes back, and about once a day, the AI looks over the outline and recommends tasks. They appear in the outline as dimmed lines to keep or dismiss.").font(.caption).foregroundStyle(.secondary)
+            Section("Hand-offs") {
+                Text("The AI acts only when you ask: it works on an item when you hand that item off, and recommends tasks only when you choose Recommend tasks in the menu.").font(.caption).foregroundStyle(.secondary)
                 Stepper("Stale after \(settings.staleDays) days", value: $settings.staleDays, in: 1...30)
                 Stepper("Check for stale and blocked items every \(settings.harnessIntervalMinutes) min", value: $settings.harnessIntervalMinutes, in: 5...720, step: 5).onChange(of: settings.harnessIntervalMinutes) { harness.start() }
                 Stepper("On-device agent max turns: \(settings.agentMaxTurns)", value: $settings.agentMaxTurns, in: 2...30)

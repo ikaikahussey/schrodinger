@@ -67,9 +67,6 @@ final class AppSettings {
     var staleDays: Int { didSet { d.set(staleDays, forKey: "staleDays") } }
     var maxTasksPerRun: Int { didSet { d.set(maxTasksPerRun, forKey: "maxTasksPerRun") } }
     var agentMaxTurns: Int { didSet { d.set(agentMaxTurns, forKey: "agentMaxTurns") } }
-    /// The AI recommends new tasks (after a hand-off finishes and about once a day); they show in the outline as
-    /// dimmed rows to keep or dismiss.
-    var suggestionsOn: Bool { didSet { d.set(suggestionsOn, forKey: "suggestionsOn") } }
     var iCloudSync: Bool { didSet { d.set(iCloudSync, forKey: "iCloudSync") } }   // takes effect on next launch
     /// The calendar that calendared items are added to as events; empty = none chosen (no calendar is touched).
     var syncCalendarID: String { didSet { d.set(syncCalendarID, forKey: "syncCalendarID") } }
@@ -93,7 +90,6 @@ final class AppSettings {
         staleDays = d.object(forKey: "staleDays") as? Int ?? 5
         maxTasksPerRun = d.object(forKey: "maxTasksPerRun") as? Int ?? 3
         agentMaxTurns = d.object(forKey: "agentMaxTurns") as? Int ?? 12
-        suggestionsOn = d.object(forKey: "suggestionsOn") as? Bool ?? true
         iCloudSync = d.bool(forKey: "iCloudSync")
         syncCalendarID = d.string(forKey: "syncCalendarID") ?? ""
         remindersOn = d.bool(forKey: "remindersOn")

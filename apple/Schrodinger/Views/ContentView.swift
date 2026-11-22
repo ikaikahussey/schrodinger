@@ -60,10 +60,7 @@ struct ContentView: View {
         // A tapped notification opens its item.
         .onChange(of: router.openID, initial: true) { _, id in if let id { sel.open(id); router.openID = nil } }
         // Back in the foreground: time has passed, so the badge and the next notifications are brought up to date.
-        // It is also when the AI looks over the outline for tasks to recommend (about once a day, when that is on).
-        .onChange(of: scenePhase, initial: true) { _, p in
-            if p == .active { Task { await Reminders.syncAll(container: AppData.container) }; JobQueue.shared.suggestIfDue() }
-        }
+        .onChange(of: scenePhase) { _, p in if p == .active { Task { await Reminders.syncAll(container: AppData.container) } } }
         // No global Run button: an item is handed to the AI from its own row or field (see NodeRow).
     }
 

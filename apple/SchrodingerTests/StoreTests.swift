@@ -159,17 +159,14 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(s.digests(for: p.id).isEmpty)
     }
 
-    func testProposalsOnlyApplyOnAccept() async throws {
+    /// Housekeeping adds nothing to the outline and proposes no tasks: the AI weighs in only when asked.
+    func testHousekeepingProposesNoTasks() async throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let empty = s.create(title: "Empty")
         s.save()
         _ = try await ProjectAgent(container: c, projectID: empty.id, provider: MockProvider()).run()
-        let nt = try XCTUnwrap(s.inbox().first { $0.type == .new_task && $0.projectID == empty.id })
-        XCTAssertEqual(s.suggestionParent(of: nt), empty.id, "a recommendation with no place of its own goes under its project")
+        XCTAssertTrue(s.openSuggestions().isEmpty)
         XCTAssertTrue(s.children(of: empty.id).isEmpty)
-        s.dismiss(nt)
-        _ = try await ProjectAgent(container: c, projectID: empty.id, provider: MockProvider()).run()
-        XCTAssertFalse(s.inbox().contains { $0.type == .new_task && $0.projectID == empty.id }, "dismissed proposals are not re-raised")
     }
 
     /// What the model hands in is read defensively and applied to the item as in-app changes.
