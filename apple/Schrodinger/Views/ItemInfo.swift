@@ -122,10 +122,10 @@ struct FieldCircle: View {
     }
 }
 
-/// The child count in the control strip: a two-part capsule in the scheme's main color. The left block carries the
-/// outline glyph, the right the number in the panel's condensed bold digits, two wide ("03") so the badge keeps its
-/// size as the count changes. Filled while the children are on screen, outlined while they are hidden; tap to
-/// show or hide them.
+/// The child count in the control strip: a capsule in the scheme's main color holding only the number, in the panel's
+/// condensed bold digits, two wide ("03") so the badge keeps its size as the count changes. It always takes the width
+/// its digits need, so the number is never truncated when the strip is tight. Filled while the children are on screen,
+/// outlined while they are hidden; tap to show or hide them.
 struct ChildCountBadge: View {
     let count: Int
     /// The children are on screen.
@@ -137,27 +137,23 @@ struct ChildCountBadge: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 0) {
-                // Left block: always solid, with the glyph cut in the color that reads on it.
-                Image(systemName: "list.bullet.indent")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(PanelPalette.text(on: fill))
-                    .frame(width: 22, height: 20)
-                    .background { fill.panelBlink(41) }
-                // Right block: the number. Solid when the children are shown, open when they are hidden.
-                Text(digits)
-                    .font(PanelPalette.label(.caption).monospacedDigit())
-                    .foregroundStyle(shown ? PanelPalette.text(on: fill) : Color.ink.opacity(0.85))
-                    .padding(.leading, 5).padding(.trailing, 8)
-                    .frame(minWidth: 26, minHeight: 20)
-                    .background { if shown { fill.opacity(0.78) } }
-            }
+            // The number. Solid when the children are shown, open when they are hidden.
+            Text(digits)
+                .font(PanelPalette.label(.caption).monospacedDigit())
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(shown ? PanelPalette.text(on: fill) : Color.ink.opacity(0.85))
+                .padding(.horizontal, 8)
+                .frame(minWidth: 30, minHeight: 20)
+                .background { if shown { fill.panelBlink(41) } }
             .clipShape(Capsule())
-            .overlay { Capsule().strokeBorder(fill, lineWidth: 1.5) }
-            .frame(height: 22)
-            .contentShape(Rectangle().inset(by: -6))
+                .overlay { Capsule().strokeBorder(fill, lineWidth: 1.5) }
+                .frame(height: 22)
+                .contentShape(Rectangle().inset(by: -6))
         }
         .buttonStyle(.plain)
+        .fixedSize()
+        .layoutPriority(1)
         .help("\(count) " + (count == 1 ? "child" : "children") + (shown ? " · tap to hide" : " · tap to show"))
         .accessibilityLabel("\(count) " + (count == 1 ? "child" : "children"))
         .accessibilityHint(shown ? "Hides the children" : "Shows the children")
