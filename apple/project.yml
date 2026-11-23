@@ -35,6 +35,8 @@ targets:
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
+          # http://localhost for a model server on the same Mac (the Local model provider).
+          NSAllowsLocalNetworking: true
     # One entitlements file per platform: push (which CloudKit uses to tell a device that another one changed
     # something) has a different key on each. Export for the App Store switches both to production.
     settings:

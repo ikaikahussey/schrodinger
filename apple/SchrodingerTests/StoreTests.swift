@@ -215,6 +215,31 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.inbox().map(\.type), [.note])
     }
 
+    /// The local model server's wire format: its address, tool calls with text or object arguments, hidden reasoning.
+    func testLocalProviderWireFormat() {
+        XCTAssertEqual(LocalProvider.url("", "/models")?.absoluteString, "http://localhost:11434/v1/models")
+        XCTAssertEqual(LocalProvider.url("localhost:1234/", "/chat/completions")?.absoluteString, "http://localhost:1234/v1/chat/completions")
+        XCTAssertEqual(LocalProvider.url("http://127.0.0.1:8080/v1", "/models")?.absoluteString, "http://127.0.0.1:8080/v1/models")
+        let reply = JSONText.decode(#"""
+            {"choices": [{"message": {"role": "assistant", "content": "<think>hmm</think>\n Draft. ", "tool_calls": [
+              {"id": "a1", "type": "function", "function": {"name": "web_fetch", "arguments": "{\"url\":\"https://example.org\"}"}},
+              {"type": "function", "function": {"name": "finish", "arguments": {"artifact": "Done"}}},
+              {"type": "function", "function": {"name": ""}}]}}]}
+            """#)
+        let msg = LocalProvider.message(of: reply)
+        XCTAssertEqual(LocalProvider.text(of: msg), "Draft.")
+        let calls = LocalProvider.toolCalls(of: msg)
+        XCTAssertEqual(calls.map(\.name), ["web_fetch", "finish"])
+        XCTAssertEqual(calls[0].input["url"] as? String, "https://example.org")
+        XCTAssertEqual(calls[1].id, "call_1"); XCTAssertEqual(calls[1].input["artifact"] as? String, "Done")
+        XCTAssertTrue(LocalProvider.toolCalls(of: [:]).isEmpty)
+        #if os(macOS)
+        XCTAssertTrue(ProviderKind.offered.contains(.local))
+        #else
+        XCTAssertFalse(ProviderKind.offered.contains(.local))
+        #endif
+    }
+
     /// What the model hands in is read defensively and applied to the item as in-app changes.
     func testHandoffResultIsParsedAndApplied() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)

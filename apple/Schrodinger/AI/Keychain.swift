@@ -63,6 +63,9 @@ final class AppSettings {
 
     var provider: ProviderKind { didSet { d.set(provider.rawValue, forKey: "provider") } }
     var claudeModel: String { didSet { d.set(claudeModel, forKey: "claudeModel") } }
+    /// The local model server on this Mac (OpenAI-compatible: Ollama, LM Studio) and the model to use on it.
+    var localBaseURL: String { didSet { d.set(localBaseURL, forKey: "localBaseURL") } }
+    var localModel: String { didSet { d.set(localModel, forKey: "localModel") } }
     var maxTasksPerRun: Int { didSet { d.set(maxTasksPerRun, forKey: "maxTasksPerRun") } }
     /// Turns the model gets on one handed-off item when it runs in the app's own process (Apple Intelligence).
     static let agentMaxTurns = 12
@@ -85,6 +88,8 @@ final class AppSettings {
         provider = ProviderKind(rawValue: d.string(forKey: "provider") ?? "")
             ?? (!(Keychain.get("anthropic_api_key") ?? "").isEmpty ? .claude : AppleIntelligenceProvider.availability.available ? .apple : .mock)
         claudeModel = d.string(forKey: "claudeModel") ?? "claude-sonnet-4-5"
+        localBaseURL = d.string(forKey: "localBaseURL") ?? LocalProvider.defaultBaseURL
+        localModel = d.string(forKey: "localModel") ?? ""
         maxTasksPerRun = d.object(forKey: "maxTasksPerRun") as? Int ?? 3
         iCloudSync = d.bool(forKey: "iCloudSync")
         syncCalendarID = d.string(forKey: "syncCalendarID") ?? ""
@@ -96,6 +101,7 @@ final class AppSettings {
     func makeProvider() -> any LanguageModelProvider {
         switch provider {
         case .apple: AppleIntelligenceProvider()
+        case .local: LocalProvider(baseURL: localBaseURL, model: localModel)
         case .claude: anthropicKey.isEmpty ? MockProvider() : ClaudeProvider(apiKey: anthropicKey, model: claudeModel)
         case .mock: MockProvider()
         }
