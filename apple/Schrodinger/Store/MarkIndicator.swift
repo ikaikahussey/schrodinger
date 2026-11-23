@@ -25,7 +25,9 @@ enum MarkIndicator: String, CaseIterable, Identifiable {
     }
 
     /// Width one glyph takes in the mark.
-    static let pitch: Double = 10
+    static let pitch: Double = 12
+    /// At most this many glyphs are drawn in a mark, however long it is. The rest show in the open item.
+    static let maxShown = 2
     /// Space kept clear at a round end of the mark that holds nothing else.
     static let endInset: Double = 3
 
@@ -45,7 +47,7 @@ enum MarkIndicator: String, CaseIterable, Identifiable {
     /// glyph the right end.
     static func capacity(width: Double, cell: Double, checkable: Bool, aiGlyph: Bool) -> Int {
         let free = width - (checkable ? cell : endInset) - (aiGlyph ? cell : endInset)
-        return max(0, Int((free / pitch).rounded(.down)))
+        return min(maxShown, max(0, Int((free / pitch).rounded(.down))))
     }
 
     /// The glyphs that are drawn: the first ones that fit.

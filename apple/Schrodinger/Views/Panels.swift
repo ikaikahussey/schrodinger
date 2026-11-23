@@ -306,6 +306,7 @@ struct AppearanceSection: View {
                 ForEach(AppFontFamily.allCases) { f in Text(f.label).font(f.font(.body)).tag(f) }
             }
             Text("The quick brown fox jumps over the lazy dog.").font(look.font.font(.body))
+            Toggle("Compact rows", isOn: $look.compactRows)
             Toggle("Xylophone sounds when moving items", isOn: $look.sounds)
             Text("Indent and outdent step along a major scale; moving up and down steps by semitones.").font(.caption).foregroundStyle(.secondary)
         }
