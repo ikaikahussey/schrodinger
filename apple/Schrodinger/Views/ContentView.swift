@@ -31,7 +31,6 @@ final class Selection {
 }
 
 struct ContentView: View {
-    @Environment(HarnessEngine.self) private var harness
     @State private var sel = Selection()
     @State private var router = ReminderRouter.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -52,7 +51,6 @@ struct ContentView: View {
                 .frame(minWidth: 520, idealWidth: 620, minHeight: 480, idealHeight: 640)
                 #endif
                 .environment(sel)
-                .environment(harness)
                 .font(Appearance.shared.font.font(.body))
             }
         .environment(sel)

@@ -427,6 +427,14 @@ struct Store {
         p.status = .accepted
     }
     func dismiss(_ p: Proposal) { p.status = .dismissed }
+    /// Closes the stale / blocked / no-open-tasks notices an earlier version filed on its own. Nothing files them now.
+    func dismissAutomaticNotices() {
+        let auto: Set<ProposalType> = [.stale, .blocked_chain, .no_path]
+        let open = inbox().filter { auto.contains($0.type) }
+        guard !open.isEmpty else { return }
+        for p in open { dismiss(p) }
+        save()
+    }
 
     // MARK: - Digests, files, runs
     func saveDigest(projectID: UUID, day: String, body: String) {

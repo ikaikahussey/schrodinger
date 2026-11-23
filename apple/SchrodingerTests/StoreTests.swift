@@ -193,19 +193,26 @@ final class StoreTests: XCTestCase {
         let r4 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: MockProvider())
         s.applyHandoff(r4, to: sh)
         XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.artifact?.contains("add parking") ?? false)
-        // Housekeeping writes the digest.
-        _ = try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).run()
+        // Opening Digest writes the digest.
+        try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).writeDigest()
         XCTAssertFalse(s.digests(for: p.id).isEmpty)
     }
 
-    /// Housekeeping adds nothing to the outline and proposes no tasks: the AI weighs in only when asked.
-    func testHousekeepingProposesNoTasks() async throws {
+    /// Nothing looks over the outline on its own: writing the digest files no notices and adds no items.
+    func testDigestFilesNoNoticesOrTasks() async throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
-        let empty = s.create(title: "Empty")
+        let p = s.create(title: "Quiet")
+        let old = s.create(title: "Untouched for a month", parentID: p.id)
+        old.lastActivityAt = Date().addingTimeInterval(-30 * 86400)
         s.save()
-        _ = try await ProjectAgent(container: c, projectID: empty.id, provider: MockProvider()).run()
-        XCTAssertTrue(s.openSuggestions().isEmpty)
-        XCTAssertTrue(s.children(of: empty.id).isEmpty)
+        try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).writeDigest()
+        XCTAssertTrue(s.inbox().isEmpty)
+        XCTAssertEqual(s.children(of: p.id).count, 1)
+        // Notices filed by an earlier version are closed at launch; suggestions asked for on an item are kept.
+        s.propose(projectID: p.id, nodeID: old.id, type: .stale, summary: "old notice")
+        s.propose(projectID: p.id, nodeID: old.id, type: .note, summary: "Add", payload: ["text": "x"])
+        s.dismissAutomaticNotices()
+        XCTAssertEqual(s.inbox().map(\.type), [.note])
     }
 
     /// What the model hands in is read defensively and applied to the item as in-app changes.
