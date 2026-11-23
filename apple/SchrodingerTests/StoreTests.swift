@@ -77,6 +77,45 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.pruneHistory(olderThan: 90, now: Date().addingTimeInterval(91 * 86400)), 2)
     }
 
+    func testReinstateBringsBackItemAndWhatWasDeletedWithIt() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        _ = s.create(title: "first", parentID: p.id)
+        let a = s.create(title: "A", parentID: p.id)
+        _ = s.create(title: "last", parentID: p.id)
+        let early = s.create(title: "removed earlier", parentID: a.id)
+        let a1 = s.create(title: "A1", parentID: a.id)
+        let a1x = s.create(title: "A1x", parentID: a1.id)
+        let due = Date(timeIntervalSince1970: 1_800_000_000)
+        s.update(a) { $0.notes = "note"; $0.due = due; $0.state = .done; $0.assignee = .shared }
+        let aID = a.id, a1ID = a1.id, a1xID = a1x.id, earlyID = early.id
+        s.delete(early); s.save()
+        // That one was removed a while before the rest.
+        for e in s.activity(for: earlyID) { e.createdAt = Date().addingTimeInterval(-3600) }
+        s.delete(a); s.save()
+        XCTAssertEqual(s.children(of: p.id).map(\.title), ["first", "last"])
+        // Deleted items show where they were, in order.
+        let rows = s.history(since: Date().addingTimeInterval(-86400))
+        XCTAssertEqual(rows.map(\.title), ["P", "first", "A", "removed earlier", "A1", "A1x", "last"])
+        XCTAssertEqual(rows.first { $0.id == a1ID }?.parentID, aID)
+
+        // Reinstating the child of a deleted item brings its parent back first, and what was under the child.
+        let back = try XCTUnwrap(s.reinstate(a1ID)); s.save()
+        XCTAssertEqual(back.id, a1ID)
+        XCTAssertEqual(s.children(of: p.id).map(\.title), ["first", "A", "last"])
+        let ra = try XCTUnwrap(s.node(aID))
+        XCTAssertEqual(ra.notes, "note"); XCTAssertEqual(ra.due, due); XCTAssertEqual(ra.state, .done); XCTAssertEqual(ra.assignee, .shared)
+        XCTAssertEqual(s.children(of: aID).map(\.title), ["A1"])
+        XCTAssertEqual(s.children(of: a1ID).map(\.id), [a1xID])
+        // The one removed earlier stays deleted, and can be brought back by itself.
+        XCTAssertNil(s.node(earlyID))
+        XCTAssertEqual(s.history(since: Date().addingTimeInterval(-86400)).filter(\.deleted).map(\.title), ["removed earlier"])
+        XCTAssertNotNil(s.reinstate(earlyID)); s.save()
+        XCTAssertEqual(s.children(of: aID).map(\.title), ["removed earlier", "A1"])
+        XCTAssertTrue(s.history(since: Date().addingTimeInterval(-86400)).allSatisfy { !$0.deleted })
+        XCTAssertNil(s.reinstate(UUID()))
+    }
+
     func testHistoryMarksAddedDeletedRenamedCompleted() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let longAgo = Date().addingTimeInterval(-30 * 86400)
@@ -112,7 +151,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(row(goneID).changes, [.deleted]); XCTAssertTrue(row(goneID).deleted)
         XCTAssertTrue(row(goneChildID).deleted)
         XCTAssertEqual(row(fresh.id).changes, [.added])
-        XCTAssertEqual(HistoryView.summary(rows), "1 added · 2 deleted · 1 renamed · 1 completed")
+        XCTAssertEqual(HistoryRow.summary(rows), "1 added · 2 deleted · 1 renamed · 1 completed")
 
         // Changes only: unchanged items go, except those holding a changed item.
         XCTAssertEqual(s.history(since: since, changesOnly: true).map(\.title), ["P", "new name", "finish", "gone", "gone child", "fresh"])

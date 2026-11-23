@@ -205,14 +205,74 @@ struct Store {
             for a in activity(for: v.id, limit: 10_000) { ctx.delete(a) }
             ctx.insert(ActivityEntry(nodeID: v.id, actor: actor, action: HistoryAction.delete, detail: v.title, undo: [
                 "title": v.title, "parent_id": v.parentID?.uuidString as Any, "position": v.position,
-                "state": v.stateRaw, "created_at": v.createdAt.timeIntervalSince1970]))
+                "state": v.stateRaw, "created_at": v.createdAt.timeIntervalSince1970,
+                // Enough to bring the item back as it was (see `reinstate`).
+                "notes": v.notes, "goal": v.goal, "assignee": v.assigneeRaw, "due": v.due?.timeIntervalSince1970 as Any,
+                "acceptance_note": v.acceptanceNote, "artifact": v.artifact as Any, "project_status": v.projectStatusRaw,
+                "success_criteria": v.successCriteria, "constraints": v.constraints]))
             ctx.delete(v)
         }
         for (i, s) in children(of: parent).filter({ $0.id != n.id }).enumerated() { s.position = i }
     }
 
+    /// Brings a deleted item back where it was, along with the items under it that were deleted with it. If the
+    /// item it was under has been deleted too, that one comes back first (without its other children). Text, notes,
+    /// status, holder and date return; photos, links and calendar events of the deleted item do not.
+    /// Returns nil if there is no record of the item.
+    @discardableResult
+    func reinstate(_ id: UUID, actor: Actor = .human) -> Node? {
+        if let live = node(id) { return live }
+        let del = HistoryAction.delete
+        let entries = (try? ctx.fetch(FetchDescriptor<ActivityEntry>(predicate: #Predicate { $0.action == del }, sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+        var tombs: [UUID: ActivityEntry] = [:]
+        for e in entries { tombs[e.nodeID] = e }
+        guard let first = tombs[id] else { return nil }
+        // Items deleted in the same stroke as this one (not ones removed from under it earlier).
+        let cutoff = first.createdAt.addingTimeInterval(-2)
+
+        func parentID(_ t: ActivityEntry) -> UUID? { (t.undo?["parent_id"] as? String).flatMap(UUID.init(uuidString:)) }
+        func revive(_ t: ActivityEntry) -> Node {
+            tombs[t.nodeID] = nil
+            let u = t.undo ?? [:]
+            var parent = parentID(t)
+            if let p = parent, node(p) == nil {
+                if let pt = tombs[p] { _ = revive(pt) } else { parent = nil }
+            }
+            let siblings = children(of: parent)
+            let at = max(0, min(u["position"] as? Int ?? siblings.count, siblings.count))
+            for s in siblings where s.position >= at { s.position += 1 }
+            let n = Node(title: u["title"] as? String ?? t.detail, parentID: parent, position: at)
+            n.id = t.nodeID
+            if let v = u["state"] as? String { n.stateRaw = v }
+            if let v = u["assignee"] as? String, parent != nil { n.assigneeRaw = v }
+            if let v = u["notes"] as? String { n.notes = v }
+            if let v = u["goal"] as? String { n.goal = v }
+            if let v = u["due"] as? Double { n.due = Date(timeIntervalSince1970: v) }
+            if let v = u["acceptance_note"] as? String { n.acceptanceNote = v }
+            n.artifact = u["artifact"] as? String
+            if let v = u["project_status"] as? String { n.projectStatusRaw = v }
+            if let v = u["success_criteria"] as? String { n.successCriteria = v }
+            if let v = u["constraints"] as? String { n.constraints = v }
+            if let v = u["created_at"] as? Double { n.createdAt = Date(timeIntervalSince1970: v) }
+            ctx.insert(n)
+            ctx.delete(t)
+            log(n, actor, HistoryAction.restore, n.title)
+            return n
+        }
+
+        let top = revive(first)
+        var queue = [id]
+        while !queue.isEmpty {
+            let cur = queue.removeFirst()
+            let under = tombs.values.filter { parentID($0) == cur && $0.createdAt >= cutoff }
+                .sorted { ($0.undo?["position"] as? Int ?? 0) < ($1.undo?["position"] as? Int ?? 0) }
+            for t in under { let n = revive(t); queue.append(n.id) }
+        }
+        return top
+    }
+
     // MARK: - History (what was added, deleted, renamed, completed or moved since a date)
-    /// The outline as History shows it: every current item in outline order, plus the items deleted since `since`
+    /// The outline as History mode shows it: every current item in outline order, plus the items deleted since `since`
     /// in the place they used to be. Each row says what happened to it in that time. `changesOnly` leaves out
     /// items that did not change (their changed descendants keep them in, for context).
     func history(since: Date, changesOnly: Bool = false) -> [HistoryRow] {
@@ -278,6 +338,7 @@ struct Store {
                 seen.insert(it.row.id)
                 let at = out.count
                 var row = it.row; row.depth = depth
+                row.parentID = parent; row.position = it.position
                 out.append(row)
                 let below = walk(it.row.id, depth + 1)
                 if changesOnly && row.changes.isEmpty && !below { out.removeSubrange(at...) } else { any = true }
@@ -442,7 +503,7 @@ struct Store {
     func save() { try? ctx.save() }
 }
 
-enum HistoryAction { static let delete = "delete" }
+enum HistoryAction { static let delete = "delete"; static let restore = "restore" }
 
 enum HistoryChange: String, CaseIterable, Hashable { case added, deleted, renamed, completed, moved, edited }
 
@@ -458,6 +519,32 @@ struct HistoryRow: Identifiable, Equatable {
     let when: Date?
     let done: Bool
     let deleted: Bool
+    /// Where it sits (a deleted item: where it was): the item it is under, and its place among that item's children.
+    var parentID: UUID? = nil
+    var position: Int = 0
+
+    /// "3 added · 1 deleted · 2 completed", or "No changes".
+    static func summary(_ rows: [HistoryRow]) -> String {
+        let parts = HistoryChange.allCases.compactMap { c -> String? in
+            let n = rows.filter { $0.changes.contains(c) }.count
+            return n == 0 ? nil : "\(n) \(c.rawValue)"
+        }
+        return parts.isEmpty ? "No changes" : parts.joined(separator: " · ")
+    }
+}
+
+/// How far back History looks.
+enum HistoryPeriod: String, CaseIterable, Identifiable {
+    case today, week, month
+    var id: String { rawValue }
+    var label: String { switch self { case .today: "Today"; case .week: "7 days"; case .month: "30 days" } }
+    func start(now: Date = Date()) -> Date {
+        switch self {
+        case .today: Calendar.current.startOfDay(for: now)
+        case .week: now.addingTimeInterval(-7 * 86400)
+        case .month: now.addingTimeInterval(-30 * 86400)
+        }
+    }
 }
 
 enum StoreError: LocalizedError {

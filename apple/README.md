@@ -11,7 +11,7 @@ Native SwiftUI app. One codebase, two platforms (iOS 26, macOS 26).
 - **Housekeeping** (`Harness/HarnessEngine.swift`): on a timer and iOS Background App Refresh, no model calls, nothing added to the outline: stale and blocked notices (Inbox) and each project's digest.
 - **Calendar**: EventKit — agenda of events + due tasks, "Add to calendar" for due-dated tasks, project-linked calendars generate prep-task proposals.
 - **Saved views**: header menu → Save this view… keeps the current search, filter, tag and zoom under a name. Saved views are listed in the same menu and as buttons under the search field; hold (or right-click) a button to rename or delete it. They are stored with the rest of the data (and sync with it), with no extra iCloud record type.
-- **History**: header menu → History shows the outline marked up with what changed (today, 7 days, 30 days): added items in green, deleted items struck through where they were, renamed items with their old text, completed items checked. Deleted items are remembered for 90 days.
+- **History**: header menu → History turns the outline into a marked-up view of what changed (today, 7 days, 30 days): added items in green, deleted items struck through where they were, each with a Reinstate button, renamed items with their old text above. Done in the bar under the header leaves the mode. Deleted items are remembered for 90 days.
 - **Same model as the web app**: numbered outline, `@ai` / `@me` / `@both` and `#mode` tags, shared tasks (AI preps → "your turn"), review/inbox/digest/undo.
 - **Jobs are per device**: the queue (`Application Support/Jobs`) is not synced, so it adds no iCloud record type; what a job produces is written to the outline, which syncs.
 
