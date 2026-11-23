@@ -177,7 +177,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Model (calls happen from this device)") {
-                Picker("Provider", selection: $settings.provider) { ForEach(ProviderKind.allCases) { Text($0.label).tag($0) } }
+                Picker("Provider", selection: $settings.provider) { ForEach(ProviderKind.offered) { Text($0.label).tag($0) } }
                 let av = AppleIntelligenceProvider.availability
                 Text(av.available ? "Apple Intelligence is available on this device." : "Apple Intelligence unavailable: \(av.reason)").font(.caption).foregroundStyle(.secondary)
                 if settings.provider == .claude {
@@ -186,6 +186,8 @@ struct SettingsView: View {
                     Text("The key is kept in the Keychain and, with iCloud Keychain on, is shared with your other devices: enter it once. An item handed to Claude is one request that finishes even with the app closed. Web search in hand-offs needs to be enabled for your organization in the Anthropic Console.").font(.caption).foregroundStyle(.secondary)
                 } else if settings.provider == .apple {
                     Text("Apple Intelligence works on handed-off items only while the app is open.").font(.caption).foregroundStyle(.secondary)
+                } else if settings.provider == .local {
+                    LocalModelSettings()
                 }
             }
             Section("Hand-offs") {
@@ -203,6 +205,40 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .frame(minWidth: 420)
+    }
+}
+
+/// The local model server on this Mac: its address, the model to use, and whether it answers.
+struct LocalModelSettings: View {
+    @State private var settings = AppSettings.shared
+    @State private var models: [String] = []
+    @State private var status = ""
+    @State private var failed = false
+    var body: some View {
+        TextField("Server", text: $settings.localBaseURL, prompt: Text(LocalProvider.defaultBaseURL))
+            .autocorrectionDisabled()
+            .onSubmit { Task { await check() } }
+        if models.isEmpty {
+            TextField("Model", text: $settings.localModel, prompt: Text("e.g. qwen3:14b"))
+                .autocorrectionDisabled()
+        } else {
+            Picker("Model", selection: $settings.localModel) {
+                if !models.contains(settings.localModel) { Text(settings.localModel.isEmpty ? "Choose\u{2026}" : settings.localModel).tag(settings.localModel) }
+                ForEach(models, id: \.self) { Text($0).tag($0) }
+            }
+        }
+        Button("Check server") { Task { await check() } }
+        if !status.isEmpty { Text(status).font(.caption).foregroundStyle(failed ? Color.red : .secondary).fixedSize(horizontal: false, vertical: true) }
+        Text("Runs on this Mac through a local model server (Ollama, or LM Studio at http://localhost:1234/v1). Free, and nothing leaves the computer. It works on handed-off items only while the app is open, and the draft comes back for your review. A model with tool calling can read the project and fetch web pages; one without drafts from the item alone.").font(.caption).foregroundStyle(.secondary)
+            .task { await check() }
+    }
+    private func check() async {
+        do {
+            models = try await LocalProvider.models(baseURL: settings.localBaseURL)
+            failed = models.isEmpty
+            status = models.isEmpty ? "The server answered but has no models. Download one first (for Ollama: ollama pull <model>)." : "Server found: \(models.count) model\(models.count == 1 ? "" : "s")."
+            if settings.localModel.isEmpty, let first = models.first { settings.localModel = first }
+        } catch { models = []; failed = true; status = error.localizedDescription }
     }
 }
 
