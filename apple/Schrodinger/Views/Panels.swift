@@ -88,7 +88,7 @@ struct InboxView: View {
         // Recommended tasks are answered in the outline itself, where they would go; the Inbox holds the notices.
         let open = self.open.filter { $0.type != .new_task }
         List {
-            if open.isEmpty { Text("Nothing pending. Notices about stale and blocked items appear here.").foregroundStyle(.secondary) }
+            if open.isEmpty { Text("Nothing pending. Suggestions you ask for on an item appear here.").foregroundStyle(.secondary) }
             ForEach(open) { p in
                 VStack(alignment: .leading, spacing: 6) {
                     Text("\(p.typeRaw.replacingOccurrences(of: "_", with: " ")) · \(s.node(p.projectID)?.title ?? "")").font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
@@ -151,10 +151,12 @@ struct DigestView: View {
             ForEach(projects) { p in
                 Section(p.title) {
                     if let d = s.digests(for: p.id).first { Text(d.body).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                    else { Text("No digest yet — run the harness.").foregroundStyle(.secondary) }
+                    else { Text("No digest yet.").foregroundStyle(.secondary) }
                 }
             }
         }.navigationTitle("Digest")
+        // Written when this panel is opened (no model call); nothing writes it in the background.
+        .task { for p in projects { try? await ProjectAgent(container: ctx.container, projectID: p.id, provider: MockProvider()).writeDigest() } }
     }
 }
 
@@ -170,7 +172,6 @@ struct ActivityView: View {
 }
 
 struct SettingsView: View {
-    @Environment(HarnessEngine.self) private var harness
     @State private var settings = AppSettings.shared
     @State private var key: String = AppSettings.shared.anthropicKey
     var body: some View {
@@ -189,10 +190,6 @@ struct SettingsView: View {
             }
             Section("Hand-offs") {
                 Text("The AI acts only when you ask: it works on an item when you hand that item off, and recommends tasks only when you choose Recommend tasks in the menu.").font(.caption).foregroundStyle(.secondary)
-                Stepper("Stale after \(settings.staleDays) days", value: $settings.staleDays, in: 1...30)
-                Stepper("Check for stale and blocked items every \(settings.harnessIntervalMinutes) min", value: $settings.harnessIntervalMinutes, in: 5...720, step: 5).onChange(of: settings.harnessIntervalMinutes) { harness.start() }
-                Stepper("On-device agent max turns: \(settings.agentMaxTurns)", value: $settings.agentMaxTurns, in: 2...30)
-                if let last = harness.lastRun { Text("Last check \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
             CalendarSyncSection()
             RemindersSection()

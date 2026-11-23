@@ -7,7 +7,6 @@ import BackgroundTasks
 @main
 struct SchrodingerApp: App {
     let container: ModelContainer
-    @State private var harness: HarnessEngine
     #if os(iOS)
     // iOS hands a finished background transfer (a handed-off item's reply) to the app delegate.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -16,23 +15,22 @@ struct SchrodingerApp: App {
     init() {
         let c = AppData.container
         container = c
-        _harness = State(initialValue: HarnessEngine(container: c))
         Reminders.configure()
         JobQueue.shared.resume()   // the AI's work queue: replies that came in while the app was closed, interrupted jobs
         #if os(iOS)
-        let engine = HarnessEngine(container: c)
+        // Background App Refresh keeps the badge and the next notifications for dated items up to date. It calls no
+        // model and does not look over the outline: the AI works only on an item the owner hands off.
         // The handler is written in this main-actor context, so Swift checks at run time that it runs on the main actor.
         // With `using: nil` iOS called it on a background queue, which trapped (EXC_BREAKPOINT in
         // _dispatch_assert_queue_fail via swift_task_isCurrentExecutor) whenever iOS woke the app for a background
         // refresh. Deliver it on the main queue instead.
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: HarnessEngine.bgIdentifier, using: DispatchQueue.main) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: ReminderRefresh.identifier, using: DispatchQueue.main) { task in
             Task { @MainActor in
-                engine.scheduleBackgroundRefresh()
-                let work = Task { await engine.runOnce() }
+                ReminderRefresh.schedule()
+                let work = Task { await Reminders.syncAll(container: c) }
                 // iOS calls the expiration handler on a queue of its choosing: keep it free of actor isolation.
                 task.expirationHandler = { @Sendable in work.cancel() }
                 _ = await work.value
-                await Reminders.syncAll(container: c)
                 task.setTaskCompleted(success: true)
             }
         }
@@ -44,7 +42,7 @@ struct SchrodingerApp: App {
         // A standard Mac window: title bar with the close / minimize / zoom buttons, full screen (green button,
         // ⌃⌘F, View > Enter Full Screen), resizable down to a minimum, several windows (File > New Window).
         WindowGroup("Schrodinger") {
-            ContentView().environment(harness).task { harness.start() }
+            ContentView()
                 .frame(minWidth: 480, minHeight: 420)
         }
             .modelContainer(container)
@@ -53,13 +51,26 @@ struct SchrodingerApp: App {
             .windowResizability(.contentMinSize)
             .defaultSize(width: 900, height: 820)
             .commands { UndoCommands(); TextSizeCommands() }
-        Settings { SettingsView().modelContainer(container).environment(harness) }
+        Settings { SettingsView().modelContainer(container) }
         #else
-        WindowGroup { ContentView().environment(harness).task { harness.start() } }
+        WindowGroup { ContentView().task { ReminderRefresh.schedule() } }
             .modelContainer(container)
         #endif
     }
 }
+
+#if os(iOS)
+/// Asks iOS to wake the app now and then so reminders stay current (see the handler registered at launch).
+enum ReminderRefresh {
+    /// Unchanged from when this refresh also ran housekeeping: it is the identifier listed in Info.plist.
+    static let identifier = "org.schrodinger.harness"
+    static func schedule() {
+        let req = BGAppRefreshTaskRequest(identifier: identifier)
+        req.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
+        try? BGTaskScheduler.shared.submit(req)
+    }
+}
+#endif
 
 /// The app's one data store, made on first use: by the app at launch, or by a Shortcuts action (Add to Schrodinger)
 /// if that runs first.
@@ -84,6 +95,7 @@ struct SchrodingerApp: App {
         Store(c.mainContext).migrateModesToTags()   // items from before modes became tags
         Store(c.mainContext).pruneDoneDated()       // checked-off dated items, a week after they were done
         Store(c.mainContext).pruneHistory()         // deleted-item history, 90 days back
+        Store(c.mainContext).dismissAutomaticNotices()   // notices from before the automatic checks were removed
         c.mainContext.undoManager = UndoManager()   // enables undo/redo for every edit made through the main context
         return c
     }
