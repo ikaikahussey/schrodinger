@@ -1,104 +1,139 @@
 import SwiftUI
-import SwiftData
 
-/// History: the outline, marked up with what changed lately. Added items are green with a +, deleted items are
-/// struck through in the place they used to be, renamed items show their old text struck through before the new,
-/// completed items carry a check. Tapping an item that still exists shows it in the outline.
-struct HistoryView: View {
-    @Environment(\.modelContext) private var ctx
-    var sel: Selection
-    // Observed so the view refreshes when items or their history change.
-    @Query private var nodes: [Node]
-    @Query private var entries: [ActivityEntry]
-    @AppStorage("historyPeriod") private var period: Period = .week
-    @AppStorage("historyChangesOnly") private var changesOnly = false
+// History is a mode of the outline (header menu → History), not a screen of its own. While it is on, the outline
+// shows what changed in the chosen period, in place: items added are marked green, items deleted come back as
+// struck-through rows where they used to be (each with a Reinstate button), and a renamed item shows its old text
+// above it. A bar under the header names the period and has the Done button that leaves the mode.
 
-    enum Period: String, CaseIterable, Identifiable {
-        case today, week, month
-        var id: String { rawValue }
-        var label: String { switch self { case .today: "Today"; case .week: "7 days"; case .month: "30 days" } }
-        func start(now: Date = Date()) -> Date {
-            switch self {
-            case .today: Calendar.current.startOfDay(for: now)
-            case .week: now.addingTimeInterval(-7 * 86400)
-            case .month: now.addingTimeInterval(-30 * 86400)
-            }
+/// What History mode adds to the outline: a mark for each current item that changed, and the deleted items, by the
+/// item they were under.
+struct OutlineHistory {
+    var marks: [UUID: HistoryRow] = [:]
+    var tombs: [UUID?: [HistoryRow]] = [:]
+    var summary = "No changes"
+
+    init(_ rows: [HistoryRow]) {
+        for r in rows {
+            if r.deleted { tombs[r.parentID, default: []].append(r) }
+            else if !r.changes.isEmpty { marks[r.id] = r }
         }
+        summary = HistoryRow.summary(rows)
     }
 
-    var body: some View {
-        let _ = (nodes.count, entries.count)
-        let rows = Store(ctx).history(since: period.start(), changesOnly: changesOnly)
-        List {
-            Section {
-                Picker("Period", selection: $period) { ForEach(Period.allCases) { Text($0.label).tag($0) } }
-                    .pickerStyle(.segmented).labelsHidden()
-                Toggle("Changes only", isOn: $changesOnly)
-                Text(Self.summary(rows)).font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
-                if rows.isEmpty { Text(changesOnly ? "No changes in this period." : "Nothing here yet.").foregroundStyle(.secondary) }
-                ForEach(rows) { r in
-                    HistoryLine(row: r)
-                        .contentShape(Rectangle())
-                        .onTapGesture { if !r.deleted { sel.open(r.id) } }
-                }
-            }
-        }
-        .navigationTitle("History")
+    /// An item's children with the deleted ones put back where they were.
+    enum Entry: Identifiable {
+        case node(Node), tomb(HistoryRow)
+        var id: UUID { switch self { case .node(let n): n.id; case .tomb(let t): t.id } }
     }
-
-    /// "3 added · 1 deleted · 2 completed", or "No changes".
-    static func summary(_ rows: [HistoryRow]) -> String {
-        let parts = HistoryChange.allCases.compactMap { c -> String? in
-            let n = rows.filter { $0.changes.contains(c) }.count
-            return n == 0 ? nil : "\(n) \(c.rawValue)"
+    func entries(under parent: UUID?, children: [Node]) -> [Entry] {
+        var rest = (tombs[parent] ?? [])[...]
+        var out: [Entry] = []
+        for (i, c) in children.enumerated() {
+            while let t = rest.first, t.position <= i { out.append(.tomb(t)); rest.removeFirst() }
+            out.append(.node(c))
         }
-        return parts.isEmpty ? "No changes" : parts.joined(separator: " · ")
+        out.append(contentsOf: rest.map { Entry.tomb($0) })
+        return out
     }
 }
 
-struct HistoryLine: View {
-    let row: HistoryRow
+/// The bar under the header while History mode is on: the period, what changed, and Done.
+struct HistoryBar: View {
+    @Binding var period: HistoryPeriod
+    let summary: String
+    let onDone: () -> Void
 
-    private var added: Bool { row.changes.contains(.added) }
-    private var mark: (symbol: String, color: Color)? {
-        if row.deleted { return ("minus", .red) }
-        if added { return ("plus", .green) }
-        if row.changes.contains(.completed) { return ("checkmark", .secondary) }
-        if row.changes.contains(.moved) { return ("arrow.turn.down.right", .secondary) }
-        if row.changes.contains(.renamed) || row.changes.contains(.edited) { return ("pencil", .secondary) }
-        return nil
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.arrow.circlepath").font(.system(size: 11, weight: .heavy)).foregroundStyle(Color.ink.opacity(0.6))
+            Menu {
+                Picker("Period", selection: $period) { ForEach(HistoryPeriod.allCases) { Text($0.label).tag($0) } }
+                    .pickerStyle(.inline)
+            } label: {
+                pill("HISTORY \u{00B7} " + period.label.uppercased(), systemImage: "chevron.down", fill: PanelPalette.lavender)
+            }
+            .accessibilityLabel("History period: " + period.label)
+            Text(summary).font(Appearance.shared.font.font(.caption)).foregroundStyle(Color.ink.opacity(0.6)).lineLimit(1)
+            Spacer(minLength: 4)
+            Button(action: onDone) { pill("DONE", systemImage: "xmark", fill: PanelPalette.peach) }
+                .help("Leave History")
+                .accessibilityLabel("Leave History")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.bottom, 6)
+        .background(Color.canvas)
     }
-    private var name: String { row.title.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : row.title }
-    private var text: Text {
-        if row.deleted { return Text(name).strikethrough().foregroundStyle(.red) }
-        let now = Text(name).strikethrough(row.done).foregroundStyle(added ? Color.green : Color.primary)
-        if let old = row.oldTitle { return Text("\(Text(old).strikethrough().foregroundStyle(.secondary)) \(now)") }
-        return now
+
+    private func pill(_ text: String, systemImage: String, fill: Color) -> some View {
+        HStack(spacing: 4) {
+            Text(text).font(PanelPalette.label(.caption)).lineLimit(1)
+            Image(systemName: systemImage).font(.system(size: 9, weight: .heavy))
+        }
+        .foregroundStyle(PanelPalette.text(on: fill))
+        .padding(.horizontal, 9).frame(height: 24)
+        .background(fill)
+        .contentShape(Rectangle())
     }
-    private var spoken: String {
-        let what = HistoryChange.allCases.filter { row.changes.contains($0) }.map(\.rawValue).joined(separator: ", ")
-        let was = row.oldTitle.map { ", was \($0)" } ?? ""
-        return what.isEmpty ? name : "\(name), \(what)\(was)"
-    }
+}
+
+/// A deleted item, shown where it used to be: its text struck through, and a button that brings it back.
+struct TombRow: View {
+    let row: HistoryRow
+    let depth: Int
+    let onReinstate: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Group {
-                if let m = mark { Image(systemName: m.symbol).foregroundStyle(m.color) } else { Color.clear.frame(height: 1) }
+            Image(systemName: "minus").font(.system(size: 10, weight: .heavy)).foregroundStyle(Color.red)
+            Text(row.title).font(Appearance.shared.font.font(.body)).strikethrough().foregroundStyle(Color.red.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onReinstate) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 9, weight: .heavy))
+                    Text("REINSTATE").font(PanelPalette.label(.caption)).lineLimit(1)
+                }
+                .foregroundStyle(PanelPalette.text(on: PanelPalette.peach))
+                .padding(.horizontal, 9).frame(height: 24)
+                .background(PanelPalette.peach)
+                .contentShape(Rectangle())
             }
-            .font(.caption.weight(.bold)).frame(width: 16)
-            text
-            Spacer(minLength: 8)
-            if !row.changes.isEmpty, let when = row.when {
-                Text(when.formatted(.relative(presentation: .numeric, unitsStyle: .narrow))).font(.caption2).foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            .help("Bring this item back")
+            .accessibilityLabel("Reinstate " + row.title)
+        }
+        .padding(.leading, max(0, StatusBar.textStart(depth) - 16))
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Deleted: " + row.title)
+    }
+}
+
+/// A renamed item's old text, shown struck through above its row.
+struct OldTitleRow: View {
+    let text: String
+    let depth: Int
+    var body: some View {
+        Text(text).font(Appearance.shared.font.font(.caption)).strikethrough().foregroundStyle(Color.ink.opacity(0.45))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, StatusBar.textStart(depth)).padding(.top, 2)
+            .accessibilityLabel("Was: " + text)
+    }
+}
+
+/// The mark on an item added in the period: a green wash and a green edge. Touches pass through to the row.
+struct AddedMark: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        content.overlay {
+            if on {
+                ZStack(alignment: .trailing) {
+                    Color.green.opacity(0.13)
+                    Rectangle().fill(Color.green).frame(width: 4)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
         }
-        .padding(.leading, CGFloat(row.depth) * 14)
-        // Items that did not change sit back, so the changes stand out.
-        .opacity(row.changes.isEmpty ? 0.55 : 1)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken)
     }
 }

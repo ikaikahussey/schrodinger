@@ -24,6 +24,10 @@ struct OutlineView: View {
     /// Show only items with this tag (nil: any).
     @State private var tagFilter: String? = nil
     @State private var showLegend = false
+    /// History mode: the outline shows what changed lately, in place (added items marked, deleted items struck
+    /// through where they were, with a button to bring each back). Off until chosen from the header menu.
+    @State private var historyOn = false
+    @AppStorage("historyPeriod") private var historyPeriod: HistoryPeriod = .week
     /// Header search: words match an item's text; `#tag` words match its tags.
     @State private var search = ""
     @FocusState private var searchFocused: Bool
@@ -84,8 +88,10 @@ struct OutlineView: View {
         let advice = Dictionary(grouping: openProposals.filter { $0.nodeID != nil }.sorted { $0.createdAt < $1.createdAt }, by: { $0.nodeID! })
         // Tasks the AI recommends, by the item they would go under (shown there as dimmed rows). Not while filtering
         // or searching: those views show what is in the outline.
-        let ghosts: [UUID: [Proposal]] = filtering || searching ? [:] : Dictionary(grouping: openProposals.filter { $0.type == .new_task }.sorted { $0.createdAt < $1.createdAt }, by: { store.suggestionParent(of: $0) })
+        let ghosts: [UUID: [Proposal]] = filtering || searching || historyOn ? [:] : Dictionary(grouping: openProposals.filter { $0.type == .new_task }.sorted { $0.createdAt < $1.createdAt }, by: { store.suggestionParent(of: $0) })
         let zoomed = zoomID.flatMap { store.node($0) }
+        // History mode: what changed in the period, to mark on the rows below.
+        let history: OutlineHistory? = historyOn ? OutlineHistory(store.history(since: historyPeriod.start())) : nil
         ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -94,9 +100,11 @@ struct OutlineView: View {
                         // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
                         // reads the same as in the full outline.
                         let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: history, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
                     } else {
-                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: history, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
+                        // Deleted top-level items, after the current ones.
+                        if let h = history { ForEach(h.tombs[nil] ?? []) { t in tombTree(t, depth: 0, history: h) } }
                     }
                 }
                 .id(zoomID)
@@ -123,7 +131,13 @@ struct OutlineView: View {
         .scrollDisabled(drag.id != nil || harp)
         .sensoryFeedback(.selection, trigger: plucks)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
-        .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) { breadcrumbBar(zoomed); tagBar } }
+        .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) {
+            breadcrumbBar(zoomed); tagBar
+            if let h = history {
+                HistoryBar(period: $historyPeriod, summary: h.summary) { withAnimation(.snappy(duration: 0.22)) { historyOn = false } }
+                    .transition(.opacity)
+            }
+        } } }
         // Dragging the list also puts the keyboard away (which ends editing).
         .scrollDismissesKeyboard(.interactively)
         #if os(iOS)
@@ -463,8 +477,10 @@ struct OutlineView: View {
                 let notices = openProposals.filter { $0.type != .new_task }.count
                 Label(notices == 0 ? "Inbox" : "Inbox (\(notices))", systemImage: "tray")
             }
-            // What was added, deleted, renamed and completed lately, shown on the outline itself.
-            Button { finishTyping(); sel.panel = .history } label: { Label("History", systemImage: "clock.arrow.circlepath") }
+            // What was added and deleted lately, shown on the outline itself; deleted items can be brought back.
+            Button { finishTyping(); withAnimation(.snappy(duration: 0.22)) { historyOn.toggle() } } label: {
+                Label(historyOn ? "Leave History" : "History", systemImage: "clock.arrow.circlepath")
+            }
             #if os(macOS)
             SettingsLink { Label("Settings…", systemImage: "gear") }
             #else
@@ -787,14 +803,26 @@ struct OutlineView: View {
     }
 
     /// `active`: the item's project is active (paused and archived projects don't run).
-    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], links: [UUID: [ItemLink]], advice: [UUID: [Proposal]], ghosts: [UUID: [Proposal]], trail: [Color], context: Color, active: Bool) -> AnyView {
+    /// A deleted item (History mode) and the deleted items that were under it.
+    private func tombTree(_ t: HistoryRow, depth: Int, history: OutlineHistory) -> AnyView {
+        AnyView(VStack(alignment: .leading, spacing: 0) {
+            TombRow(row: t, depth: depth) { withAnimation(.snappy(duration: 0.22)) { store.reinstate(t.id); store.save() } }
+            ForEach(history.tombs[t.id] ?? []) { c in tombTree(c, depth: depth + 1, history: history) }
+        })
+    }
+
+    private func nodeTree(_ n: Node, depth: Int, kids: [UUID?: [Node]], files: [UUID: [Attachment]], links: [UUID: [ItemLink]], advice: [UUID: [Proposal]], ghosts: [UUID: [Proposal]], history: OutlineHistory? = nil, trail: [Color], context: Color, active: Bool) -> AnyView {
         let children = kids[n.id] ?? []
         // Own color: hue by level (the same in every project), strength by status, darkness by holder (Appearance.itemColor).
         let own = look.itemColor(depth: depth, state: n.isProject ? .todo : n.state, assignee: n.isProject ? .human : n.assignee)
         // Filters hide non-matching items below the top level; a search hides non-matching top-level items too.
         let hidden = ((filter != .all || tagFilter != nil) && depth > 0 && n.id != zoomID || searching) && !subtreeMatches(n, kids: kids)
         if hidden { return AnyView(EmptyView()) }
+        let mark = history?.marks[n.id]
+        // History mode looks inside collapsed items (as a search does), so every change shows.
+        let open = !n.collapsed || n.id == zoomID || searching || history != nil
         return AnyView(VStack(alignment: .leading, spacing: 0) {
+            if let old = mark?.oldTitle { OldTitleRow(text: old, depth: depth) }
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, childCount: children.count, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
@@ -807,13 +835,24 @@ struct OutlineView: View {
                     },
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
-                    childrenShown: !n.collapsed || n.id == zoomID || searching,
+                    childrenShown: open,
                     attachments: files[n.id] ?? [],
                     links: links[n.id] ?? [],
                     suggestions: advice[n.id] ?? [])
+                .modifier(AddedMark(on: mark?.changes.contains(.added) ?? false))
                 .id(n.id)   // scroll target for reveal()
-            if !n.collapsed || n.id == zoomID || searching {   // a search looks inside collapsed items
-                ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: trail + [own], context: context, active: active) }
+            if open {   // a search looks inside collapsed items
+                if let h = history {
+                    // Deleted items sit among the current ones, where they were.
+                    ForEach(h.entries(under: n.id, children: children)) { e in
+                        switch e {
+                        case .node(let c): nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: h, trail: trail + [own], context: context, active: active)
+                        case .tomb(let t): tombTree(t, depth: depth + 1, history: h)
+                        }
+                    }
+                } else {
+                    ForEach(children) { c in nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, trail: trail + [own], context: context, active: active) }
+                }
                 // Recommended tasks for this item, after its children: keep one (it becomes an item here) or dismiss it.
                 ForEach(ghosts[n.id] ?? []) { g in
                     GhostRow(proposal: g, depth: depth + 1,
