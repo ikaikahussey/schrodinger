@@ -813,10 +813,11 @@ struct OutlineView: View {
 
     /// `active`: the item's project is active (paused and archived projects don't run).
     /// A deleted item (History mode) and the deleted items that were under it.
-    private func tombTree(_ t: HistoryRow, depth: Int, history: OutlineHistory) -> AnyView {
+    private func tombTree(_ t: HistoryRow, depth: Int, history: OutlineHistory, trail: [Color] = []) -> AnyView {
         AnyView(VStack(alignment: .leading, spacing: 0) {
             TombRow(row: t, depth: depth) { withAnimation(.snappy(duration: 0.22)) { store.reinstate(t.id); store.save() } }
-            ForEach(history.tombs[t.id] ?? []) { c in tombTree(c, depth: depth + 1, history: history) }
+                .background { RailLines(trail: trail) }
+            ForEach(history.tombs[t.id] ?? []) { c in tombTree(c, depth: depth + 1, history: history, trail: trail) }
         })
     }
 
@@ -831,7 +832,7 @@ struct OutlineView: View {
         // History mode looks inside collapsed items (as a search does), so every change shows.
         let open = !n.collapsed || n.id == zoomID || searching || history != nil
         return AnyView(VStack(alignment: .leading, spacing: 0) {
-            if let old = mark?.oldTitle { OldTitleRow(text: old, depth: depth) }
+            if let old = mark?.oldTitle { OldTitleRow(text: old, depth: depth).background { RailLines(trail: trail) } }
             NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, childCount: children.count, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
@@ -848,6 +849,8 @@ struct OutlineView: View {
                     attachments: files[n.id] ?? [],
                     links: links[n.id] ?? [],
                     suggestions: advice[n.id] ?? [])
+                // Rails: one per ancestor, and the item's own from under its mark while its children are on screen.
+                .background { RailLines(trail: trail, own: open && !children.isEmpty ? own : nil) }
                 .modifier(AddedMark(on: mark?.changes.contains(.added) ?? false))
                 .id(n.id)   // scroll target for reveal()
             if open {   // a search looks inside collapsed items
@@ -856,7 +859,7 @@ struct OutlineView: View {
                     ForEach(h.entries(under: n.id, children: children)) { e in
                         switch e {
                         case .node(let c): nodeTree(c, depth: depth + 1, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: h, trail: trail + [own], context: context, active: active)
-                        case .tomb(let t): tombTree(t, depth: depth + 1, history: h)
+                        case .tomb(let t): tombTree(t, depth: depth + 1, history: h, trail: trail + [own])
                         }
                     }
                 } else {
@@ -867,9 +870,12 @@ struct OutlineView: View {
                     GhostRow(proposal: g, depth: depth + 1,
                              onAccept: { withAnimation(.snappy(duration: 0.22)) { try? store.accept(g); store.save() } },
                              onDismiss: { withAnimation(.snappy(duration: 0.22)) { store.dismiss(g); store.save() } })
+                        .background { RailLines(trail: trail + [own]) }
                 }
             }
-        })
+        }
+        // A little air above each top-level item sets the projects apart.
+        .padding(.top, depth == 0 ? 6 : 0))
     }
 
     private func leafCount(_ n: Node, kids: [UUID?: [Node]]) -> (done: Int, total: Int) {
@@ -1050,7 +1056,7 @@ struct ProjectLine: View {
 
 // MARK: - Squares
 
-/// The item's own mark: the rightmost one in the row, a circle the size of the squares.
+/// The item's own mark: an oval of one fixed size, indented one step per level (the space left of it is the depth).
 /// Every item's mark has this same shape. Color: see Appearance.itemColor.
 ///   who holds it: mine or unassigned = blank · AI = sparkles glyph · both = a single sparkle
 ///   state:        todo/in progress/done = solid · review = hollow · blocked = dashed outline
@@ -1059,36 +1065,42 @@ struct StatusBar: View {
     let assignee: Assignee
     let isProject: Bool
     var color: Color = .ink
-    /// Indent level: 0 is a circle; deeper, the mark is a rounded bar (depth + 1) diameters long.
+    /// Indent level. It does not change the mark (the row indents it; see DepthBars).
     var depth: Int = 0
     /// What the item carries (date, notes, links, photos): small glyphs in the mark, from its left end. Only as many
     /// as fit are drawn (see MarkIndicator.fitting).
     var indicators: [MarkIndicator] = []
     /// A check box sits in the mark's left end (dated items): the glyphs start after it, and a circle shows no AI glyph.
     var checkable = false
+    /// The item's children are hidden: how many there are, drawn in the mark's right end. 0 = nothing hidden.
+    var hiddenCount = 0
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
-    /// Marks start `margin` from the left edge. A top-level mark is a circle; each level down it is one diameter
-    /// longer (2×, 3×…). The row's text starts `gap` after the mark.
+    /// A top-level mark starts `margin` from the left edge; each level down, the mark starts one `step` further in.
+    /// Every mark is `length` long. The row's text starts `gap` after the mark.
     static let margin: CGFloat = 12
     static let gap: CGFloat = 12
+    static let step: CGFloat = 16
+    static let length: CGFloat = 40
     static var ownShape: Capsule { Capsule() }
-    /// Width of the mark at `depth`: (depth + 1) diameters.
-    static func width(_ depth: Int) -> CGFloat { w * CGFloat(max(depth, 0) + 1) }
+    /// How far the mark of a row at `depth` is indented from the margin.
+    static func indent(_ depth: Int) -> CGFloat { step * CGFloat(max(depth, 0)) }
     /// Where the text of a row at `depth` starts.
-    static func textStart(_ depth: Int) -> CGFloat { margin + width(depth) + gap }
+    static func textStart(_ depth: Int) -> CGFloat { margin + indent(depth) + length + gap }
+    /// Left edge of the rail that runs down from the mark of an item at `depth`, beside its descendants.
+    static func railX(_ depth: Int) -> CGFloat { margin + indent(depth) + w / 2 - RailLines.width / 2 }
 
     /// The square is filled (glyph is drawn in the background color) rather than outlined (glyph in the square's color).
     private var solid: Bool { isProject || (state != .review && state != .blocked) }
-    /// The AI glyph is drawn in the mark's right end (never on a top-level item, nor on a circle with a check box).
-    static func showsAIGlyph(assignee: Assignee, isProject: Bool, depth: Int, checkable: Bool) -> Bool {
-        !isProject && assignee.squareGlyph != nil && !(checkable && depth == 0)
+    /// The AI glyph is drawn in the mark's right end (never on a top-level item).
+    static func showsAIGlyph(assignee: Assignee, isProject: Bool) -> Bool {
+        !isProject && assignee.squareGlyph != nil
     }
-    /// The indicators that fit in a mark at `depth`, in drawing order.
-    static func shown(_ indicators: [MarkIndicator], assignee: Assignee, isProject: Bool, depth: Int, checkable: Bool) -> [MarkIndicator] {
-        MarkIndicator.fitting(indicators, width: Double(width(depth)), cell: Double(w), checkable: checkable,
-                              aiGlyph: showsAIGlyph(assignee: assignee, isProject: isProject, depth: depth, checkable: checkable))
+    /// The indicators that fit in the mark, in drawing order. A hidden-children count takes the right end.
+    static func shown(_ indicators: [MarkIndicator], assignee: Assignee, isProject: Bool, checkable: Bool, hiddenCount: Int = 0) -> [MarkIndicator] {
+        MarkIndicator.fitting(indicators, width: Double(length - (hiddenCount > 0 ? w : 0)), cell: Double(w), checkable: checkable,
+                              aiGlyph: showsAIGlyph(assignee: assignee, isProject: isProject))
     }
 
     var body: some View {
@@ -1103,16 +1115,27 @@ struct StatusBar: View {
                 default:       shape.fill(color)
                 }
                 // AI involvement is a glyph in the mark's round end (next to the text); the mark never changes shape.
-                if let glyph = assignee.squareGlyph, !(checkable && depth == 0) {
+                // With a hidden-children count in that end, the glyph sits one cell to its left.
+                if let glyph = assignee.squareGlyph {
                     Image(systemName: glyph)
                         .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
                         .foregroundStyle(solid ? Color.canvas : color)
                         .frame(width: Self.w, height: Self.h)
+                        .padding(.trailing, hiddenCount > 0 ? Self.w : 0)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
+            // Children hidden: how many, in the mark's right end.
+            if hiddenCount > 0 {
+                Text(hiddenCount > 99 ? "99" : "\(hiddenCount)")
+                    .font(.system(size: 9, weight: .heavy, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(solid ? Color.canvas : color)
+                    .frame(width: Self.w + 2, height: Self.h)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityLabel("\(hiddenCount) hidden")
+            }
             // What the item carries: glyphs from the mark's left end (after the check box, if there is one).
-            let shown = Self.shown(indicators, assignee: assignee, isProject: isProject, depth: depth, checkable: checkable)
+            let shown = Self.shown(indicators, assignee: assignee, isProject: isProject, checkable: checkable, hiddenCount: hiddenCount)
             if !shown.isEmpty {
                 HStack(spacing: 0) {
                     ForEach(shown) { i in
@@ -1127,23 +1150,48 @@ struct StatusBar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(width: Self.width(depth), height: Self.h)
+        .frame(width: Self.length, height: Self.h)
         .clipShape(shape)
     }
 }
 
-/// The row's mark: a circle for a top-level item; deeper, a rounded bar from the left margin, one diameter longer per
-/// level. Tap = actions.
+/// Thin vertical lines that tie a row to its ancestors: one per ancestor, in that ancestor's color, under the left end
+/// of its mark. Drawn behind every row of an item's descendants, so a line runs from the item to its last descendant.
+/// `own`: the row's own item has children on screen; its line starts under its mark.
+struct RailLines: View {
+    static let width: CGFloat = 2
+    /// Ancestors' colors, outermost first (index = the ancestor's depth).
+    var trail: [Color]
+    var own: Color? = nil
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(trail.enumerated()), id: \.offset) { i, c in
+                Rectangle().fill(c.opacity(0.55)).frame(width: Self.width).frame(maxHeight: .infinity)
+                    .padding(.leading, StatusBar.railX(i))
+            }
+            if let own {
+                Rectangle().fill(own.opacity(0.55)).frame(width: Self.width).frame(maxHeight: .infinity)
+                    .padding(.top, 4 + StatusBar.h + 3)   // below the mark (4 = the mark's top padding in the row)
+                    .padding(.leading, StatusBar.railX(trail.count))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The row's mark: an oval of fixed size, indented one step per level. Tap = actions.
 struct DepthBars: View {
     let node: Node
     let depth: Int
     let hasChildren: Bool
     var trail: [Color] = []
     var color: Color = .ink
-    /// The item is open: its mark turns down a quarter turn about its left (round) end, hanging beside the field.
+    /// The item is open: a ring around its mark. The mark keeps its place and size, so the level still reads.
     var open = false
-    /// The item has children that are hidden: a second oval peeks out below the mark, like a stack. Tap to show them.
-    var childrenHidden = false
+    /// The item has children that are hidden: how many, shown as a count in the mark's right end. Tap to show them.
+    var hiddenCount = 0
     /// The item has a due date: a check box in the mark's round end. Tap it to check the item off (again: undo).
     var onCheck: (() -> Void)? = nil
     /// What the item carries (date, notes, links, photos), drawn as glyphs in the mark.
@@ -1153,19 +1201,12 @@ struct DepthBars: View {
     var body: some View {
         // No blink here: the mark's strength carries the status, so it holds still.
         StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, indicators: indicators,
-                  checkable: onCheck != nil)
-            .background(alignment: .leading) {
-                if childrenHidden {
-                    StatusBar.ownShape.fill(color.opacity(0.45))
-                        .frame(width: StatusBar.width(depth), height: StatusBar.h)
-                        .offset(x: 3, y: 4)
-                }
-            }
-            .animation(.snappy(duration: 0.22), value: childrenHidden)
+                  checkable: onCheck != nil, hiddenCount: hiddenCount)
+            .animation(.snappy(duration: 0.22), value: hiddenCount)
             .overlay(alignment: .leading) { if let onCheck { CheckBox(done: node.state == .done, tint: node.state == .review || node.state == .blocked ? color : .canvas, action: onCheck) } }
-            .rotationEffect(.degrees(open ? 90 : 0), anchor: UnitPoint(x: StatusBar.w / 2 / StatusBar.width(depth), y: 0.5))
+            .overlay { if open { StatusBar.ownShape.strokeBorder(Color.ink, lineWidth: 1.5).padding(-3) } }
             .animation(.snappy(duration: 0.25), value: open)
-            .padding(.leading, StatusBar.margin)
+            .padding(.leading, StatusBar.margin + StatusBar.indent(depth))
             .frame(width: StatusBar.textStart(depth), alignment: .leading)
             .contentShape(Rectangle())
     }
@@ -1226,7 +1267,7 @@ struct BarLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Marks").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
-            Text("Color is the level, the same in every project:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
+            Text("Color and indent are the level, the same in every project:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
             ForEach(0..<3, id: \.self) { d in row(mark(d, .todo, .human), "level \(d + 1)") }
             Text("Strength is the status; a darker shade is the AI's:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
             row(mark(1, .unset, .human), "no status yet")
@@ -1236,6 +1277,7 @@ struct BarLegend: View {
             row(mark(1, .todo, .shared), "both")
             row(mark(1, .review, .human), "review")
             row(mark(1, .blocked, .human), "blocked")
+            row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, hiddenCount: 3), "children hidden (how many)")
             Text("Glyphs in the mark are what the item has:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
             ForEach(MarkIndicator.allCases) { i in
                 row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, indicators: [i]), i.label)
@@ -1316,8 +1358,8 @@ struct NodeRow: View {
     private let pullThreshold: CGFloat = 56
 
     private var store: Store { Store(ctx) }
-    /// One size and weight for every item's text, top level or not, title or notes.
-    private var titleFont: Font { Appearance.shared.font.font(.body) }
+    /// One size for every item's text. A top-level item's title is semibold; everything else is regular.
+    private var titleFont: Font { node.isProject ? Appearance.shared.font.font(.body).weight(.semibold) : Appearance.shared.font.font(.body) }
     private var isLeafTask: Bool { !node.isProject && !hasChildren }
     /// A dated item with no children has a check box in its mark.
     private var checkable: Bool { node.due != nil && isLeafTask }
@@ -1330,9 +1372,11 @@ struct NodeRow: View {
     }
     /// The linked-items glyph is in the mark (false when the mark is too short for it).
     private var linkShownInMark: Bool {
-        StatusBar.shown(indicators, assignee: node.assignee, isProject: node.isProject, depth: depth, checkable: checkable).contains(.itemLink)
+        StatusBar.shown(indicators, assignee: node.assignee, isProject: node.isProject, checkable: checkable, hiddenCount: hiddenCount).contains(.itemLink)
     }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
+    /// Children that are hidden now (0 when there are none, or they are on screen).
+    private var hiddenCount: Int { hasChildren && !childrenShown ? max(childCount, 1) : 0 }
     private func toggleSelect() {
         withAnimation(.easeOut(duration: 0.15)) {
             if sel.nodeID == node.id { sel.nodeID = nil; if infoOpen { sel.infoID = nil } } else { sel.nodeID = node.id }
@@ -1444,7 +1488,7 @@ struct NodeRow: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 0) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, childrenHidden: hasChildren && !childrenShown,
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, hiddenCount: hiddenCount,
                       onCheck: checkable ? { toggleChecked() } : nil, indicators: indicators)
                 .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
