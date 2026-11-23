@@ -52,7 +52,8 @@ struct AttachmentImage: View {
 }
 
 /// The item's photos and links in one row under its text: photo thumbnails, then link chips. Tap a photo to view it,
-/// tap a link to open it. While the item's sheet is open (`editing`), each one has a remove button.
+/// tap a link to open it. While the item's sheet is open (`editing`), one can be removed: on the Mac a remove button
+/// shows while the pointer is over it; everywhere, hold it (or right-click) for a menu with Remove.
 struct AttachmentStrip: View {
     let items: [Attachment]
     var editing = false
@@ -60,6 +61,8 @@ struct AttachmentStrip: View {
     let onDelete: (Attachment) -> Void
     /// The row does not scroll sideways (a sideways drag on a row indents it), so only the first few are shown.
     private let limit = 5
+    /// The one the pointer is over (Mac).
+    @State private var hovered: UUID? = nil
 
     var body: some View {
         let live = items.filter { !$0.isDeleted && $0.modelContext != nil }
@@ -67,8 +70,16 @@ struct AttachmentStrip: View {
             ForEach(live.prefix(limit)) { a in
                 Button { onOpen(a) } label: { cell(a) }
                     .buttonStyle(.plain)
-                    .overlay(alignment: .topTrailing) {
+                    .contextMenu {
                         if editing {
+                            Button(role: .destructive) { onDelete(a) } label: { Label(a.kind == .photo ? "Remove Photo" : "Remove Link", systemImage: "trash") }
+                        }
+                    }
+                    #if os(macOS)
+                    .onHover { inside in if inside { hovered = a.id } else if hovered == a.id { hovered = nil } }
+                    #endif
+                    .overlay(alignment: .topTrailing) {
+                        if editing && hovered == a.id {
                             Button { onDelete(a) } label: {
                                 Image(systemName: "xmark").font(.system(size: 8, weight: .heavy))
                                     .foregroundStyle(Color.canvas)

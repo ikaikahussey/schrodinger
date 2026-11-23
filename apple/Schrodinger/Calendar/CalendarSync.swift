@@ -47,4 +47,17 @@ extension Date {
         let day = cal.isDateInToday(self) ? "Today" : cal.isDateInTomorrow(self) ? "Tomorrow" : formatted(.dateTime.month(.abbreviated).day())
         return hasTime ? day + " " + formatted(date: .omitted, time: .shortened) : day
     }
+    /// Past due at `now`: a date with a time once that time has passed; an all-day date from the day after.
+    func isOverdue(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        self != calendar.startOfDay(for: self) ? self < now : self < calendar.startOfDay(for: now)
+    }
+    /// The due date at a row's right edge, relative where that is shorter to read: "3d late", "Late" (earlier today),
+    /// "Today", "Tomorrow", otherwise "Nov 18".
+    func dueLabel(now: Date = Date(), calendar: Calendar = .current) -> String {
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: self), to: calendar.startOfDay(for: now)).day ?? 0
+        if isOverdue(now: now, calendar: calendar) { return days > 0 ? "\(days)d late" : "Late" }
+        if days == 0 { return "Today" }
+        if days == -1 { return "Tomorrow" }
+        return formatted(.dateTime.month(.abbreviated).day())
+    }
 }

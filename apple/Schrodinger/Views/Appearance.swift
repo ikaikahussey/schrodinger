@@ -100,6 +100,10 @@ final class Appearance {
     var palette: PaletteKind { didSet { d.set(palette.rawValue, forKey: "palette") } }
     var font: AppFontFamily { didSet { d.set(font.rawValue, forKey: "fontFamily") } }
     var sounds: Bool { didSet { d.set(sounds, forKey: "outlineSounds") } }
+    /// Rows sit closer together, so more items fit on a screen.
+    var compactRows: Bool { didSet { d.set(compactRows, forKey: "compactRows") } }
+    /// Space above and below a row's line.
+    var rowPadding: CGFloat { compactRows ? 2 : 6 }
     /// Text size on the Mac, as a multiple of the standard size (View ▸ Bigger / Smaller / Actual Size).
     /// iPhone and iPad follow the system's Dynamic Type instead.
     var textScale: CGFloat { didSet { d.set(Double(textScale), forKey: "textScale") } }
@@ -116,6 +120,7 @@ final class Appearance {
         palette = PaletteKind(rawValue: d.string(forKey: "palette") ?? "") ?? .retro70s   // default scheme
         font = AppFontFamily(rawValue: d.string(forKey: "fontFamily") ?? "") ?? .helveticaNeue
         sounds = d.object(forKey: "outlineSounds") as? Bool ?? true
+        compactRows = d.bool(forKey: "compactRows")
         textScale = (d.object(forKey: "textScale") as? Double).map { CGFloat($0) } ?? 1
         let env = EnvironmentValues()
         customModes = Self.load("customModeColors", count: Palette.modeCount) ?? Palette.retro70s.modes.map { $0.resolve(in: env) }

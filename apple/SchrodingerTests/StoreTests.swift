@@ -544,15 +544,40 @@ final class MarkIndicatorTests: XCTestCase {
         func fit(_ depth: Int, check: Bool = false, ai: Bool = false) -> [MarkIndicator] {
             MarkIndicator.fitting(all, width: Double(16 * (depth + 1)), cell: 16, checkable: check, aiGlyph: ai)
         }
-        XCTAssertEqual(fit(0), [.date])                        // a circle holds one
-        XCTAssertEqual(fit(0, check: true), [])                // the check box fills a circle
+        XCTAssertEqual(fit(0), [])                             // a circle is too short for a glyph
+        XCTAssertEqual(fit(0, check: true), [])
         XCTAssertEqual(fit(0, ai: true), [])
         XCTAssertEqual(fit(1), [.date, .note])
         XCTAssertEqual(fit(1, check: true), [.date])
         XCTAssertEqual(fit(1, check: true, ai: true), [])
-        XCTAssertEqual(fit(2), [.date, .note, .link, .itemLink])
+        XCTAssertEqual(fit(2), [.date, .note])                 // never more than two, however long the mark
         XCTAssertEqual(fit(2, check: true, ai: true), [.date])
-        XCTAssertEqual(fit(4), all)
-        XCTAssertEqual(MarkIndicator.fitting([.note], width: 16, cell: 16, checkable: false, aiGlyph: false), [.note])
+        XCTAssertEqual(fit(4), [.date, .note])
+        // The outline's mark is 40 wide.
+        XCTAssertEqual(MarkIndicator.fitting(all, width: 40, cell: 16, checkable: false, aiGlyph: false), [.date, .note])
+        XCTAssertEqual(MarkIndicator.fitting(all, width: 40, cell: 16, checkable: true, aiGlyph: false), [.date])
+        XCTAssertEqual(MarkIndicator.fitting(all, width: 40, cell: 16, checkable: true, aiGlyph: true), [])
+    }
+}
+
+final class DueLabelTests: XCTestCase {
+    private var cal: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "Pacific/Honolulu")!; return c }
+    private func at(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 0, _ min: Int = 0) -> Date {
+        cal.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
+    }
+
+    func testOverdue() {
+        let now = at(2026, 11, 22, 15)
+        XCTAssertTrue(at(2026, 11, 18).isOverdue(now: now, calendar: cal))
+        XCTAssertFalse(at(2026, 11, 22).isOverdue(now: now, calendar: cal))        // all day today: not late until tomorrow
+        XCTAssertFalse(at(2026, 11, 23).isOverdue(now: now, calendar: cal))
+    }
+
+    func testLabels() {
+        let now = at(2026, 11, 22, 15)
+        XCTAssertEqual(at(2026, 11, 18).dueLabel(now: now, calendar: cal), "4d late")
+        XCTAssertEqual(at(2026, 11, 21).dueLabel(now: now, calendar: cal), "1d late")
+        XCTAssertEqual(at(2026, 11, 22).dueLabel(now: now, calendar: cal), "Today")
+        XCTAssertEqual(at(2026, 11, 23).dueLabel(now: now, calendar: cal), "Tomorrow")
     }
 }
