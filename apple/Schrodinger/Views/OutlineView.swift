@@ -44,7 +44,8 @@ struct OutlineView: View {
     @State private var drag = OutlineDrag()
     /// Item the outline is zoomed into (shown at the top with its children), or nil for the whole outline.
     @State private var zoomID: UUID? = nil
-    @State private var zoomingIn = true
+    /// Where the zoom animation grows from, and which way it runs. Read by the transition when it runs.
+    @State private var balloon = ZoomBalloon()
     /// The calendar box at the bottom has been pushed off screen (its tab stays, to bring it back).
     @AppStorage("agendaPushed") private var agendaPushed = false
     /// Harp mode (long press the hide/show-all button): the outline holds still and each item is a string; running a
@@ -108,9 +109,8 @@ struct OutlineView: View {
                     }
                 }
                 .id(zoomID)
-                .transition(.asymmetric(
-                    insertion: .scale(scale: zoomingIn ? 0.94 : 1.06, anchor: .top).combined(with: .opacity),
-                    removal: .opacity))
+                // Zooming in, the item inflates like a balloon from where it was held until it fills the page.
+                .transition(BalloonTransition(balloon: balloon))
                 if showLegend { BarLegend().padding(.top, 24) }
             }
             // Squares start at the first pixel on the left; text keeps its margin on the right.
@@ -129,6 +129,9 @@ struct OutlineView: View {
             .overlay { if harp { harpStrings } }
         }
         .scrollDisabled(drag.id != nil || harp)
+        // How far the list is scrolled, so the balloon can start at the held row's place on screen. Not view state:
+        // scrolling must not redraw the outline.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in balloon.scrollY = y }
         .sensoryFeedback(.selection, trigger: plucks)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
         .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) {
@@ -512,8 +515,14 @@ struct OutlineView: View {
     /// Zoom into an item (nil = whole outline), animated.
     private func zoom(to id: UUID?) {
         endEdit()
-        zoomingIn = id.map { target in zoomID.map { isInSubtree(target, of: $0) && target != $0 } ?? true } ?? false
-        withAnimation(.snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil; sel.infoID = nil }
+        let inward = id.map { target in zoomID.map { isInSubtree(target, of: $0) && target != $0 } ?? true } ?? false
+        balloon.zoomingIn = inward
+        // Inward: grow from the item's mark, where it sits on screen now. Outward (or no row on screen): the top mark.
+        if inward, let id, let f = drag.frames[id] {
+            balloon.origin = CGPoint(x: f.minX + StatusBar.margin + StatusBar.w / 2, y: max(ZoomBalloon.top.y, f.midY - balloon.scrollY - 8))
+        } else { balloon.origin = ZoomBalloon.top }
+        // Inward overshoots and settles, as a balloon does when it fills; outward lets the air out quickly.
+        withAnimation(inward ? .bouncy(duration: 0.5, extraBounce: 0.18) : .snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil; sel.infoID = nil }
     }
     /// The square colors of `n`'s ancestors, outermost first (what its children would inherit as their trail).
     private func ancestorColors(_ n: Node, context: Color) -> [Color] {
@@ -973,6 +982,39 @@ struct OutlineView: View {
     }
 }
 
+/// The zoom animation's start point and direction. A plain reference (not observed): the transition reads it at the
+/// moment it runs, so the view being removed gets the current values, not those from when it was drawn.
+@MainActor final class ZoomBalloon {
+    /// The first row's mark: where a zoomed item sits.
+    static let top = CGPoint(x: StatusBar.margin + StatusBar.w / 2, y: 4 + StatusBar.h / 2)
+    var zoomingIn = true
+    /// In the outline's coordinates, as it will be laid out (scrolled to the top).
+    var origin: CGPoint = ZoomBalloon.top
+    var scrollY: CGFloat = 0
+}
+
+/// Zoom in: the new page inflates from the held item's mark while the old one swells past it and fades. Zoom out:
+/// the page deflates into its top mark and the wider outline settles back in.
+struct BalloonTransition: Transition {
+    let balloon: ZoomBalloon
+
+    private func scale(_ phase: TransitionPhase) -> CGFloat {
+        switch phase {
+        case .identity: 1
+        case .willAppear: balloon.zoomingIn ? 0.12 : 1.2
+        case .didDisappear: balloon.zoomingIn ? 1.25 : 0.12
+        }
+    }
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        // Scaling about `origin`: scale from the top-left corner, then shift so that point stays where it is.
+        content
+            .scaleEffect(scale(phase), anchor: .topLeading)
+            .offset(x: balloon.origin.x * (1 - scale(phase)), y: balloon.origin.y * (1 - scale(phase)))
+            .opacity(phase.isIdentity ? 1 : 0)
+    }
+}
+
 @Observable @MainActor final class OutlineDrag {
     struct Target: Equatable { var y: CGFloat; var depth: Int; var aboveID: UUID? }
     var id: UUID? = nil
@@ -1261,8 +1303,6 @@ struct NodeRow: View {
     @State private var pull: CGFloat = 0
     /// A long press lifted this item during the current touch; the tap that its release completes must not zoom.
     @State private var holdFired = false
-    /// The current hold began on the text (true) or on the squares (false).
-    @State private var heldText = false
     @GestureState private var handleActive = false
     private var lifting: Bool { drag.id == node.id }
     @State private var note: String = ""
@@ -1412,9 +1452,9 @@ struct NodeRow: View {
                 // move: drag.
                 .onTapGesture { squareTapped() }
                 #if os(iOS)
-                .gesture(holdDrag(onText: false))
+                .gesture(holdDrag())
                 #else
-                .simultaneousGesture(handleGesture(onText: false))
+                .simultaneousGesture(handleGesture())
                 #endif
                 .alignmentGuide(.rowLine) { _ in 4 + StatusBar.h / 2 }   // middle of the bars
                 .help(summary + (open ? " · tap to close" : hasChildren && childrenShown ? " · tap to hide children" : " · tap to open") + " · hold to zoom in · hold and drag to move")
@@ -1426,7 +1466,7 @@ struct NodeRow: View {
                 .accessibilityAction(named: "Zoom in") { commit(); onZoom() }
 
             VStack(alignment: .leading, spacing: 2) {
-            // Closed: plain text. Tap: open the item. Hold: open it with the keyboard up. Hold and move: drag.
+            // Closed: plain text. Tap: open the item. Hold: zoom in, as on the oval. Hold and move: drag.
             // Open: the text is a field, inside the item field.
             if !open {
                 Text(title.isEmpty ? "New item" : title)
@@ -1439,9 +1479,9 @@ struct NodeRow: View {
                     // iPhone/iPad: a UIKit long press (see TouchGestures.swift); SwiftUI drag gestures here stop the list from
                     // scrolling on iOS 18+. A swipe fails the hold and scrolls; once lifted, scrolling is disabled.
                     #if os(iOS)
-                    .gesture(holdDrag(onText: true))
+                    .gesture(holdDrag())
                     #else
-                    .simultaneousGesture(handleGesture(onText: true))
+                    .simultaneousGesture(handleGesture())
                     #endif
             } else {
             // Open: the title at the field's full width, with the item's controls on their own line below it.
@@ -1573,6 +1613,8 @@ struct NodeRow: View {
         .background(Color.canvas.opacity(lifting ? 1 : 0), in: RoundedRectangle(cornerRadius: 6))
         .shadow(color: .black.opacity(lifting ? 0.18 : 0), radius: lifting ? 8 : 0, y: 2)
         .opacity(lifting ? 0.92 : 1)
+        // Held: the row puffs up, the start of the balloon that fills the page if it is released in place.
+        .animation(.bouncy(duration: 0.45, extraBounce: 0.25)) { $0.scaleEffect(lifting ? 1.06 : 1, anchor: .leading) }
         .zIndex(lifting ? 1 : 0)
         // Arrows sit at fixed edges: ← outdent on the left, → indent on the right. Pull toward an arrow to use it.
         .overlay(alignment: .leading) { pullArrow("arrow.left", active: pull < -pullThreshold, show: pull < -8).offset(x: 4) }
@@ -1615,20 +1657,18 @@ struct NodeRow: View {
     }
 
     #if os(iOS)
-    /// Hold 0.25 s to lift (release without moving = edit on the text, zoom on the squares), then move to drag.
-    private func holdDrag(onText: Bool) -> HoldDragGesture {
-        HoldDragGesture(onBegan: { lift(onText: onText) }, onChanged: { t in
+    /// Hold 0.25 s to lift (release without moving = zoom, on the text or on the oval), then move to drag.
+    private func holdDrag() -> HoldDragGesture {
+        HoldDragGesture(onBegan: { lift() }, onChanged: { t in
             guard drag.id == node.id else { return }
             drag.dx = t.width; drag.dy = t.height
             onDragChanged(drag.dx, drag.dy)
         }, onEnded: { finishDrag() })
     }
     #endif
-    /// `onText`: the hold began on the item's text (release without moving = edit) rather than on its squares
-    /// (release without moving = zoom).
-    private func lift(onText: Bool) {
+    private func lift() {
         guard drag.id == nil else { return }
-        holdFired = true; heldText = onText
+        holdFired = true
         pull = 0; commit(); drag.origin = drag.frames[node.id]; drag.id = node.id; drag.dx = 0; drag.dy = 0
     }
     /// Single tap on the text opens the item; on an item with no text it also brings up the keyboard.
@@ -1651,13 +1691,13 @@ struct NodeRow: View {
     /// The bars are the handle: press and hold (0.25 s), then drag to move the item anywhere in the outline; horizontal
     /// position while dragging picks the depth at the drop point. The hold keeps ordinary swipes scrolling the list, and
     /// movement is measured in global coordinates so the lifted row's own offset doesn't feed back into the drag.
-    private func handleGesture(onText: Bool) -> some Gesture {
+    private func handleGesture() -> some Gesture {
         LongPressGesture(minimumDuration: 0.25)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
             .updating($handleActive) { v, active, _ in if case .second(true, _) = v { active = true } }
             .onChanged { v in
                 guard case .second(true, let d) = v else { return }
-                lift(onText: onText)
+                lift()
                 guard let d else { return }
                 drag.dx = d.translation.width; drag.dy = d.translation.height
                 onDragChanged(drag.dx, drag.dy)
@@ -1667,14 +1707,14 @@ struct NodeRow: View {
     /// run on cancel, which used to leave the row stuck lifted).
     private func finishDrag() {
         guard drag.id == node.id else { return }
-        // Held and released without moving: on the text this edits it; on the squares it zooms into the item.
+        // Held and released without moving: zoom into the item (on the zoomed item: back out).
         let still = abs(drag.dx) < 6 && abs(drag.dy) < 6
         drag.dx = 0; drag.dy = 0
         // The release's tap (if any) arrives about now; stop ignoring taps shortly after.
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(400)); holdFired = false }
         if still {
             drag.target = nil; onDrop()
-            if heldText { startEdit() } else { onZoom() }
+            onZoom()
             return
         }
         withAnimation(.snappy(duration: 0.22)) { onDrop() }
