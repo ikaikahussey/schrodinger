@@ -140,7 +140,7 @@ struct OutlineView: View {
                 HistoryBar(period: $historyPeriod, summary: h.summary) { withAnimation(.snappy(duration: 0.22)) { historyOn = false } }
                     .transition(.opacity)
             }
-        } } }
+        } }
         // Dragging the list also puts the keyboard away (which ends editing).
         .scrollDismissesKeyboard(.interactively)
         #if os(iOS)
