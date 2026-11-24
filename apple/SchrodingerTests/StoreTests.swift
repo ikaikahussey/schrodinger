@@ -218,6 +218,30 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.inbox().isEmpty)
     }
 
+    /// What each filter shows (and so what its button counts).
+    func testFilterIncludes() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let mine = s.create(title: "Mine", parentID: p.id, assignee: .human); mine.state = .todo
+        let ai = s.create(title: "AI", parentID: p.id, assignee: .ai); ai.state = .todo
+        let back = s.create(title: "Returned", parentID: p.id, assignee: .ai); back.state = .review
+        let stuck = s.create(title: "Stuck", parentID: p.id, assignee: .human); stuck.state = .blocked
+        let soon = s.create(title: "Soon", parentID: p.id, assignee: .human, due: Date().addingTimeInterval(86400)); soon.state = .todo
+        let finished = s.create(title: "Finished", parentID: p.id, assignee: .human); finished.state = .done
+        s.save()
+        let items = [mine, ai, back, stuck, soon, finished]
+        func shown(_ f: OutlineView.Filter) -> [String] { items.filter { f.includes($0) }.map(\.title) }
+        XCTAssertEqual(shown(.all).count, 6)
+        XCTAssertEqual(shown(.mine), ["Mine", "Stuck", "Soon"])
+        XCTAssertEqual(shown(.ai), ["AI"], "an item the AI has returned is in Review, not AI")
+        XCTAssertEqual(shown(.review), ["Returned"])
+        XCTAssertEqual(shown(.blocked), ["Stuck"])
+        XCTAssertEqual(shown(.week), ["Soon"])
+        XCTAssertEqual(shown(.done), ["Finished"])
+        XCTAssertTrue(OutlineView.textMatches(mine, terms: ["min"]))
+        XCTAssertFalse(OutlineView.textMatches(mine, terms: ["#nope"]))
+    }
+
     /// The review box lists the items in review, and nothing else.
     func testResultsToReview() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
