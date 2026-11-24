@@ -77,11 +77,11 @@ struct OutlineView: View {
             switch self {
             case .all: "Everything"
             case .mine: "Items that are yours to do"
-            case .ai: "Items the AI holds"
-            case .review: "Items waiting for your review"
+            case .ai: "Items the AI holds and has not returned"
+            case .review: "AI results waiting for your approval"
             case .blocked: "Items that are blocked"
             case .week: "Items due within seven days"
-            case .done: "Items that are done"
+            case .done: "Finished items and approved AI results"
             }
         } }
 
@@ -91,8 +91,9 @@ struct OutlineView: View {
     private var calendared: [Node] { all.filter { $0.due != nil && $0.state != .done }.sorted { $0.due! < $1.due! } }
     /// The box shows while there are calendared items and it has not been pushed off screen.
     private var agendaShown: Bool { !calendared.isEmpty && !agendaPushed }
-    /// Items with an AI result waiting on the owner: handed back for review, or not opened yet. Newest first.
-    private var toReview: [Node] { ReviewBox.items(in: all, unseen: JobQueue.shared.unseen) }
+    /// Items in review (the AI returned a result the owner has not approved yet), newest first. The same set as the
+    /// Review filter.
+    private var toReview: [Node] { ReviewBox.items(in: all) }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     /// The items each item is linked to. A link is one record and shows on both of its items.
@@ -210,7 +211,7 @@ struct OutlineView: View {
             // typing (the keyboard needs the room).
             // AI results waiting on the owner, above the calendar box. Tap one to open its item, where the result is.
             if !keyboardUp && !reviewPushed && !reviewing.isEmpty {
-                ReviewBox(items: reviewing, needsYou: Set(reviewing.filter { $0.state == .review }.map(\.id)),
+                ReviewBox(items: reviewing, fresh: JobQueue.shared.unseen,
                           onOpen: { sel.open($0) }, onPush: { withAnimation(.snappy(duration: 0.22)) { reviewPushed = true } })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -878,8 +879,10 @@ struct OutlineView: View {
         switch filter {
         case .all: return tagFilter == nil || n.state != .done
         case .mine: return (n.assignee == .human || n.isYourTurn) && n.state != .done
-        case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done
-        case .review: return n.state == .review || n.isYourTurn
+        case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done && n.state != .review
+        // One meaning everywhere (this filter, the box at the bottom, the item's Approve): the AI has returned its
+        // result and the owner has not approved it yet. A shared item at "your turn" is under Mine.
+        case .review: return n.state == .review
         case .blocked: return n.state == .blocked
         case .week: return n.due.map { $0 < Date().addingTimeInterval(7 * 86400) } ?? false && n.state != .done
         // Completed items, in place in the outline (checked-off dated items stay here until they are pruned, a week on).
