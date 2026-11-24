@@ -2022,6 +2022,7 @@ struct NodeRow: View {
         ShareLink(item: OutlineText(rootID: node.id), preview: SharePreview(node.title.isEmpty ? "Item" : node.title)) { Label("Share…", systemImage: "square.and.arrow.up") }
         // The AI's result on its own, as a Markdown file or text, for any other app.
         if let a = node.artifact, !a.isEmpty {
+            Button { sel.resultID = node.id } label: { Label("Read result", systemImage: "arrow.up.left.and.arrow.down.right") }
             ShareLink(item: ResultFile(title: node.title, markdown: a), preview: SharePreview(ResultFile.filename(for: node.title))) { Label("Share result…", systemImage: "doc.text") }
         }
         Divider()

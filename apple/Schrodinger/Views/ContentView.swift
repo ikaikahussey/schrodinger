@@ -26,6 +26,8 @@ final class Selection {
     var revealID: UUID? = nil
     /// An item with children whose Delete was tapped: the outline asks whether its children go too.
     var deleteAskID: UUID? = nil
+    /// Item whose AI result is shown over the whole window (see ResultViewer).
+    var resultID: UUID? = nil
     /// Show an item from anywhere in the app: switch to the outline and open its info.
     func open(_ id: UUID) { panel = .outline; nodeID = id; infoID = id; revealID = id }
 }
@@ -42,6 +44,12 @@ struct ContentView: View {
             #if os(iOS)
             .shakeToUndo()
             #endif
+            // An AI result, read full-window. The outline underneath takes no keys or taps meanwhile.
+            .disabled(sel.resultID != nil)
+            .overlay {
+                if let id = sel.resultID { ResultViewer(nodeID: id, sel: sel).transition(.opacity) }
+            }
+            .animation(.snappy(duration: 0.2), value: sel.resultID)
             .sheet(item: Binding(get: { sel.panel == .outline ? nil : sel.panel }, set: { sel.panel = $0 ?? .outline })) { p in
                 NavigationStack {
                     panelView(p)
