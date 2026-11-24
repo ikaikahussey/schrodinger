@@ -21,4 +21,12 @@ final class OutlinePitchTests: XCTestCase {
         XCTAssertEqual(OutlinePitch.frequency(69), 440, accuracy: 0.001)
         XCTAssertEqual(OutlinePitch.frequency(72), 523.251, accuracy: 0.01)
     }
+
+    /// Zoomed in, the zoomed item is drawn as a top-level item and its descendants one level in per generation.
+    @MainActor func testShownDepthCountsFromTheZoomedItem() {
+        XCTAssertEqual(OutlineView.shownDepth(3, zoomBase: 0), 3)   // not zoomed: the real depth
+        XCTAssertEqual(OutlineView.shownDepth(2, zoomBase: 2), 0)   // the zoomed item itself
+        XCTAssertEqual(OutlineView.shownDepth(4, zoomBase: 2), 2)
+        XCTAssertEqual(OutlineView.shownDepth(1, zoomBase: 2), 0)   // never negative
+    }
 }

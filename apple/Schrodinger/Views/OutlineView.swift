@@ -144,10 +144,9 @@ struct OutlineView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let z = zoomed {
-                        // Zoomed in: the item keeps its real depth and its ancestors' squares, so its place in the hierarchy
-                        // reads the same as in the full outline.
-                        let context = look.contextColor(rootIndex(z, roots: roots))
-                        nodeTree(z, depth: depthOf(z), kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: history, trail: ancestorColors(z, context: context), context: context, active: store.project(of: z).projectStatus == .active)
+                        // Zoomed in: the item is drawn as a top-level item (depth 0, no ancestors' squares or rails), and
+                        // everything under it is one level in from there. The header's path shows where it really sits.
+                        nodeTree(z, depth: 0, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: history, trail: [], context: look.contextColor(0), active: store.project(of: z).projectStatus == .active)
                     } else {
                         ForEach(Array(roots.enumerated()), id: \.element.id) { i, p in nodeTree(p, depth: 0, kids: kids, files: files, links: links, advice: advice, ghosts: ghosts, history: history, trail: [], context: look.contextColor(i), active: p.projectStatus == .active) }
                         // Deleted top-level items, after the current ones.
@@ -165,7 +164,7 @@ struct OutlineView: View {
             .overlay(alignment: .topLeading) {
                 if let t = drag.target, drag.id != nil {
                     Rectangle().fill(Color.ink).frame(height: 2)
-                        .padding(.leading, StatusBar.textStart(t.depth)).padding(.trailing, 16)
+                        .padding(.leading, StatusBar.textStart(OutlineView.shownDepth(t.depth, zoomBase: zoomBase))).padding(.trailing, 16)
                         .offset(y: t.y - 1)
                         .allowsHitTesting(false)
                 }
@@ -420,7 +419,7 @@ struct OutlineView: View {
     private var harpRows: [HarpString] {
         var rows = drag.frames.compactMap { id, f -> HarpString? in
             guard let n = store.node(id) else { return nil }
-            return HarpString(id: id, top: f.minY, bottom: f.maxY, depth: depthOf(n), note: 0)
+            return HarpString(id: id, top: f.minY, bottom: f.maxY, depth: shownDepth(n), note: 0)
         }
         .sorted { $0.top < $1.top }
         for i in rows.indices.dropLast() { rows[i].bottom = rows[i + 1].top }
@@ -583,17 +582,6 @@ struct OutlineView: View {
         } else { balloon.origin = ZoomBalloon.top }
         // Inward overshoots and settles, as a balloon does when it fills; outward lets the air out quickly.
         withAnimation(inward ? .bouncy(duration: 0.5, extraBounce: 0.18) : .snappy(duration: 0.32)) { zoomID = id; sel.nodeID = nil; sel.infoID = nil }
-    }
-    /// The square colors of `n`'s ancestors, outermost first (what its children would inherit as their trail).
-    private func ancestorColors(_ n: Node, context: Color) -> [Color] {
-        var path: [Node] = []
-        var p = n.parentID
-        while let id = p, let x = store.node(id) { path.insert(x, at: 0); p = x.parentID }
-        return path.enumerated().map { i, a in look.itemColor(depth: i, state: a.isProject ? .todo : a.state, assignee: a.isProject ? .human : a.assignee) }
-    }
-    private func rootIndex(_ n: Node, roots: [Node]) -> Int {
-        var r = n; while let pid = r.parentID, let p = store.node(pid) { r = p }
-        return roots.firstIndex { $0.id == r.id } ?? 0
     }
     /// New item: a circle with a plus.
     private func newItemButton(_ action: @escaping () -> Void) -> some View {
@@ -1018,6 +1006,12 @@ struct OutlineView: View {
     // MARK: Drag anywhere
 
     private func depthOf(_ n: Node) -> Int { var d = 0; var p = n.parentID; while let id = p, let x = store.node(id) { d += 1; p = x.parentID }; return d }
+    /// The zoomed item's real depth: what is subtracted from an item's depth to get the level it is drawn at
+    /// (the zoomed item is drawn as a top-level item). 0 when not zoomed.
+    private var zoomBase: Int { zoomID.flatMap { store.node($0) }.map(depthOf) ?? 0 }
+    /// The level an item is drawn at: its depth below the zoomed item, or its real depth when not zoomed.
+    private func shownDepth(_ n: Node) -> Int { OutlineView.shownDepth(depthOf(n), zoomBase: zoomBase) }
+    nonisolated static func shownDepth(_ depth: Int, zoomBase: Int) -> Int { max(0, depth - zoomBase) }
     private func isInSubtree(_ id: UUID, of root: UUID) -> Bool { var p: UUID? = id; while let x = p { if x == root { return true }; p = store.node(x)?.parentID }; return false }
 
     /// Rows currently laid out, top to bottom, excluding the dragged item and its descendants.
@@ -1047,7 +1041,7 @@ struct OutlineView: View {
         if let z = zoomID.flatMap({ store.node($0) }) { depth = max(depth, depthOf(z) + 1) }
         let target = OutlineDrag.Target(y: lineY, depth: depth, aboveID: above?.node.id)
         if let old = drag.target {
-            if old.depth != depth { Xylophone.shared.play(OutlinePitch.depth(depth)) }
+            if old.depth != depth { Xylophone.shared.play(OutlinePitch.depth(OutlineView.shownDepth(depth, zoomBase: zoomBase))) }
             else if old.aboveID != target.aboveID { Xylophone.shared.play(OutlinePitch.row(idx)) }
         }
         drag.target = target
@@ -1093,11 +1087,11 @@ struct OutlineView: View {
             let siblings = kids[n.parentID] ?? []
             guard let idx = siblings.firstIndex(where: { $0.id == n.id }), idx > 0 else { return }
             try? s.move(n, to: siblings[idx - 1].id, position: 999); s.save(); keep()
-            Xylophone.shared.play(OutlinePitch.depth(depthOf(n)))
+            Xylophone.shared.play(OutlinePitch.depth(shownDepth(n)))
         case .shiftTab:
             guard let pid = n.parentID, let parent = s.node(pid) else { return }
             try? s.move(n, to: parent.parentID, position: parent.position + 1); s.save(); keep()
-            Xylophone.shared.play(OutlinePitch.depth(depthOf(n)))
+            Xylophone.shared.play(OutlinePitch.depth(shownDepth(n)))
         case .backspaceEmpty:
             guard (kids[n.id] ?? []).isEmpty else { return }
             let siblings = kids[n.parentID] ?? []
@@ -1114,7 +1108,7 @@ struct OutlineView: View {
             guard to >= 0, to < siblings.count else { return }
             // Target index among the on-screen siblings (stored positions can have gaps or duplicates).
             try? s.move(n, to: n.parentID, position: to); s.save(); keep()
-            Xylophone.shared.play(OutlinePitch.position(to, depth: depthOf(n)))
+            Xylophone.shared.play(OutlinePitch.position(to, depth: shownDepth(n)))
         }
     }
 }
