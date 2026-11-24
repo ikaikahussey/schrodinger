@@ -59,7 +59,31 @@ struct OutlineView: View {
     @State private var plucks = 0
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week, done; var id: String { rawValue }
-        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week"; case .done: "Done" } } }
+        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week"; case .done: "Done" } }
+        /// The filter's glyph: the same one the item's own controls use for that holder, status or date.
+        var icon: String {
+            switch self {
+            case .all: "circle.grid.2x2"
+            case .mine: Assignee.human.icon
+            case .ai: Assignee.ai.icon
+            case .review: TaskState.review.icon
+            case .blocked: TaskState.blocked.icon
+            case .week: MarkIndicator.date.symbol
+            case .done: TaskState.done.icon
+            }
+        }
+        /// What the filter shows, in a few words (the line under its title).
+        var blurb: String {
+            switch self {
+            case .all: "Everything"
+            case .mine: "Items that are yours to do"
+            case .ai: "Items the AI holds and has not returned"
+            case .review: "AI results waiting for your approval"
+            case .blocked: "Items that are blocked"
+            case .week: "Items due within seven days"
+            case .done: "Finished items and approved AI results"
+            }
+        } }
 
     private var store: Store { Store(ctx) }
     private var look: Appearance { Appearance.shared }
@@ -67,8 +91,9 @@ struct OutlineView: View {
     private var calendared: [Node] { all.filter { $0.due != nil && $0.state != .done }.sorted { $0.due! < $1.due! } }
     /// The box shows while there are calendared items and it has not been pushed off screen.
     private var agendaShown: Bool { !calendared.isEmpty && !agendaPushed }
-    /// Items with an AI result waiting on the owner: handed back for review, or not opened yet. Newest first.
-    private var toReview: [Node] { ReviewBox.items(in: all, unseen: JobQueue.shared.unseen) }
+    /// Items in review (the AI returned a result the owner has not approved yet), newest first. The same set as the
+    /// Review filter.
+    private var toReview: [Node] { ReviewBox.items(in: all) }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     /// The items each item is linked to. A link is one record and shows on both of its items.
@@ -139,7 +164,7 @@ struct OutlineView: View {
         .sensoryFeedback(.selection, trigger: plucks)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
         .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) {
-            breadcrumbBar(zoomed); tagBar
+            breadcrumbBar(zoomed); tagBar; filterTitle
             if let h = history {
                 HistoryBar(period: $historyPeriod, summary: h.summary) { withAnimation(.snappy(duration: 0.22)) { historyOn = false } }
                     .transition(.opacity)
@@ -186,7 +211,7 @@ struct OutlineView: View {
             // typing (the keyboard needs the room).
             // AI results waiting on the owner, above the calendar box. Tap one to open its item, where the result is.
             if !keyboardUp && !reviewPushed && !reviewing.isEmpty {
-                ReviewBox(items: reviewing, needsYou: Set(reviewing.filter { $0.state == .review }.map(\.id)),
+                ReviewBox(items: reviewing, fresh: JobQueue.shared.unseen,
                           onOpen: { sel.open($0) }, onPush: { withAnimation(.snappy(duration: 0.22)) { reviewPushed = true } })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -695,10 +720,13 @@ struct OutlineView: View {
                         let on = filter == f
                         let fill = on ? PanelPalette.peach : PanelPalette.periwinkle
                         Button { withAnimation(.snappy(duration: 0.25)) { filter = on ? .all : f } } label: {
-                            Text((on ? "\u{2713} " : "") + f.label.uppercased())
-                                .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
-                                .padding(.horizontal, 9).frame(height: 24)
-                                .background { fill.panelBlink(60 + f.label.count) }
+                            HStack(spacing: 4) {
+                                Image(systemName: f.icon).font(.system(size: 10, weight: .heavy))
+                                Text((on ? "\u{2713} " : "") + f.label.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1)
+                            }
+                            .foregroundStyle(PanelPalette.text(on: fill))
+                            .padding(.horizontal, 9).frame(height: 24)
+                            .background { fill.panelBlink(60 + f.label.count) }
                         }
                         .accessibilityLabel("Show: " + f.label)
                         .accessibilityAddTraits(on ? .isSelected : [])
@@ -748,6 +776,25 @@ struct OutlineView: View {
             .transition(.opacity)
         }
     }
+    /// The title of the filter that is on, above the outline: its glyph, its name and what it shows. It says what
+    /// the glyph on the filter's button means, and what the list below is limited to.
+    @ViewBuilder private var filterTitle: some View {
+        if filter != .all {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: filter.icon).font(.system(size: 15, weight: .heavy)).foregroundStyle(Color.ink.opacity(0.7))
+                Text(filter.label).font(Appearance.shared.font.font(.title3, weight: .bold)).foregroundStyle(Color.ink)
+                Text(filter.blurb).font(Appearance.shared.font.font(.footnote)).foregroundStyle(Color.ink.opacity(0.55)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, StatusBar.margin).padding(.trailing, 12).padding(.top, 2).padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.canvas)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .transition(.opacity)
+        }
+    }
+
     // MARK: Saved views
 
     private var savedViews: [SavedView] { SavedView.all(in: workspaceFiles) }
@@ -832,8 +879,10 @@ struct OutlineView: View {
         switch filter {
         case .all: return tagFilter == nil || n.state != .done
         case .mine: return (n.assignee == .human || n.isYourTurn) && n.state != .done
-        case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done
-        case .review: return n.state == .review || n.isYourTurn
+        case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done && n.state != .review
+        // One meaning everywhere (this filter, the box at the bottom, the item's Approve): the AI has returned its
+        // result and the owner has not approved it yet. A shared item at "your turn" is under Mine.
+        case .review: return n.state == .review
         case .blocked: return n.state == .blocked
         case .week: return n.due.map { $0 < Date().addingTimeInterval(7 * 86400) } ?? false && n.state != .done
         // Completed items, in place in the outline (checked-off dated items stay here until they are pruned, a week on).

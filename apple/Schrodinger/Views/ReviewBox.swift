@@ -1,16 +1,16 @@
 import SwiftUI
 import SwiftData
 
-// AI results waiting on the owner: an item the AI handed back for review ("needs you"), or a result that has not
-// been opened yet. They are listed in a box at the bottom of the outline, above the calendar box, and the box can be
-// pushed off the bottom of the screen the same way.
+// Items in review: the AI returned its result and the owner has not approved it yet (the same set as the Review
+// filter). They are listed in a box at the bottom of the outline, above the calendar box, and the box can be pushed
+// off the bottom of the screen the same way. Approving an item (in its field) makes it done and takes it off the list.
 
 /// The box at the bottom of the outline: results to review, newest first. Tap one to go to its item, where the
 /// result is. Dragging its header down (or tapping the chevron) pushes the box off screen, where `ReviewTab` stands in.
 struct ReviewBox: View {
     let items: [Node]
-    /// Items whose result came back for review (the rest are results not opened yet).
-    let needsYou: Set<UUID>
+    /// Items whose result has not been opened yet on this device (marked "New").
+    let fresh: Set<UUID>
     let onOpen: (UUID) -> Void
     let onPush: () -> Void
     private let rowHeight: CGFloat = 30
@@ -53,10 +53,10 @@ struct ReviewBox: View {
     @ViewBuilder private func row(_ n: Node) -> some View {
         // Reading a deleted model traps; the box can render once more after an item is deleted.
         if n.isDeleted || n.modelContext == nil { EmptyView() } else {
-            let needs = needsYou.contains(n.id)
+            let new = fresh.contains(n.id)
             Button { onOpen(n.id) } label: {
                 HStack(spacing: 10) {
-                    Text(needs ? "Needs you" : "New").font(Appearance.shared.font.font(.caption, weight: .semibold))
+                    Text(new ? "New" : "Review").font(Appearance.shared.font.font(.caption, weight: .semibold))
                         .foregroundStyle(Color.ink.opacity(0.6))
                         .frame(width: 84, alignment: .leading).lineLimit(1).minimumScaleFactor(0.8)
                     Text(n.title.isEmpty ? "New item" : n.title).font(Appearance.shared.font.font(.footnote))
@@ -68,17 +68,13 @@ struct ReviewBox: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel((needs ? "Needs you: " : "New result: ") + (n.title.isEmpty ? "New item" : n.title))
+            .accessibilityLabel((new ? "New result to review: " : "To review: ") + (n.title.isEmpty ? "New item" : n.title))
         }
     }
 
-    /// The items whose results wait on the owner, newest first: handed back for review, or not opened yet.
-    @MainActor static func items(in all: [Node], unseen: Set<UUID>) -> [Node] {
-        all.filter { n in
-            guard let a = n.artifact, !a.isEmpty else { return false }
-            return n.state == .review || unseen.contains(n.id)
-        }
-        .sorted { $0.lastActivityAt > $1.lastActivityAt }
+    /// The items in review, newest first.
+    @MainActor static func items(in all: [Node]) -> [Node] {
+        all.filter { $0.state == .review }.sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 }
 

@@ -218,18 +218,17 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.inbox().isEmpty)
     }
 
-    /// The review box lists items whose result waits on the owner: handed back for review, or not opened yet.
+    /// The review box lists the items in review, and nothing else.
     func testResultsToReview() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P")
         let review = s.create(title: "Needs me", parentID: p.id); review.artifact = "draft"; review.state = .review
-        let fresh = s.create(title: "Not opened", parentID: p.id); fresh.artifact = "result"; fresh.state = .done
-        let seen = s.create(title: "Opened", parentID: p.id); seen.artifact = "result"; seen.state = .done
-        let empty = s.create(title: "No result", parentID: p.id); empty.state = .review
+        let approved = s.create(title: "Approved", parentID: p.id); approved.artifact = "result"; approved.state = .done
+        let mine = s.create(title: "Plain to-do", parentID: p.id); mine.state = .todo
         s.save()
-        let all = [p, review, fresh, seen, empty]
-        XCTAssertEqual(Set(ReviewBox.items(in: all, unseen: [fresh.id]).map(\.id)), [review.id, fresh.id])
-        XCTAssertEqual(ReviewBox.items(in: all, unseen: []).map(\.id), [review.id])
+        XCTAssertEqual(ReviewBox.items(in: [p, review, approved, mine]).map(\.id), [review.id])
+        try s.approve(review)
+        XCTAssertTrue(ReviewBox.items(in: [p, review, approved, mine]).isEmpty)
     }
 
     /// The line an item's row shows for its hand-off.
@@ -296,14 +295,16 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.children(of: t.id).map(\.title), ["Email the program officer", "Draft the budget"])
         XCTAssertEqual(s.children(of: t.id).first?.notes, "Ask about page limits")
         XCTAssertEqual(s.attachments(for: t.id).map(\.urlString), ["https://example.org/rfp"])
-        XCTAssertEqual(t.state, .in_progress, "finished, but with follow-up steps under it, the item stays open")
+        XCTAssertEqual(t.state, .review, "whatever the AI returns waits for the owner's approval")
         // Applying the same result again adds nothing twice.
         s.applyHandoff(r, to: t)
         XCTAssertEqual(s.children(of: t.id).count, 2)
         XCTAssertEqual(s.attachments(for: t.id).count, 1)
-        // Finished with nothing left: done. Questions: back to the owner, listed on the item.
+        // Finished with nothing left: still in review until the owner approves it. Questions: listed on the item.
         let plain = s.create(title: "Look up the address", parentID: p.id, assignee: .ai)
         XCTAssertEqual(s.applyHandoff(HandoffResult(summary: "ok", markdown: "1 Main St", done: true), to: plain), .done)
+        XCTAssertEqual(plain.state, .review)
+        try s.approve(plain)
         XCTAssertEqual(plain.state, .done)
         let asks = s.create(title: "Book the room", parentID: p.id, assignee: .ai)
         XCTAssertEqual(s.applyHandoff(HandoffResult(markdown: "Options", done: true, questions: ["Which day?"]), to: asks), .needsYou)

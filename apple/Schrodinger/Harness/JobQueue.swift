@@ -256,7 +256,7 @@ final class JobQueue {
         finish(id, outcome == .done ? .done : .needsYou, summary: line)
         let title = n.title.isEmpty ? "(untitled)" : n.title
         let heading = switch outcome {
-        case .done: "Done: \(title)"
+        case .done: "Ready for review: \(title)"
         case .needsYou: "Needs you: \(title)"
         case .yourTurn: "Your turn: \(title)"
         }

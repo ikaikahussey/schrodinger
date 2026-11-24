@@ -82,7 +82,7 @@ struct HandoffResult: Equatable, Sendable {
 
 /// How a hand-off left its item.
 enum HandoffOutcome: String, Sendable {
-    /// Finished: nothing left on the item.
+    /// The AI finished: nothing left for it on the item. The item still waits for the owner's approval.
     case done
     /// The owner has something to do: review the result, answer questions, or do the follow-up steps.
     case needsYou
@@ -135,9 +135,9 @@ extension Store {
             }
             switch outcome {
             case .yourTurn: x.state = .in_progress; x.aiStatus = .done
-            // Finished, but with follow-up steps under it: the item stays open until they are done.
-            case .done: x.state = made > 0 ? .in_progress : .done
-            case .needsYou: x.state = .review
+            // Whatever the AI returns goes to review, finished or not: only the owner marks an AI item done
+            // (Approve), or has it redone.
+            case .done, .needsYou: x.state = .review
             }
             if made > 0 { x.collapsed = false }
         }
