@@ -1,5 +1,8 @@
 import SwiftUI
 import SwiftData
+#if canImport(CoreSpotlight)
+import CoreSpotlight
+#endif
 
 enum Panel: String, CaseIterable, Identifiable {
     case outline, batch, inbox, results, calendar, digest, activity, settings
@@ -65,6 +68,10 @@ struct ContentView: View {
         .font(Appearance.shared.font.font(.body))
         // A tapped notification opens its item.
         .onChange(of: router.openID, initial: true) { _, id in if let id { sel.open(id); router.openID = nil } }
+        #if canImport(CoreSpotlight)
+        // An item chosen in the system's search (Spotlight) opens in the outline.
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in if let id = SpotlightIndex.itemID(from: activity) { sel.open(id) } }
+        #endif
         // Back in the foreground: time has passed, so the badge and the next notifications are brought up to date.
         .onChange(of: scenePhase) { _, p in if p == .active { Task { await Reminders.syncAll(container: AppData.container) } } }
         // No global Run button: an item is handed to the AI from its own row or field (see NodeRow).

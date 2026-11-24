@@ -810,4 +810,59 @@ final class DueLabelTests: XCTestCase {
         XCTAssertEqual(Markdown.blocks("```\n<b>x</b>\n```"), [.code("<b>x</b>")])
         XCTAssertEqual(String(Markdown.inline("a **b** `c`").characters), "a b c")
     }
+
+    // MARK: - Search index
+
+    func testSearchIndexRebuildsOnlyWhenItemsChange() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "Campaign")
+        let a = s.create(title: "Call Bob #call", parentID: p.id)
+        let idx = SearchIndex()
+        XCTAssertTrue(idx.refresh(s.allNodes()))
+        XCTAssertFalse(idx.refresh(s.allNodes()))            // nothing changed: not rebuilt
+        XCTAssertEqual(idx.builds, 1)
+        XCTAssertTrue(idx.matches(a, terms: ["bob", "#call"]))
+        XCTAssertFalse(idx.matches(a, terms: ["alice"]))
+        XCTAssertTrue(idx.matches(a, terms: []))
+        XCTAssertEqual(idx.tags(a), ["call"])
+        s.update(a) { $0.notes = "Ask about Alice #errand" }   // text changed: rebuilt, and the new text is found
+        XCTAssertTrue(idx.refresh(s.allNodes()))
+        XCTAssertTrue(idx.matches(a, terms: ["alice", "#errand"]))
+        s.update(a) { $0.state = .done }                     // not something a search reads: not rebuilt
+        XCTAssertFalse(idx.refresh(s.allNodes()))
+        let b = s.create(title: "New", parentID: p.id)       // added: rebuilt
+        XCTAssertTrue(idx.refresh(s.allNodes()))
+        XCTAssertTrue(idx.matches(b, terms: ["new"]))
+        let gone = b.id
+        s.delete(b); s.save()                                // removed: rebuilt, and gone from the index
+        XCTAssertTrue(idx.refresh(s.allNodes()))
+        XCTAssertNil(idx.entries[gone])
+        XCTAssertEqual(idx.builds, 4)
+    }
+
+    func testSpotlightDocsAndChanges() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "Campaign")
+        let a = s.create(title: "Call Bob #call", parentID: p.id)
+        _ = s.create(title: "  ", parentID: p.id)            // nothing to find: not indexed
+        let docs = SpotlightIndex.docs(s.allNodes())
+        XCTAssertEqual(Set(docs.map(\.id)), [p.id, a.id])
+        let doc = try XCTUnwrap(docs.first { $0.id == a.id })
+        XCTAssertEqual(doc.path, "Campaign")
+        XCTAssertEqual(doc.tags, ["call"])
+        // First sync of a run: everything is indexed; identifiers left from an earlier launch that are gone are removed.
+        let gone = UUID().uuidString
+        let first = SpotlightIndex.changes(from: nil, to: docs, known: [gone, a.id.uuidString])
+        XCTAssertEqual(first.index.count, 2)
+        XCTAssertEqual(first.remove, [gone])
+        // Later: only what changed is indexed again; a deleted item is removed.
+        let old = Dictionary(uniqueKeysWithValues: docs.map { ($0.id, $0) })
+        XCTAssertEqual(SpotlightIndex.changes(from: old, to: docs, known: []), SpotlightIndex.Changes())
+        s.update(a) { $0.title = "Call Alice" }
+        let parent = p.id.uuidString
+        s.delete(p, keepChildren: true); s.save()
+        let next = SpotlightIndex.changes(from: old, to: SpotlightIndex.docs(s.allNodes()), known: docs.map(\.id.uuidString))
+        XCTAssertEqual(next.index.map(\.title), ["Call Alice"])
+        XCTAssertEqual(next.remove, [parent])
+    }
 }
