@@ -29,7 +29,7 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
     var finishedAt: Date? = nil
 
     /// Stands for "needs you" wherever the app says so: the AI has returned and the owner has something to do.
-    static let needsYouMark = "🫵"
+    static let needsYouMark = "🚦"
 
     /// Still to be done or under way.
     var live: Bool { status == .queued || status == .working }
