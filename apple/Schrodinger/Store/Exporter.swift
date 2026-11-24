@@ -76,3 +76,40 @@ struct CSVExport: Transferable {
         DataRepresentation(exportedContentType: .commaSeparatedText) { Data($0.text.utf8) }
     }
 }
+
+extension UTType {
+    /// Markdown, which is what the AI writes its results in. Falls back to plain text where the system has no such type.
+    static let resultMarkdown = UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
+}
+
+/// An AI result, for other apps: a Markdown file named after its item (Files, Mail, an editor, AirDrop…), or its
+/// text for apps that take text (Notes, Messages…). The receiving app picks the form it can use.
+struct ResultFile: Transferable {
+    var title: String
+    var markdown: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .resultMarkdown) { (r: ResultFile) in SentTransferredFile(try r.write()) }
+        ProxyRepresentation { (r: ResultFile) in r.markdown }
+    }
+
+    /// A file name any file system takes: no path separators or line breaks, not too long, never empty.
+    static func filename(for title: String) -> String {
+        let bad = CharacterSet(charactersIn: "/\\:\0").union(.newlines).union(.controlCharacters)
+        var name = title.components(separatedBy: bad).joined(separator: " ")
+            .split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+        while name.hasPrefix(".") { name.removeFirst() }
+        name = String(name.prefix(80)).trimmingCharacters(in: .whitespaces)
+        return (name.isEmpty ? "Result" : name) + ".md"
+    }
+
+    /// Writes the result to a temporary file and returns where. Each call gets its own folder, so the name stays clean.
+    func write() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Results", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(Self.filename(for: title))
+        try Data(markdown.utf8).write(to: url, options: .atomic)
+        return url
+    }
+}
