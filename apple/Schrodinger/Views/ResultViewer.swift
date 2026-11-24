@@ -7,7 +7,7 @@ import UIKit
 #endif
 
 /// An item's AI result, filling the window: the Markdown drawn as a document, under a bar of breadcrumbs that lead
-/// back to the outline (Outline, the item's parents, the item). Opened from the result block in an item's field.
+/// back to the outline (the item's parents, then the item, each by name). Opened from the result block in an item's field.
 struct ResultViewer: View {
     let nodeID: UUID
     var sel: Selection
@@ -49,10 +49,11 @@ struct ResultViewer: View {
         return HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
-                    crumb("OUTLINE", systemImage: "chevron.left", fill: PanelPalette.orange) { close() }
-                        .accessibilityLabel("Back to the outline")
+                    // The path to the item, by name; the last block is the item itself. Each leads to its place in the outline.
                     ForEach(Array(crumbs.enumerated()), id: \.element.id) { i, n in
-                        crumb((n.title.isEmpty ? "Untitled" : n.title).uppercased(), fill: [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3]) { go(to: n.id) }
+                        let name = n.title.isEmpty ? "Untitled" : n.title
+                        crumb(name.uppercased(), systemImage: i == 0 ? "chevron.left" : nil, fill: [PanelPalette.lavender, PanelPalette.periwinkle, PanelPalette.rose][i % 3]) { go(to: n.id) }
+                            .accessibilityLabel("Back to \(name)")
                     }
                     // Where you are: not a button.
                     crumbLabel("RESULT", systemImage: nil, fill: PanelPalette.peach).accessibilityAddTraits(.isHeader)
@@ -66,7 +67,7 @@ struct ResultViewer: View {
                 }
                 .help("Share or open in another app").accessibilityLabel("Share result")
             }
-            Button { close() } label: {
+            Button { if let node { go(to: node.id) } else { close() } } label: {
                 Image(systemName: "xmark").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.6))
                     .frame(width: 34, height: 34).contentShape(Rectangle())
             }
