@@ -59,7 +59,19 @@ struct OutlineView: View {
     @State private var plucks = 0
 
     enum Filter: String, CaseIterable, Identifiable { case all, mine, ai, review, blocked, week, done; var id: String { rawValue }
-        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week"; case .done: "Done" } } }
+        var label: String { switch self { case .all: "All"; case .mine: "Mine"; case .ai: "AI"; case .review: "Review"; case .blocked: "Blocked"; case .week: "This week"; case .done: "Done" } }
+        /// The filter's glyph: the same one the item's own controls use for that holder, status or date.
+        var icon: String {
+            switch self {
+            case .all: "circle.grid.2x2"
+            case .mine: Assignee.human.icon
+            case .ai: Assignee.ai.icon
+            case .review: TaskState.review.icon
+            case .blocked: TaskState.blocked.icon
+            case .week: MarkIndicator.date.symbol
+            case .done: TaskState.done.icon
+            }
+        } }
 
     private var store: Store { Store(ctx) }
     private var look: Appearance { Appearance.shared }
@@ -695,10 +707,13 @@ struct OutlineView: View {
                         let on = filter == f
                         let fill = on ? PanelPalette.peach : PanelPalette.periwinkle
                         Button { withAnimation(.snappy(duration: 0.25)) { filter = on ? .all : f } } label: {
-                            Text((on ? "\u{2713} " : "") + f.label.uppercased())
-                                .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
-                                .padding(.horizontal, 9).frame(height: 24)
-                                .background { fill.panelBlink(60 + f.label.count) }
+                            HStack(spacing: 4) {
+                                Image(systemName: f.icon).font(.system(size: 10, weight: .heavy))
+                                Text((on ? "\u{2713} " : "") + f.label.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1)
+                            }
+                            .foregroundStyle(PanelPalette.text(on: fill))
+                            .padding(.horizontal, 9).frame(height: 24)
+                            .background { fill.panelBlink(60 + f.label.count) }
                         }
                         .accessibilityLabel("Show: " + f.label)
                         .accessibilityAddTraits(on ? .isSelected : [])
