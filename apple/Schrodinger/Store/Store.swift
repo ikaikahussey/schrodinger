@@ -427,6 +427,8 @@ struct Store {
         p.status = .accepted
     }
     func dismiss(_ p: Proposal) { p.status = .dismissed }
+    /// Dismisses each of these (the Inbox's Clear All).
+    func dismissAll(_ proposals: [Proposal]) { for p in proposals where p.status == .open { dismiss(p) } }
     /// Closes the stale / blocked / no-open-tasks notices an earlier version filed on its own. Nothing files them now.
     func dismissAutomaticNotices() {
         let auto: Set<ProposalType> = [.stale, .blocked_chain, .no_path]
