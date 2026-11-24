@@ -1548,7 +1548,7 @@ struct NodeRow: View {
         } else if jobs.unseen.contains(node.id) {
             rowGlyph("sparkles.rectangle.stack.fill", label: "New result", help: "The AI's result is in: tap to open") { commit(); openItem() }
         } else if !runnable.isEmpty {
-            rowGlyph("play.fill", label: runnable.count == 1 ? "Hand off" : "Hand off \(runnable.count) items",
+            rowGlyph(Self.sendToAISymbol, label: runnable.count == 1 ? "Hand off" : "Hand off \(runnable.count) items",
                      help: runnable.count == 1 ? "Hand this to the AI" : "Hand the \(runnable.count) AI items here to the AI") { run() }
         }
     }
@@ -1603,9 +1603,13 @@ struct NodeRow: View {
         commit()
         jobs.handOff(runnable)
     }
-    /// The paper plane in the item's field: hand this item to the AI now, whoever held it.
+    /// The glyph for "have the AI do this now": a wand, not an arrow or a plane, which read as share or send.
+    static let sendToAISymbol = "wand.and.stars"
+    /// The wand in the item's field: hand this item to the AI now. An item that was mine (or nobody's) becomes the
+    /// AI's, so the holder glyph beside the wand shows where it went; a shared item stays shared.
     private func handOff() {
         commit(); commitNote(convertLists: false)
+        if node.assignee == .human || node.assignee == .unassigned { store.update(node) { $0.assignee = .ai }; store.save() }
         jobs.handOff([node.id])
     }
     /// A tap on the item, on its text or on its squares, opens it: the item field and the children are shown.
@@ -1968,20 +1972,31 @@ struct NodeRow: View {
         }
     }
 
-    /// The item field's controls, as bare glyphs on their own line under the title, most used first: hand off to the
-    /// AI, calendar (give the item a date), new child, new item below, who holds the item (tap to change), then a
-    /// "more" menu with the rest (add photos, link to another item, delete). Approve / Redo join them while an AI
+    /// The item field's controls, as bare glyphs on their own line under the title, most used first: the AI control
+    /// (who holds the item, joined to "have the AI do this now"), calendar (give the item a date), new child, new
+    /// item below, then a "more" menu with the rest (add photos, link to another item, delete). Approve / Redo join them while an AI
     /// draft awaits review. Done is alone at the right; Delete is in the menu, away from it. Links have no button:
     /// a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
         let empty = title.trimmingCharacters(in: .whitespaces).isEmpty
         HStack(spacing: 0) {
             if !node.isProject {
-                // Hand the item to the AI now: it works on it (with the app closed too, on Claude) and the result comes
-                // back onto the item.
-                FieldIcon(systemImage: "paperplane.fill", on: true, width: ItemField.compact) { handOff() }
-                    .disabled(empty || working)
-                    .help(working ? "The AI is working on this" : "Hand off to the AI").accessibilityLabel("Hand off to the AI")
+                // One control, two halves, in a shared capsule. Left: who holds the item (tap to change: me, the AI,
+                // both). Right: have the AI do it now (it works with the app closed too, on Claude, and the result
+                // comes back onto the item). Sending an item of mine to the AI also makes the AI its holder, so the
+                // left half always says where the item is.
+                HStack(spacing: 0) {
+                    FieldIcon(systemImage: node.assignee.icon, width: ItemField.compact) { cycleAssignee() }
+                        .help("Responsible: " + node.assignee.label + " (tap to change)")
+                        .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
+                    Rectangle().fill(Color.ink.opacity(0.18)).frame(width: 1, height: 14).accessibilityHidden(true)
+                    FieldIcon(systemImage: Self.sendToAISymbol, on: true, width: ItemField.compact) { handOff() }
+                        .disabled(empty || working)
+                        .help(working ? "The AI is working on this" : "Have the AI do this now").accessibilityLabel("Have the AI do this now")
+                }
+                .padding(.horizontal, 3)
+                .background { Capsule().fill(PanelPalette.field).padding(.vertical, -5) }
+                .padding(.trailing, 8)
             }
             FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil, width: ItemField.compact) { commit(); showCalendar = true }
                 .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
@@ -1994,11 +2009,6 @@ struct NodeRow: View {
             FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
-            if !node.isProject {
-                FieldIcon(systemImage: node.assignee.icon, width: ItemField.compact) { cycleAssignee() }
-                    .help("Responsible: " + node.assignee.label + " (tap to change)")
-                    .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
-            }
             if node.state == .review {
                 // The AI's result is waiting: approve it (the item is done), or have it redone (answers and
                 // corrections typed in the notes go along).
