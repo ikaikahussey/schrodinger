@@ -105,6 +105,13 @@ struct InboxView: View {
             }
         }
         .navigationTitle("Inbox")
+        .toolbar {
+            // Dismisses everything in the Inbox at once. Dismissed suggestions are not raised again.
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Clear All", role: .destructive) { withAnimation { s.dismissAll(open); s.save() } }
+                    .disabled(open.isEmpty)
+            }
+        }
     }
 }
 

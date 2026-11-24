@@ -213,6 +213,9 @@ final class StoreTests: XCTestCase {
         s.propose(projectID: p.id, nodeID: old.id, type: .note, summary: "Add", payload: ["text": "x"])
         s.dismissAutomaticNotices()
         XCTAssertEqual(s.inbox().map(\.type), [.note])
+        // The Inbox's Clear All dismisses what is left.
+        s.dismissAll(s.inbox())
+        XCTAssertTrue(s.inbox().isEmpty)
     }
 
     /// The line an item's row shows for its hand-off.

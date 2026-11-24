@@ -23,7 +23,6 @@ struct OutlineView: View {
     @State private var filter: Filter = .all
     /// Show only items with this tag (nil: any).
     @State private var tagFilter: String? = nil
-    @State private var showLegend = false
     /// History mode: the outline shows what changed lately, in place (added items marked, deleted items struck
     /// through where they were, with a button to bring each back). Off until chosen from the header menu.
     @State private var historyOn = false
@@ -111,7 +110,6 @@ struct OutlineView: View {
                 .id(zoomID)
                 // Zooming in, the item inflates like a balloon from where it was held until it fills the page.
                 .transition(BalloonTransition(balloon: balloon))
-                if showLegend { BarLegend().padding(.top, 24) }
             }
             // Squares start at the first pixel on the left; text keeps its margin on the right.
             .padding(.trailing, 16).padding(.top, 8)
@@ -412,25 +410,15 @@ struct OutlineView: View {
         }
     }
 
-    /// Filters, in a menu in the navigation bar. The icon fills in while a filter is on.
+    /// The header menu: saved views, import and export, and the rest of the app. The icon fills in while a filter
+    /// is on (filters themselves are picked under the search field).
     private static let headerHeight: CGFloat = 28
     private var filterMenu: some View {
         Menu {
-            Picker("Show", selection: Binding(get: { filter }, set: { v in withAnimation(.snappy(duration: 0.25)) { filter = v } })) {
-                ForEach(Filter.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.inline)
-            // Tags in use (typed as #tag in an item's text or notes).
-            if !allTags.isEmpty {
-                Picker("Tag", selection: Binding(get: { tagFilter }, set: { v in withAnimation(.snappy(duration: 0.25)) { tagFilter = v } })) {
-                    Text("Any tag").tag(String?.none)
-                    ForEach(allTags, id: \.self) { Text("#" + $0).tag(String?.some($0)) }
-                }
-                .pickerStyle(.inline)
-            }
+            // What to show (Mine, AI, Review…) and the tags are picked under the search field: tap it.
             if filtering {
-                Divider()
                 Button(role: .destructive) { withAnimation(.snappy(duration: 0.25)) { filter = .all; tagFilter = nil } } label: { Label("Clear filters", systemImage: "xmark") }
+                Divider()
             }
             // Saved views: a search, filter and zoom kept under a name. Tap one to return to it.
             let views = savedViews
@@ -462,7 +450,6 @@ struct OutlineView: View {
                 ShareLink(item: OutlineText(rootID: zoomID), preview: SharePreview(exportName)) { Label("Share as text (Notes…)", systemImage: "note.text") }
                 Button { finishTyping(); exportingCSV = true } label: { Label("Save as CSV…", systemImage: "tablecells") }
             } label: { Label("Export", systemImage: "square.and.arrow.up") }
-            Toggle("Show square legend", isOn: Binding(get: { showLegend }, set: { v in withAnimation(.snappy(duration: 0.2)) { showLegend = v } }))
             // The rest of the app (there is no tab bar or sidebar): Inbox opens as a sheet over the outline. Settings
             // does too on iPhone/iPad; on the Mac it is the Settings window (⌘,).
             Divider()
@@ -498,8 +485,8 @@ struct OutlineView: View {
                 .contentShape(Circle())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-        .help(filtering ? "Filters (on)" : "Filters")
-        .accessibilityLabel(filtering ? "Filters, on" : "Filters")
+        .help(filtering ? "Menu (a filter is on)" : "Menu")
+        .accessibilityLabel(filtering ? "Menu, a filter is on" : "Menu")
     }
 
     /// A quick, mostly horizontal swipe to the right: the "go back" gesture. Distinct from the slower row pull that indents.
@@ -661,15 +648,29 @@ struct OutlineView: View {
         .accessibilityLabel("Search")
     }
 
-    /// Saved-view and tag buttons, shown under the header while searching. Tap a saved view to go to it (hold or
-    /// right-click it to rename or delete); tap a tag to add or remove it from the search.
+    /// The options under the search field, shown when it is tapped, while searching, and while a filter is on: what
+    /// to show (Mine, AI, Review…), saved views, and tags. Tap a filter to turn it on, and again to turn it off; tap a
+    /// saved view to go to it (hold or right-click it to rename or delete); tap a tag to add or remove it from the search.
     @ViewBuilder private var tagBar: some View {
         let tags = allTags
         let views = savedViews
-        if (searchFocused || searching) && !(tags.isEmpty && views.isEmpty) {
+        if searchFocused || searching || filtering {
             let active = Set(searchTerms.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()) })
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
+                    // What to show. One at a time; the one that is on is checked, and tapping it shows everything again.
+                    ForEach(Filter.allCases.filter { $0 != .all }) { f in
+                        let on = filter == f
+                        let fill = on ? PanelPalette.peach : PanelPalette.periwinkle
+                        Button { withAnimation(.snappy(duration: 0.25)) { filter = on ? .all : f } } label: {
+                            Text((on ? "\u{2713} " : "") + f.label.uppercased())
+                                .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
+                                .padding(.horizontal, 9).frame(height: 24)
+                                .background { fill.panelBlink(60 + f.label.count) }
+                        }
+                        .accessibilityLabel("Show: " + f.label)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
                     ForEach(views) { v in
                         let on = isCurrent(v)
                         let fill = on ? PanelPalette.peach : PanelPalette.lavender
@@ -690,9 +691,14 @@ struct OutlineView: View {
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
                     ForEach(tags, id: \.self) { t in
-                        let on = active.contains(t)
+                        // On through the search (#tag typed or tapped), or as a saved view's tag filter.
+                        let filtered = tagFilter == t
+                        let on = active.contains(t) || filtered
                         let fill = on ? PanelPalette.peach : PanelPalette.color(for: t)
-                        Button { toggleTag(t) } label: {
+                        Button {
+                            if filtered { withAnimation(.snappy(duration: 0.25)) { tagFilter = nil } }
+                            if !filtered || active.contains(t) { toggleTag(t) }
+                        } label: {
                             // A selected tag also gets a check: in a two-color scheme the fill alone may not differ.
                             Text((on ? "\u{2713} #" : "#") + t.uppercased())
                                 .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
@@ -1283,36 +1289,6 @@ extension TaskState {
         case .unset: "circle.dashed"; case .todo: "circle"; case .in_progress: "circle.lefthalf.filled"; case .blocked: "exclamationmark.octagon"
         case .review: "eye"; case .done: "checkmark.circle.fill"
         }
-    }
-}
-
-struct BarLegend: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Marks").font(.caption.weight(.semibold)).foregroundStyle(Color.ink.opacity(0.6))
-            Text("Color and indent are the level, the same in every project:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5))
-            ForEach(0..<3, id: \.self) { d in row(mark(d, .todo, .human), "level \(d + 1)") }
-            Text("Strength is the status; a darker shade is the AI's:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
-            row(mark(1, .unset, .human), "no status yet (faint, outlined)")
-            row(mark(1, .todo, .human), "to-do, in progress")
-            row(mark(1, .done, .human), "done (ticked)")
-            row(mark(1, .todo, .ai), "AI")
-            row(mark(1, .todo, .shared), "both")
-            row(mark(1, .review, .human), "review")
-            row(mark(1, .blocked, .human), "blocked")
-            row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, hiddenCount: 3), "children hidden (how many)")
-            Text("Glyphs in the mark are what the item has:").font(.caption2).foregroundStyle(Color.ink.opacity(0.5)).padding(.top, 4)
-            ForEach(MarkIndicator.allCases) { i in
-                row(StatusBar(state: .todo, assignee: .human, isProject: false, color: Appearance.shared.itemColor(depth: 1, state: .todo, assignee: .human), depth: 1, indicators: [i]), i.label)
-            }
-        }
-        .padding(.leading, 16)
-    }
-    private func mark(_ depth: Int, _ state: TaskState, _ who: Assignee) -> StatusBar {
-        StatusBar(state: state, assignee: who, isProject: false, color: Appearance.shared.itemColor(depth: depth, state: state, assignee: who), depth: depth)
-    }
-    private func row(_ bar: StatusBar, _ label: String) -> some View {
-        HStack(spacing: 10) { bar; Text(label).font(.caption2).foregroundStyle(Color.ink.opacity(0.6)) }
     }
 }
 
