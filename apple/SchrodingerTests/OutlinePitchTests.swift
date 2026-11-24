@@ -29,4 +29,12 @@ final class OutlinePitchTests: XCTestCase {
         XCTAssertEqual(OutlineView.shownDepth(4, zoomBase: 2), 2)
         XCTAssertEqual(OutlineView.shownDepth(1, zoomBase: 2), 0)   // never negative
     }
+
+    /// The count in an item's mark: its children when they are hidden, and always for the item zoomed into.
+    @MainActor func testMarkCountStaysOnTheZoomedItem() {
+        XCTAssertEqual(NodeRow.markCount(children: 3, shown: false, zoomed: false), 3)
+        XCTAssertEqual(NodeRow.markCount(children: 3, shown: true, zoomed: false), 0)
+        XCTAssertEqual(NodeRow.markCount(children: 3, shown: true, zoomed: true), 3)
+        XCTAssertEqual(NodeRow.markCount(children: 0, shown: true, zoomed: true), 0)
+    }
 }
