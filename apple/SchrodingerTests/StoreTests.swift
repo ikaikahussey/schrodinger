@@ -778,6 +778,20 @@ final class DueLabelTests: XCTestCase {
         ])
         XCTAssertEqual(Markdown.blocks(""), [])
         XCTAssertEqual(Markdown.blocks("```\nopen"), [.code("open")])
+        // HTML and XML tags are read, not shown.
+        XCTAssertEqual(Markdown.blocks("<h2>Title</h2><p>Hello <b>bold</b><br>next</p>"),
+                       [.heading(level: 2, text: "Title"), .paragraph("Hello **bold**\nnext")])
+        XCTAssertEqual(Markdown.blocks("<ul><li>One</li><li>Two</li></ul>"),
+                       [.listItem(depth: 0, marker: .bullet, text: "One"), .listItem(depth: 0, marker: .bullet, text: "Two")])
+        XCTAssertEqual(Markdown.blocks("See <a href=\"https://x.org\">the site</a>."), [.paragraph("See [the site](https://x.org).")])
+        XCTAssertEqual(Markdown.blocks("<key_findings>\nAll good\n</key_findings>"), [.paragraph("**Key findings**"), .paragraph("All good")])
+        XCTAssertEqual(Markdown.blocks("The <name>Ada</name> entry"), [.paragraph("The Ada entry")])
+        XCTAssertEqual(Markdown.blocks("a &amp; b"), [.paragraph("a & b")])
+        // Not tags: left as written. Code is never touched.
+        XCTAssertEqual(Markdown.blocks("Use List<String> if a < b"), [.paragraph("Use List\\<String> if a < b")])
+        XCTAssertEqual(Markdown.blocks("<https://x.org>"), [.paragraph("<https://x.org>")])
+        XCTAssertEqual(Markdown.blocks("`<b>` stays"), [.paragraph("`<b>` stays")])
+        XCTAssertEqual(Markdown.blocks("```\n<b>x</b>\n```"), [.code("<b>x</b>")])
         XCTAssertEqual(String(Markdown.inline("a **b** `c`").characters), "a b c")
     }
 }
