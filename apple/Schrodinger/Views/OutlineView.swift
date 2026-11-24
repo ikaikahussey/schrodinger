@@ -1451,6 +1451,39 @@ struct NodeRow: View {
                      help: runnable.count == 1 ? "Hand this to the AI" : "Hand the \(runnable.count) AI items here to the AI") { run() }
         }
     }
+    /// The hand-off whose status the row shows: one under way, one that failed, a result not opened yet, and, while
+    /// the item is open, the last one.
+    private var rowJob: AgentJob? {
+        guard let job = jobs.latest(for: node.id), job.kind == .handoff else { return nil }
+        return job.live || job.status == .failed || jobs.unseen.contains(node.id) || open ? job : nil
+    }
+    /// The AI's status on this item as a line of text in the row, with what can be done about it: Stop while it
+    /// works; Try again or Dismiss when it failed.
+    private func aiStatusLine(_ job: AgentJob) -> some View {
+        let failed = job.status == .failed
+        let symbol = switch job.status {
+        case .queued: "hourglass"
+        case .working: "sparkles"
+        case .needsYou: "person.fill.questionmark"
+        case .done: "checkmark"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+        let text = job.statusLine + (job.live ? " \u{00B7} since " + job.createdAt.formatted(date: .omitted, time: .shortened) : "")
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 9, weight: .semibold)).accessibilityHidden(true)
+            Text(text).lineLimit(open ? nil : 2).fixedSize(horizontal: false, vertical: true)
+            if job.live {
+                Button("Stop") { jobs.cancel(job.id) }.fontWeight(.semibold)
+            } else if failed {
+                Button("Try again") { jobs.retry(node.id) }.fontWeight(.semibold)
+                Button("Dismiss") { jobs.dismissFailure(node.id) }.fontWeight(.semibold)
+            }
+        }
+        .font(Appearance.shared.font.font(.caption))
+        .foregroundStyle(failed ? Color.red : Color.ink.opacity(0.55))
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
     private var showsAIControl: Bool { working || jobs.failure(for: node.id) != nil || jobs.unseen.contains(node.id) || !runnable.isEmpty }
     private func rowGlyph(_ name: String, label: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -1593,6 +1626,8 @@ struct NodeRow: View {
                 controlRow
             }
             }
+            // Where the AI stands on this item, under its title: working, failed (and why), or what came back.
+            if let job = rowJob { aiStatusLine(job) }
             // The item's notes, read and edited here in the row, only while the item is open. Closed, a row is just
             // its title.
             if open {

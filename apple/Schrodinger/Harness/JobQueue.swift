@@ -30,6 +30,20 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
 
     /// Still to be done or under way.
     var live: Bool { status == .queued || status == .working }
+
+    /// Where the job stands, in a line. Shown on the item's own row in the outline.
+    var statusLine: String {
+        switch status {
+        case .queued: "Waiting for the AI: another item is ahead of this one"
+        case .working:
+            route == .background
+                ? (continuations > 0 ? "The AI is working on this (a long one, still going)" : "The AI is working on this")
+                : "The AI is working on this. Keep the app open."
+        case .needsYou: summary.isEmpty ? "The AI needs you on this" : "Needs you: \(summary)"
+        case .done: summary.isEmpty ? "Done by the AI" : "AI: \(summary)"
+        case .failed: error.isEmpty ? "The hand-off failed" : "The hand-off failed: \(error)"
+        }
+    }
 }
 
 /// The AI's work queue. Nothing enters it unless the owner asks. Handing an item off makes a job and starts it at once; jobs run side by side and do not

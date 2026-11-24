@@ -215,6 +215,24 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.inbox().map(\.type), [.note])
     }
 
+    /// The line an item's row shows for its hand-off.
+    func testJobStatusLine() {
+        var j = AgentJob(kind: .handoff, title: "Find the deadline")
+        XCTAssertTrue(j.statusLine.hasPrefix("Waiting for the AI"))
+        j.status = .working; j.route = .inProcess
+        XCTAssertEqual(j.statusLine, "The AI is working on this. Keep the app open.")
+        j.route = .background
+        XCTAssertEqual(j.statusLine, "The AI is working on this")
+        j.continuations = 2
+        XCTAssertTrue(j.statusLine.contains("still going"))
+        j.status = .needsYou; j.summary = "Which year?"
+        XCTAssertEqual(j.statusLine, "Needs you: Which year?")
+        j.status = .done; j.summary = "Due March 3."
+        XCTAssertEqual(j.statusLine, "AI: Due March 3.")
+        j.status = .failed; j.error = "No API key. Add one in Settings."
+        XCTAssertEqual(j.statusLine, "The hand-off failed: No API key. Add one in Settings.")
+    }
+
     /// The local model server's wire format: its address, tool calls with text or object arguments, hidden reasoning.
     func testLocalProviderWireFormat() {
         XCTAssertEqual(LocalProvider.url("", "/models")?.absoluteString, "http://localhost:11434/v1/models")
