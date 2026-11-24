@@ -47,6 +47,7 @@ struct OutlineView: View {
     @State private var balloon = ZoomBalloon()
     /// The calendar box at the bottom has been pushed off screen (its tab stays, to bring it back).
     @AppStorage("agendaPushed") private var agendaPushed = false
+    @AppStorage("reviewPushed") private var reviewPushed = false
     /// Harp mode (long press the hide/show-all button): the outline holds still and each item is a string; running a
     /// finger across the rows plays each item's note.
     @State private var harp = false
@@ -63,6 +64,8 @@ struct OutlineView: View {
     private var calendared: [Node] { all.filter { $0.due != nil && $0.state != .done }.sorted { $0.due! < $1.due! } }
     /// The box shows while there are calendared items and it has not been pushed off screen.
     private var agendaShown: Bool { !calendared.isEmpty && !agendaPushed }
+    /// Items with an AI result waiting on the owner: handed back for review, or not opened yet. Newest first.
+    private var toReview: [Node] { ReviewBox.items(in: all, unseen: JobQueue.shared.unseen) }
     private var childrenMap: [UUID?: [Node]] { Dictionary(grouping: all, by: { $0.parentID }).mapValues { $0.sorted { ($0.position, $0.createdAt) < ($1.position, $1.createdAt) } } }
 
     /// The items each item is linked to. A link is one record and shows on both of its items.
@@ -148,11 +151,17 @@ struct OutlineView: View {
         // Bottom right, over the list: "+ NEW ITEM"; while searching it becomes "DONE", which puts the keyboard away.
         // An open item has its own Done (the check in its field), so there is no second one here.
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+            let reviewing = toReview
             VStack(alignment: .trailing, spacing: 0) {
             HStack(alignment: .bottom, spacing: 0) {
             // The calendar box pushed off screen: its tab, at the bottom left, brings it back.
             if !keyboardUp && agendaPushed && !calendared.isEmpty {
                 AgendaTab(count: calendared.count) { withAnimation(.snappy(duration: 0.22)) { agendaPushed = false } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // The same for the box of AI results to review.
+            if !keyboardUp && reviewPushed && !reviewing.isEmpty {
+                ReviewTab(count: reviewing.count) { withAnimation(.snappy(duration: 0.22)) { reviewPushed = false } }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             Spacer(minLength: 0)
@@ -172,6 +181,12 @@ struct OutlineView: View {
             }
             // Calendared items, soonest first, in a box that can be pushed off the bottom of the screen. Not while
             // typing (the keyboard needs the room).
+            // AI results waiting on the owner, above the calendar box. Tap one to open its item, where the result is.
+            if !keyboardUp && !reviewPushed && !reviewing.isEmpty {
+                ReviewBox(items: reviewing, needsYou: Set(reviewing.filter { $0.state == .review }.map(\.id)),
+                          onOpen: { sel.open($0) }, onPush: { withAnimation(.snappy(duration: 0.22)) { reviewPushed = true } })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if !keyboardUp && agendaShown {
                 AgendaBox(items: calendared, onOpen: { sel.open($0) }, onPush: { withAnimation(.snappy(duration: 0.22)) { agendaPushed = true } })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -179,6 +194,8 @@ struct OutlineView: View {
             }
             .animation(.snappy(duration: 0.22), value: agendaShown)
             .animation(.snappy(duration: 0.22), value: calendared.count)
+            .animation(.snappy(duration: 0.22), value: reviewing.count)
+            .animation(.snappy(duration: 0.22), value: reviewPushed)
         }
         // Calendared items are mirrored to the calendar chosen in Settings (if any) whenever one of them changes.
         .task(id: CalendarSync.signature(all) + AppSettings.shared.syncCalendarID) { await CalendarSync.syncAll(container: ctx.container) }

@@ -218,6 +218,20 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.inbox().isEmpty)
     }
 
+    /// The review box lists items whose result waits on the owner: handed back for review, or not opened yet.
+    func testResultsToReview() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let review = s.create(title: "Needs me", parentID: p.id); review.artifact = "draft"; review.state = .review
+        let fresh = s.create(title: "Not opened", parentID: p.id); fresh.artifact = "result"; fresh.state = .done
+        let seen = s.create(title: "Opened", parentID: p.id); seen.artifact = "result"; seen.state = .done
+        let empty = s.create(title: "No result", parentID: p.id); empty.state = .review
+        s.save()
+        let all = [p, review, fresh, seen, empty]
+        XCTAssertEqual(Set(ReviewBox.items(in: all, unseen: [fresh.id]).map(\.id)), [review.id, fresh.id])
+        XCTAssertEqual(ReviewBox.items(in: all, unseen: []).map(\.id), [review.id])
+    }
+
     /// The line an item's row shows for its hand-off.
     func testJobStatusLine() {
         var j = AgentJob(kind: .handoff, title: "Find the deadline")
