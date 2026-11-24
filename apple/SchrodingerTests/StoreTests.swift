@@ -282,7 +282,9 @@ final class StoreTests: XCTestCase {
         j.continuations = 2
         XCTAssertTrue(j.statusLine.contains("still going"))
         j.status = .needsYou; j.summary = "Which year?"
-        XCTAssertEqual(j.statusLine, "Needs you: Which year?")
+        XCTAssertEqual(j.statusLine, "🫵 Which year?")
+        j.summary = ""
+        XCTAssertEqual(j.statusLine, "🫵")
         j.status = .done; j.summary = "Due March 3."
         XCTAssertEqual(j.statusLine, "AI: Due March 3.")
         j.status = .failed; j.error = "No API key. Add one in Settings."

@@ -194,7 +194,7 @@ struct ItemSheetBody: View {
             let file = ResultFile(title: node.title, markdown: a)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 2) {
-                    Text(node.state == .review ? "RESULT · NEEDS YOU" : "RESULT")
+                    Text(node.state == .review ? "RESULT · \(AgentJob.needsYouMark)" : "RESULT")
                         .font(PanelPalette.label(.caption2)).foregroundStyle(Color.ink.opacity(0.55))
                     Spacer(minLength: 8)
                     // The result, out of the app: copied, opened in the Mac's Markdown app, or sent to any app that takes a file or text.

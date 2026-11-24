@@ -28,6 +28,9 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
     var createdAt = Date()
     var finishedAt: Date? = nil
 
+    /// Stands for "needs you" wherever the app says so: the AI has returned and the owner has something to do.
+    static let needsYouMark = "🫵"
+
     /// Still to be done or under way.
     var live: Bool { status == .queued || status == .working }
 
@@ -39,7 +42,7 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
             route == .background
                 ? (continuations > 0 ? "The AI is working on this (a long one, still going)" : "The AI is working on this")
                 : "The AI is working on this. Keep the app open."
-        case .needsYou: summary.isEmpty ? "The AI needs you on this" : "Needs you: \(summary)"
+        case .needsYou: summary.isEmpty ? AgentJob.needsYouMark : "\(AgentJob.needsYouMark) \(summary)"
         case .done: summary.isEmpty ? "Done by the AI" : "AI: \(summary)"
         case .failed: error.isEmpty ? "The hand-off failed" : "The hand-off failed: \(error)"
         }
@@ -257,7 +260,7 @@ final class JobQueue {
         let title = n.title.isEmpty ? "(untitled)" : n.title
         let heading = switch outcome {
         case .done: "Ready for review: \(title)"
-        case .needsYou: "Needs you: \(title)"
+        case .needsYou: "\(AgentJob.needsYouMark) \(title)"
         case .yourTurn: "Your turn: \(title)"
         }
         Task { await ResultNotifier.post(title: heading, body: line, nodeID: nodeID) }
