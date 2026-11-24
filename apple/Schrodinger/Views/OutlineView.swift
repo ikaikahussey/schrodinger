@@ -956,7 +956,7 @@ struct OutlineView: View {
         let open = !n.collapsed || n.id == zoomID || searching || history != nil
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             if let old = mark?.oldTitle { OldTitleRow(text: old, depth: depth).background { RailLines(trail: trail) } }
-            NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, childCount: children.count, leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
+            NodeRow(node: n, depth: depth, trail: trail, color: own, hasChildren: !children.isEmpty, childCount: Self.descendantCount(of: n.id, kids: kids), leafCount: leafCount(n, kids: kids), sel: sel, focused: $focused, editRequest: $editRequest, drag: drag,
                     onKey: { key in handleKey(key, n, kids: kids) },
                     onDragChanged: { dx, dy in updateDropTarget(n, dx: dx, dy: dy) },
                     onDrop: { performDrop(n) },
@@ -1002,6 +1002,11 @@ struct OutlineView: View {
         .padding(.top, depth == 0 ? 6 : 0))
     }
 
+    /// Every item below this one: its children, their children, and so on. This is the count in an item's mark.
+    static func descendantCount(of id: UUID, kids: [UUID?: [Node]], depth: Int = 0) -> Int {
+        guard depth < 64, let c = kids[id] else { return 0 }   // the depth limit stops a loop in bad data
+        return c.reduce(c.count) { $0 + descendantCount(of: $1.id, kids: kids, depth: depth + 1) }
+    }
     private func leafCount(_ n: Node, kids: [UUID?: [Node]]) -> (done: Int, total: Int) {
         let c = kids[n.id] ?? []
         if c.isEmpty { return (n.state == .done ? 1 : 0, 1) }
@@ -1272,7 +1277,7 @@ struct StatusBar: View {
                     .foregroundStyle(solid ? Color.canvas : color)
                     .frame(width: Self.w + 2, height: Self.h)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .accessibilityLabel(countShown ? "\(hiddenCount) children" : "\(hiddenCount) hidden")
+                    .accessibilityLabel(countShown ? "\(hiddenCount) items below" : "\(hiddenCount) hidden")
             }
             // What the item carries: glyphs from the mark's left end (after the check box, if there is one).
             let tick = Self.showsTick(state: state, isProject: isProject, checkable: checkable)
@@ -1430,7 +1435,7 @@ struct NodeRow: View {
     var trail: [Color] = []
     var color: Color = .ink
     let hasChildren: Bool
-    /// How many items sit directly under this one (shown in the mark while they are hidden).
+    /// How many items sit under this one, at every level (shown in the mark while they are hidden, or when zoomed in).
     var childCount = 0
     let leafCount: (done: Int, total: Int)
     var sel: Selection

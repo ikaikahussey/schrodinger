@@ -714,6 +714,22 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(SavedView(json: "not json"))
     }
 
+    /// The count in an item's mark is everything below it, not only its children.
+    func testDescendantCountSumsAllLevels() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let a = s.create(title: "A", parentID: p.id)
+        let b = s.create(title: "B", parentID: p.id)
+        let a1 = s.create(title: "A1", parentID: a.id)
+        _ = s.create(title: "A1a", parentID: a1.id)
+        _ = s.create(title: "A2", parentID: a.id)
+        let kids = Dictionary(grouping: s.allNodes(), by: { $0.parentID })
+        XCTAssertEqual(OutlineView.descendantCount(of: p.id, kids: kids), 5)
+        XCTAssertEqual(OutlineView.descendantCount(of: a.id, kids: kids), 3)
+        XCTAssertEqual(OutlineView.descendantCount(of: a1.id, kids: kids), 1)
+        XCTAssertEqual(OutlineView.descendantCount(of: b.id, kids: kids), 0)
+    }
+
     // MARK: - Search index
 
     func testSearchIndexRebuildsOnlyWhenItemsChange() throws {
