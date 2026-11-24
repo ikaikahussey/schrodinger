@@ -187,6 +187,7 @@ struct ItemSheetBody: View {
     }
 
     @State private var copied = false
+    @Environment(Selection.self) private var sel: Selection?
 
     @ViewBuilder private var content: some View {
         if let a = node.artifact, !a.isEmpty {
@@ -197,6 +198,8 @@ struct ItemSheetBody: View {
                         .font(PanelPalette.label(.caption2)).foregroundStyle(Color.ink.opacity(0.55))
                     Spacer(minLength: 8)
                     // The result, out of the app: copied, opened in the Mac's Markdown app, or sent to any app that takes a file or text.
+                    FieldIcon(systemImage: "arrow.up.left.and.arrow.down.right", width: 34) { sel?.resultID = node.id }
+                        .help("Read full screen").accessibilityLabel("Read result full screen")
                     FieldIcon(systemImage: copied ? "checkmark" : "doc.on.doc", on: copied, width: 34) { copy(a) }
                         .help("Copy").accessibilityLabel("Copy result")
                     #if os(macOS)

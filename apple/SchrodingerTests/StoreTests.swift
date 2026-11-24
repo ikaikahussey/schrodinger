@@ -716,4 +716,26 @@ final class DueLabelTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "Plan.md")
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Plan\n\n- one")
     }
+
+    func testMarkdownBlocks() {
+        let md = "# Plan #\n\nFirst *line*\nsecond line\n\n- one\n  - [x] two\n  more\n- three\n\n1. a\n2) b\n\n> q1\n> q2\n\n```swift\nlet x = 1\n# not a heading\n```\n\n---\n\n| A | B |\n|---|:-:|\n| 1 | 2 |\nTitle\n==\nC# and #hashtag"
+        XCTAssertEqual(Markdown.blocks(md), [
+            .heading(level: 1, text: "Plan"),
+            .paragraph("First *line*\nsecond line"),
+            .listItem(depth: 0, marker: .bullet, text: "one"),
+            .listItem(depth: 1, marker: .task(done: true), text: "two more"),
+            .listItem(depth: 0, marker: .bullet, text: "three"),
+            .listItem(depth: 0, marker: .number("1"), text: "a"),
+            .listItem(depth: 0, marker: .number("2"), text: "b"),
+            .quote("q1\nq2"),
+            .code("let x = 1\n# not a heading"),
+            .rule,
+            .table(header: ["A", "B"], rows: [["1", "2"]]),
+            .heading(level: 1, text: "Title"),
+            .paragraph("C# and #hashtag"),
+        ])
+        XCTAssertEqual(Markdown.blocks(""), [])
+        XCTAssertEqual(Markdown.blocks("```\nopen"), [.code("open")])
+        XCTAssertEqual(String(Markdown.inline("a **b** `c`").characters), "a b c")
+    }
 }
