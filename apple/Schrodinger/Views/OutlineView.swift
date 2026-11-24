@@ -1699,7 +1699,7 @@ struct NodeRow: View {
         .photosPicker(isPresented: $showPhotos, selection: $pickedPhotos, maxSelectionCount: 6, matching: .images)
         .onChange(of: pickedPhotos) { _, items in importPhotos(items) }
         .sheet(isPresented: $showLinkPicker) {
-            LinkPicker(nodeID: node.id, linked: Set(links.map(\.item.id))) { other in store.link(node.id, other); store.save() }
+            LinkPicker(nodeID: node.id)   // link mode: the whole outline; tap items to link or unlink them
         }
         .sheet(item: $viewing) { a in
             AttachmentViewer(attachment: a) { viewing = nil; store.deleteAttachment(a); store.save() }
