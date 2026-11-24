@@ -195,17 +195,34 @@ final class ReminderRouter {
     var openID: UUID? = nil
 }
 
+/// Receives notification events from iOS and macOS.
+///
+/// These are the completion-handler forms of the delegate methods on purpose. The `async` forms run on a background
+/// thread, and when one returns Swift calls the system's completion block from that same thread. On iOS that block
+/// updates the app's snapshot, which UIKit only allows on the main thread: tapping a notification (or its Done or
+/// Remind me action) aborted the app in `-[UIApplication _performBlockAfterCATransactionCommitSynchronizes:]`.
+/// Here the block is always called on the main thread.
 final class ReminderDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = ReminderDelegate()
 
+    /// The system's completion block, carried to the main actor. It is called exactly once, there.
+    private struct MainThreadBlock: @unchecked Sendable { let call: () -> Void }
+
     /// Shown even while the app is open.
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound, .badge]
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let done = MainThreadBlock { completionHandler([.banner, .list, .sound, .badge]) }
+        if Thread.isMainThread { done.call() } else { DispatchQueue.main.async { done.call() } }
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
         let action = response.actionIdentifier
-        guard let s = response.notification.request.content.userInfo["node"] as? String, let id = UUID(uuidString: s) else { return }
-        await Reminders.handle(action: action, id: id)
+        let node = response.notification.request.content.userInfo["node"] as? String
+        let done = MainThreadBlock(call: completionHandler)
+        Task { @MainActor in
+            if let node, let id = UUID(uuidString: node) { await Reminders.handle(action: action, id: id) }
+            done.call()
+        }
     }
 }
