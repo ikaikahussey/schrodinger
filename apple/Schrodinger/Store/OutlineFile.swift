@@ -66,14 +66,14 @@ struct OutlineFile: Codable, Equatable, Sendable {
 
     func data() throws -> Data {
         let e = JSONEncoder()
+        // Dates are written the way Date stores them (seconds from its reference date), so they come back exactly;
+        // converted to another epoch they return a hair off.
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        e.dateEncodingStrategy = .secondsSince1970
         return try e.encode(self)
     }
 
     static func read(_ data: Data) throws -> OutlineFile {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .secondsSince1970
         do { return try d.decode(OutlineFile.self, from: data) }
         catch let f as Failure { throw f }
         catch { throw Failure.notAnOutline }
