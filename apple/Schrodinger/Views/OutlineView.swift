@@ -889,6 +889,9 @@ struct OutlineView: View {
     private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" } }
     private var searching: Bool { !searchTerms.isEmpty }
     private func searchMatches(_ n: Node) -> Bool { searchIndex.matches(n, terms: searchTerms) }
+    /// The item has every term: a word in its text, or (for #tag) among its tags. Reads the item directly; the
+    /// outline asks the search index (which gives the same answer without lowercasing the text again).
+    static func textMatches(_ n: Node, terms: [String]) -> Bool { terms.isEmpty || SearchIndex.Entry(n).matches(terms) }
     /// How many items a filter, tag and search show, under `zoom` (nil = the whole outline). The number on a filter
     /// button or a saved view.
     private func count(_ f: Filter, tag: String? = nil, terms: [String] = [], zoom: UUID?) -> Int {
