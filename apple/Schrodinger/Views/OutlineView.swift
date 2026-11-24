@@ -37,6 +37,9 @@ struct OutlineView: View {
     @State private var importing = false
     @State private var exportingCSV = false
     @State private var importFailure: String?
+    /// Outline files: the open panel is up; the save panel is up (see `OutlineFilePanels`).
+    @State private var openingOutline = false
+    @State private var savingOutline = false
     @FocusState private var focused: UUID?
     /// Row that should switch to its text field and take focus. Focus can't be set on a field that isn't on screen yet,
     /// so the row shows its field first, then claims focus (see NodeRow.claimEdit).
@@ -224,6 +227,14 @@ struct OutlineView: View {
             Button("Cancel", role: .cancel) { renamingView = nil }
         } message: {
             Text(viewPromptMessage)
+        }
+        // Open / save outline: their panels sit on a view of their own, apart from the import and CSV panels above.
+        .background {
+            OutlineFilePanels(opening: $openingOutline, saving: $savingOutline) {
+                // Another outline is on screen now: nothing from the old one is zoomed into, open or filtered.
+                zoomID = nil; search = ""; filter = .all; tagFilter = nil; historyOn = false
+                sel.nodeID = nil; sel.infoID = nil; sel.revealID = nil
+            }
         }
         .alert("Import failed", isPresented: Binding(get: { importFailure != nil }, set: { if !$0 { importFailure = nil } })) { Button("OK") {} } message: { Text(importFailure ?? "") }
         // iPhone/iPad: the breadcrumb bar is the header (logo, path, filter); the system navigation bar is not shown.
@@ -454,6 +465,10 @@ struct OutlineView: View {
                 } label: { Label("Edit saved views", systemImage: "bookmark.slash") }
             }
             Divider()
+            // The whole outline as one file: save the one on screen, or open another in its place.
+            Button { finishTyping(); openingOutline = true } label: { Label("Open outline\u{2026}", systemImage: "folder") }
+            Button { finishTyping(); savingOutline = true } label: { Label("Save outline\u{2026}", systemImage: "tray.and.arrow.down") }
+                .disabled(all.isEmpty)
             // Import a CSV, text or Markdown file (a note exported from Notes, say): it becomes a new item, with the
             // file's lines as its children. Zoomed in, it goes under the zoomed item.
             Button { finishTyping(); importing = true } label: { Label("Import…", systemImage: "square.and.arrow.down") }
