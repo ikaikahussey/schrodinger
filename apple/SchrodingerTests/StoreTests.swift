@@ -480,6 +480,82 @@ final class StoreTests: XCTestCase {
         }
     }
 
+    func testOutlineFileRoundTripsAndReplaces() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let top = s.create(title: "Shoot")
+        let due = Calendar.current.date(from: DateComponents(year: 2026, month: 12, day: 1))
+        let a = s.create(title: "Buy film", parentID: top.id, assignee: .ai, due: due)
+        s.update(a) { $0.state = .review; $0.notes = "400 speed #errand"; $0.artifact = "Found three shops."; $0.collapsed = true }
+        let a1 = s.create(title: "Kodak", parentID: a.id)
+        let b = s.create(title: "Scout", parentID: top.id)
+        s.update(b) { $0.deps = [a.id] }
+        let other = s.create(title: "Taxes")
+        s.addLink("example.com/film", to: a.id)
+        s.addPhoto(Data([1, 2, 3]), to: a1.id)
+        s.link(b.id, other.id)
+        s.save()
+
+        let file = OutlineFile.snapshot(s)
+        XCTAssertEqual(file.items.map(\.title), ["Shoot", "Buy film", "Kodak", "Scout", "Taxes"])   // outline order
+        let read = try OutlineFile.read(file.data())
+        XCTAssertEqual(read, file)
+
+        // Into a store that holds a different outline: that one goes, this one comes in as it was.
+        let c2 = try makeContainer(); let s2 = Store(c2.mainContext)
+        let gone = s2.create(title: "Old")
+        s2.create(title: "Old child", parentID: gone.id)
+        s2.addLink("example.com/old", to: gone.id)
+        s2.save()
+        XCTAssertEqual(read.load(into: s2), 5)
+        XCTAssertEqual(s2.children(of: nil).map(\.title), ["Shoot", "Taxes"])
+        XCTAssertEqual(s2.allNodes().count, 5)
+        XCTAssertEqual(s2.children(of: top.id).map(\.title), ["Buy film", "Scout"])
+        let a2 = try XCTUnwrap(s2.node(a.id))
+        XCTAssertEqual(a2.state, .review)
+        XCTAssertEqual(a2.assignee, .ai)
+        XCTAssertEqual(a2.due, due)
+        XCTAssertEqual(a2.notes, "400 speed #errand")
+        XCTAssertEqual(a2.artifact, "Found three shops.")
+        XCTAssertTrue(a2.collapsed)
+        XCTAssertEqual(s2.children(of: a.id).map(\.title), ["Kodak"])
+        XCTAssertEqual(s2.node(b.id)?.deps, [a.id])
+        XCTAssertEqual(s2.attachments(for: a.id).map(\.urlString), ["https://example.com/film"])
+        XCTAssertEqual(s2.attachments(for: a1.id).first?.data, Data([1, 2, 3]))
+        XCTAssertEqual(s2.linkedItems(of: b.id).map(\.title), ["Taxes"])
+        XCTAssertTrue(s2.attachments(for: gone.id).isEmpty)
+        XCTAssertTrue(s2.recentActivity().isEmpty)
+        // Saving what was loaded gives the same outline; loading it over itself changes nothing.
+        XCTAssertEqual(OutlineFile.snapshot(s2).items, file.items)
+        read.load(into: s2)
+        XCTAssertEqual(OutlineFile.snapshot(s2).items, file.items)
+        XCTAssertEqual(OutlineFile.snapshot(s2).attachments.count, 3)
+    }
+
+    func testOutlineFileReadsShortFilesAndRefusesOthers() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = UUID(), k = UUID()
+        // Written by hand: titles and parents only. A parent that is missing or comes later leaves the item top-level.
+        let json = """
+        {"format": "schrodinger-outline", "items": [
+          {"id": "\(p.uuidString)", "title": "Trip"},
+          {"id": "\(k.uuidString)", "parentID": "\(p.uuidString)", "title": "Book flights", "state": "done"},
+          {"parentID": "\(p.uuidString)", "title": "Pack"},
+          {"parentID": "\(UUID().uuidString)", "title": "Stray"}
+        ]}
+        """
+        let file = try OutlineFile.read(Data(json.utf8))
+        XCTAssertEqual(file.load(into: s), 4)
+        XCTAssertEqual(s.children(of: nil).map(\.title), ["Trip", "Stray"])
+        XCTAssertEqual(s.children(of: p).map(\.title), ["Book flights", "Pack"])
+        XCTAssertEqual(s.node(k)?.state, .done)
+
+        XCTAssertThrowsError(try OutlineFile.read(Data("{\"items\": []}".utf8)))
+        XCTAssertThrowsError(try OutlineFile.read(Data("Title,Notes\nA,B\n".utf8)))
+        XCTAssertThrowsError(try OutlineFile.read(Data("{\"format\": \"schrodinger-outline\", \"version\": 99, \"items\": []}".utf8))) {
+            XCTAssertEqual($0.localizedDescription, OutlineFile.Failure.newer.localizedDescription)
+        }
+    }
+
     func testModesBecomeTags() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P")
