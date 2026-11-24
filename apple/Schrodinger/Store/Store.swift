@@ -373,6 +373,15 @@ struct Store {
             x.acceptanceNote = [x.acceptanceNote, note.isEmpty ? "" : "[rejected \(Date().dayString)] \(note)"].filter { !$0.isEmpty }.joined(separator: "\n")
         }
     }
+    /// The owner's comments on an AI result (the comment form under the result): they are recorded on the item, and
+    /// the item is the AI's to redo with them. Works from any status, an approved result included.
+    func requestEdits(_ n: Node, note: String) {
+        let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        update(n, detail: note.isEmpty ? "edits requested" : "edits requested: \(note)") { x in
+            if x.assignee == .shared { x.aiStatus = .pending } else { x.state = .todo }
+            x.acceptanceNote = [x.acceptanceNote, note.isEmpty ? "" : "[edits \(Date().dayString)] \(note)"].filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+    }
     func sendBackToAI(_ n: Node, note: String) throws {
         guard n.assignee == .shared else { throw StoreError.notShared }
         update(n, detail: "sent back to AI: \(note)") { x in

@@ -10,7 +10,7 @@ struct ResultsView: View {
     var body: some View {
         List {
             if queue.jobs.isEmpty {
-                Text("Nothing handed off yet. Open an item and tap the paper plane to hand it to the AI. The result comes back onto the item, and is listed here.")
+                Text("Nothing handed off yet. Open an item and tap the wand to hand it to the AI. The result comes back onto the item, and is listed here.")
                     .foregroundStyle(.secondary)
             }
             ForEach(queue.jobs) { job in row(job) }

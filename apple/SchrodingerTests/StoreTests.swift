@@ -218,6 +218,46 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.inbox().isEmpty)
     }
 
+    /// What each filter shows (and so what its button counts).
+    func testFilterIncludes() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let mine = s.create(title: "Mine", parentID: p.id, assignee: .human); mine.state = .todo
+        let ai = s.create(title: "AI", parentID: p.id, assignee: .ai); ai.state = .todo
+        let back = s.create(title: "Returned", parentID: p.id, assignee: .ai); back.state = .review
+        let stuck = s.create(title: "Stuck", parentID: p.id, assignee: .human); stuck.state = .blocked
+        let soon = s.create(title: "Soon", parentID: p.id, assignee: .human, due: Date().addingTimeInterval(86400)); soon.state = .todo
+        let finished = s.create(title: "Finished", parentID: p.id, assignee: .human); finished.state = .done
+        s.save()
+        let items = [mine, ai, back, stuck, soon, finished]
+        func shown(_ f: OutlineView.Filter) -> [String] { items.filter { f.includes($0) }.map(\.title) }
+        XCTAssertEqual(shown(.all).count, 6)
+        XCTAssertEqual(shown(.mine), ["Mine", "Stuck", "Soon"])
+        XCTAssertEqual(shown(.ai), ["AI"], "an item the AI has returned is in Review, not AI")
+        XCTAssertEqual(shown(.review), ["Returned"])
+        XCTAssertEqual(shown(.blocked), ["Stuck"])
+        XCTAssertEqual(shown(.week), ["Soon"])
+        XCTAssertEqual(shown(.done), ["Finished"])
+        XCTAssertTrue(OutlineView.textMatches(mine, terms: ["min"]))
+        XCTAssertFalse(OutlineView.textMatches(mine, terms: ["#nope"]))
+    }
+
+    /// Comments from the result's comment form go on the item, which is the AI's to redo.
+    func testRequestEdits() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let t = s.create(title: "Draft the letter", parentID: p.id, assignee: .ai); t.artifact = "Dear all"; t.state = .review
+        let sh = s.create(title: "Plan", parentID: p.id, assignee: .shared); sh.artifact = "Plan v1"; sh.aiStatus = .done
+        s.save()
+        s.requestEdits(t, note: "  Make it shorter \n")
+        XCTAssertEqual(t.state, .todo)
+        XCTAssertTrue(t.acceptanceNote.contains("Make it shorter"))
+        XCTAssertTrue(ProjectAgent.aiTurn(t), "the item is the AI's to redo")
+        s.requestEdits(sh, note: "Add parking")
+        XCTAssertEqual(sh.aiStatus, .pending)
+        XCTAssertTrue(sh.acceptanceNote.contains("Add parking"))
+    }
+
     /// The review box lists the items in review, and nothing else.
     func testResultsToReview() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
@@ -754,6 +794,20 @@ final class DueLabelTests: XCTestCase {
         ])
         XCTAssertEqual(Markdown.blocks(""), [])
         XCTAssertEqual(Markdown.blocks("```\nopen"), [.code("open")])
+        // HTML and XML tags are read, not shown.
+        XCTAssertEqual(Markdown.blocks("<h2>Title</h2><p>Hello <b>bold</b><br>next</p>"),
+                       [.heading(level: 2, text: "Title"), .paragraph("Hello **bold**\nnext")])
+        XCTAssertEqual(Markdown.blocks("<ul><li>One</li><li>Two</li></ul>"),
+                       [.listItem(depth: 0, marker: .bullet, text: "One"), .listItem(depth: 0, marker: .bullet, text: "Two")])
+        XCTAssertEqual(Markdown.blocks("See <a href=\"https://x.org\">the site</a>."), [.paragraph("See [the site](https://x.org).")])
+        XCTAssertEqual(Markdown.blocks("<key_findings>\nAll good\n</key_findings>"), [.paragraph("**Key findings**"), .paragraph("All good")])
+        XCTAssertEqual(Markdown.blocks("The <name>Ada</name> entry"), [.paragraph("The Ada entry")])
+        XCTAssertEqual(Markdown.blocks("a &amp; b"), [.paragraph("a & b")])
+        // Not tags: left as written. Code is never touched.
+        XCTAssertEqual(Markdown.blocks("Use List<String> if a < b"), [.paragraph("Use List\\<String> if a < b")])
+        XCTAssertEqual(Markdown.blocks("<https://x.org>"), [.paragraph("<https://x.org>")])
+        XCTAssertEqual(Markdown.blocks("`<b>` stays"), [.paragraph("`<b>` stays")])
+        XCTAssertEqual(Markdown.blocks("```\n<b>x</b>\n```"), [.code("<b>x</b>")])
         XCTAssertEqual(String(Markdown.inline("a **b** `c`").characters), "a b c")
     }
 }

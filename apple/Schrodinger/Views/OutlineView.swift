@@ -72,6 +72,22 @@ struct OutlineView: View {
             case .done: TaskState.done.icon
             }
         }
+        /// Whether the filter shows this item. `.all` shows everything. The one definition, used for the outline
+        /// and for the counts on the filter buttons.
+        func includes(_ n: Node, now: Date = Date()) -> Bool {
+            switch self {
+            case .all: true
+            case .mine: (n.assignee == .human || n.isYourTurn) && n.state != .done
+            case .ai: (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done && n.state != .review
+            // One meaning everywhere (this filter, the box at the bottom, the item's Approve): the AI has returned
+            // its result and the owner has not approved it yet. A shared item at "your turn" is under Mine.
+            case .review: n.state == .review
+            case .blocked: n.state == .blocked
+            case .week: (n.due.map { $0 < now.addingTimeInterval(7 * 86400) } ?? false) && n.state != .done
+            // Completed items, in place in the outline (checked-off dated items stay until they are pruned, a week on).
+            case .done: n.state == .done
+            }
+        }
         /// What the filter shows, in a few words (the line under its title).
         var blurb: String {
             switch self {
@@ -705,70 +721,93 @@ struct OutlineView: View {
         .accessibilityLabel("Search")
     }
 
-    /// The options under the search field, shown when it is tapped, while searching, and while a filter is on: what
-    /// to show (Mine, AI, Review…), saved views, and tags. Tap a filter to turn it on, and again to turn it off; tap a
-    /// saved view to go to it (hold or right-click it to rename or delete); tap a tag to add or remove it from the search.
+    /// The options under the search field, shown when it is tapped, while searching, and while a filter is on. First
+    /// a grid of the filters (Mine, AI, Review…), each with its glyph and how many items it shows; under it a row of
+    /// saved views, each with its count; under that a row of tags. Tap a filter to turn it on, and again to turn it
+    /// off; tap a saved view to go to it (hold or right-click it to rename or delete); tap a tag to add or remove it
+    /// from the search.
     @ViewBuilder private var tagBar: some View {
         let tags = allTags
         let views = savedViews
         if searchFocused || searching || filtering {
             let active = Set(searchTerms.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()) })
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 3) {
-                    // What to show. One at a time; the one that is on is checked, and tapping it shows everything again.
+            VStack(alignment: .leading, spacing: 6) {
+                // What to show. One at a time; the one that is on is checked, and tapping it shows everything again.
+                // The counts are for what is in view (the zoomed item, or the whole outline).
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 3), spacing: 3) {
                     ForEach(Filter.allCases.filter { $0 != .all }) { f in
                         let on = filter == f
+                        let n = count(f, zoom: zoomID)
                         let fill = on ? PanelPalette.peach : PanelPalette.periwinkle
                         Button { withAnimation(.snappy(duration: 0.25)) { filter = on ? .all : f } } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: f.icon).font(.system(size: 10, weight: .heavy))
-                                Text((on ? "\u{2713} " : "") + f.label.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1)
+                            HStack(spacing: 5) {
+                                Image(systemName: f.icon).font(.system(size: 11, weight: .heavy)).frame(width: 14)
+                                Text((on ? "\u{2713} " : "") + f.label.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1).minimumScaleFactor(0.7)
+                                Spacer(minLength: 2)
+                                Text("\(n)").font(PanelPalette.label(.caption)).monospacedDigit().opacity(n == 0 ? 0.45 : 0.8)
                             }
                             .foregroundStyle(PanelPalette.text(on: fill))
-                            .padding(.horizontal, 9).frame(height: 24)
+                            .padding(.horizontal, 8).frame(maxWidth: .infinity).frame(height: 34)
                             .background { fill.panelBlink(60 + f.label.count) }
+                            .contentShape(Rectangle())
                         }
-                        .accessibilityLabel("Show: " + f.label)
-                        .accessibilityAddTraits(on ? .isSelected : [])
-                    }
-                    ForEach(views) { v in
-                        let on = isCurrent(v)
-                        let fill = on ? PanelPalette.peach : PanelPalette.lavender
-                        Button { apply(v) } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: on ? "bookmark.fill" : "bookmark").font(.system(size: 9, weight: .heavy))
-                                Text(v.name.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1)
-                            }
-                            .foregroundStyle(PanelPalette.text(on: fill))
-                            .padding(.horizontal, 9).frame(height: 24)
-                            .background { fill.panelBlink(50 + v.position) }
-                        }
-                        .contextMenu {
-                            Button { beginRename(v) } label: { Label("Rename\u{2026}", systemImage: "pencil") }
-                            Button(role: .destructive) { deleteView(v) } label: { Label("Delete", systemImage: "trash") }
-                        }
-                        .accessibilityLabel("Saved view: " + v.name)
-                        .accessibilityAddTraits(on ? .isSelected : [])
-                    }
-                    ForEach(tags, id: \.self) { t in
-                        // On through the search (#tag typed or tapped), or as a saved view's tag filter.
-                        let filtered = tagFilter == t
-                        let on = active.contains(t) || filtered
-                        let fill = on ? PanelPalette.peach : PanelPalette.color(for: t)
-                        Button {
-                            if filtered { withAnimation(.snappy(duration: 0.25)) { tagFilter = nil } }
-                            if !filtered || active.contains(t) { toggleTag(t) }
-                        } label: {
-                            // A selected tag also gets a check: in a two-color scheme the fill alone may not differ.
-                            Text((on ? "\u{2713} #" : "#") + t.uppercased())
-                                .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
-                                .padding(.horizontal, 9).frame(height: 24)
-                                .background { fill.panelBlink(40 + t.count) }
-                        }
+                        .accessibilityLabel("Show: \(f.label), \(n) \(n == 1 ? "item" : "items")")
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
                 }
                 .padding(.horizontal, 12)
+                if !views.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 3) {
+                            ForEach(views) { v in
+                                let on = isCurrent(v)
+                                let n = count(v)
+                                let fill = on ? PanelPalette.peach : PanelPalette.lavender
+                                Button { apply(v) } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: on ? "bookmark.fill" : "bookmark").font(.system(size: 9, weight: .heavy))
+                                        Text(v.name.uppercased()).font(PanelPalette.label(.caption)).lineLimit(1)
+                                        Text("\(n)").font(PanelPalette.label(.caption)).monospacedDigit().opacity(n == 0 ? 0.45 : 0.7)
+                                    }
+                                    .foregroundStyle(PanelPalette.text(on: fill))
+                                    .padding(.horizontal, 9).frame(height: 24)
+                                    .background { fill.panelBlink(50 + v.position) }
+                                }
+                                .contextMenu {
+                                    Button { beginRename(v) } label: { Label("Rename\u{2026}", systemImage: "pencil") }
+                                    Button(role: .destructive) { deleteView(v) } label: { Label("Delete", systemImage: "trash") }
+                                }
+                                .accessibilityLabel("Saved view: \(v.name), \(n) \(n == 1 ? "item" : "items")")
+                                .accessibilityAddTraits(on ? .isSelected : [])
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                    }
+                }
+                if !tags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 3) {
+                            ForEach(tags, id: \.self) { t in
+                                // On through the search (#tag typed or tapped), or as a saved view's tag filter.
+                                let filtered = tagFilter == t
+                                let on = active.contains(t) || filtered
+                                let fill = on ? PanelPalette.peach : PanelPalette.color(for: t)
+                                Button {
+                                    if filtered { withAnimation(.snappy(duration: 0.25)) { tagFilter = nil } }
+                                    if !filtered || active.contains(t) { toggleTag(t) }
+                                } label: {
+                                    // A selected tag also gets a check: in a two-color scheme the fill alone may not differ.
+                                    Text((on ? "\u{2713} #" : "#") + t.uppercased())
+                                        .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
+                                        .padding(.horizontal, 9).frame(height: 24)
+                                        .background { fill.panelBlink(40 + t.count) }
+                                }
+                                .accessibilityAddTraits(on ? .isSelected : [])
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .padding(.bottom, 6)
@@ -853,12 +892,27 @@ struct OutlineView: View {
     /// Search terms: lowercase words; a leading # means "has this tag".
     private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" } }
     private var searching: Bool { !searchTerms.isEmpty }
-    private func searchMatches(_ n: Node) -> Bool {
-        let terms = searchTerms
+    private func searchMatches(_ n: Node) -> Bool { Self.textMatches(n, terms: searchTerms) }
+    /// The item has every term: a word in its text, or (for #tag) among its tags.
+    static func textMatches(_ n: Node, terms: [String]) -> Bool {
         if terms.isEmpty { return true }
         let text = (n.title + "\n" + n.notes + "\n" + n.goal).lowercased()
         let tags = n.tags
         return terms.allSatisfy { t in t.hasPrefix("#") ? tags.contains(String(t.dropFirst())) : text.contains(t) }
+    }
+    /// How many items a filter, tag and search show, under `zoom` (nil = the whole outline). The number on a filter
+    /// button or a saved view.
+    private func count(_ f: Filter, tag: String? = nil, terms: [String] = [], zoom: UUID?) -> Int {
+        let now = Date()
+        return all.reduce(0) { c, n in
+            if let z = zoom, n.id == z || !isInSubtree(n.id, of: z) { return c }
+            if let t = tag, !n.tags.contains(t) { return c }
+            return f.includes(n, now: now) && Self.textMatches(n, terms: terms) ? c + 1 : c
+        }
+    }
+    /// The count for a saved view: what it would show. A view whose zoomed item is gone counts the whole outline.
+    private func count(_ v: SavedView) -> Int {
+        count(Filter(rawValue: v.filter) ?? .all, tag: v.tag, terms: SavedView.terms(v.search), zoom: v.zoomID.flatMap { store.node($0)?.id })
     }
     /// Tags in use across the outline, most used first.
     private var allTags: [String] {
@@ -876,18 +930,8 @@ struct OutlineView: View {
         if !searchMatches(n) { return false }
         if n.isProject { return true }
         if let t = tagFilter, !n.tags.contains(t) { return false }
-        switch filter {
-        case .all: return tagFilter == nil || n.state != .done
-        case .mine: return (n.assignee == .human || n.isYourTurn) && n.state != .done
-        case .ai: return (n.assignee == .ai || (n.assignee == .shared && n.aiStatus == .pending)) && n.state != .done && n.state != .review
-        // One meaning everywhere (this filter, the box at the bottom, the item's Approve): the AI has returned its
-        // result and the owner has not approved it yet. A shared item at "your turn" is under Mine.
-        case .review: return n.state == .review
-        case .blocked: return n.state == .blocked
-        case .week: return n.due.map { $0 < Date().addingTimeInterval(7 * 86400) } ?? false && n.state != .done
-        // Completed items, in place in the outline (checked-off dated items stay here until they are pruned, a week on).
-        case .done: return n.state == .done
-        }
+        if filter == .all { return tagFilter == nil || n.state != .done }
+        return filter.includes(n)
     }
     private func subtreeMatches(_ n: Node, kids: [UUID?: [Node]]) -> Bool { matches(n) || (kids[n.id] ?? []).contains { subtreeMatches($0, kids: kids) } }
 
@@ -1504,7 +1548,7 @@ struct NodeRow: View {
         } else if jobs.unseen.contains(node.id) {
             rowGlyph("sparkles.rectangle.stack.fill", label: "New result", help: "The AI's result is in: tap to open") { commit(); openItem() }
         } else if !runnable.isEmpty {
-            rowGlyph("play.fill", label: runnable.count == 1 ? "Hand off" : "Hand off \(runnable.count) items",
+            rowGlyph(Self.sendToAISymbol, label: runnable.count == 1 ? "Hand off" : "Hand off \(runnable.count) items",
                      help: runnable.count == 1 ? "Hand this to the AI" : "Hand the \(runnable.count) AI items here to the AI") { run() }
         }
     }
@@ -1559,9 +1603,13 @@ struct NodeRow: View {
         commit()
         jobs.handOff(runnable)
     }
-    /// The paper plane in the item's field: hand this item to the AI now, whoever held it.
+    /// The glyph for "have the AI do this now": a wand, not an arrow or a plane, which read as share or send.
+    static let sendToAISymbol = "wand.and.stars"
+    /// The wand in the item's field: hand this item to the AI now. An item that was mine (or nobody's) becomes the
+    /// AI's, so the holder glyph beside the wand shows where it went; a shared item stays shared.
     private func handOff() {
         commit(); commitNote(convertLists: false)
+        if node.assignee == .human || node.assignee == .unassigned { store.update(node) { $0.assignee = .ai }; store.save() }
         jobs.handOff([node.id])
     }
     /// A tap on the item, on its text or on its squares, opens it: the item field and the children are shown.
@@ -1924,20 +1972,31 @@ struct NodeRow: View {
         }
     }
 
-    /// The item field's controls, as bare glyphs on their own line under the title, most used first: hand off to the
-    /// AI, calendar (give the item a date), new child, new item below, who holds the item (tap to change), then a
-    /// "more" menu with the rest (add photos, link to another item, delete). Approve / Redo join them while an AI
+    /// The item field's controls, as bare glyphs on their own line under the title, most used first: the AI control
+    /// (who holds the item, joined to "have the AI do this now"), calendar (give the item a date), new child, new
+    /// item below, then a "more" menu with the rest (add photos, link to another item, delete). Approve / Redo join them while an AI
     /// draft awaits review. Done is alone at the right; Delete is in the menu, away from it. Links have no button:
     /// a web address typed in the text is shown apart from it as a chip.
     @ViewBuilder private var controlRow: some View {
         let empty = title.trimmingCharacters(in: .whitespaces).isEmpty
         HStack(spacing: 0) {
             if !node.isProject {
-                // Hand the item to the AI now: it works on it (with the app closed too, on Claude) and the result comes
-                // back onto the item.
-                FieldIcon(systemImage: "paperplane.fill", on: true, width: ItemField.compact) { handOff() }
-                    .disabled(empty || working)
-                    .help(working ? "The AI is working on this" : "Hand off to the AI").accessibilityLabel("Hand off to the AI")
+                // One control, two halves, in a shared capsule. Left: who holds the item (tap to change: me, the AI,
+                // both). Right: have the AI do it now (it works with the app closed too, on Claude, and the result
+                // comes back onto the item). Sending an item of mine to the AI also makes the AI its holder, so the
+                // left half always says where the item is.
+                HStack(spacing: 0) {
+                    FieldIcon(systemImage: node.assignee.icon, width: ItemField.compact) { cycleAssignee() }
+                        .help("Responsible: " + node.assignee.label + " (tap to change)")
+                        .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
+                    Rectangle().fill(Color.ink.opacity(0.18)).frame(width: 1, height: 14).accessibilityHidden(true)
+                    FieldIcon(systemImage: Self.sendToAISymbol, on: true, width: ItemField.compact) { handOff() }
+                        .disabled(empty || working)
+                        .help(working ? "The AI is working on this" : "Have the AI do this now").accessibilityLabel("Have the AI do this now")
+                }
+                .padding(.horizontal, 3)
+                .background { Capsule().fill(PanelPalette.field).padding(.vertical, -5) }
+                .padding(.trailing, 8)
             }
             FieldIcon(systemImage: node.due == nil ? "calendar" : "calendar.badge.checkmark", on: node.due != nil, width: ItemField.compact) { commit(); showCalendar = true }
                 .help(node.due.map { "Calendared: " + $0.agendaLabel } ?? "Put on the calendar")
@@ -1950,11 +2009,6 @@ struct NodeRow: View {
             FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
-            if !node.isProject {
-                FieldIcon(systemImage: node.assignee.icon, width: ItemField.compact) { cycleAssignee() }
-                    .help("Responsible: " + node.assignee.label + " (tap to change)")
-                    .accessibilityLabel("Responsible: " + node.assignee.label).accessibilityHint("Changes who is responsible")
-            }
             if node.state == .review {
                 // The AI's result is waiting: approve it (the item is done), or have it redone (answers and
                 // corrections typed in the notes go along).

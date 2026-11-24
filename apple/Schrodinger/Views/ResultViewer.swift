@@ -7,12 +7,17 @@ import UIKit
 #endif
 
 /// An item's AI result, filling the window: the Markdown drawn as a document, under a bar of breadcrumbs that lead
-/// back to the outline (the item's parents, then the item, each by name). Opened from the result block in an item's field.
+/// back to the outline (the item's parents, then the item, each by name). Under the document, a comment form: type
+/// the edits the result needs and send it back to the AI, which redoes it with them. Opened from the result block in
+/// an item's field.
 struct ResultViewer: View {
     let nodeID: UUID
     var sel: Selection
     @Environment(\.modelContext) private var ctx
     private var store: Store { Store(ctx) }
+    /// The edits the owner wants, as typed in the comment form.
+    @State private var comment = ""
+    @FocusState private var commenting: Bool
 
     var body: some View {
         let node = store.node(nodeID)
@@ -26,10 +31,60 @@ struct ResultViewer: View {
                     .padding(.horizontal, 20).padding(.vertical, 18)
                     .frame(maxWidth: .infinity)
             }
+            .scrollDismissesKeyboard(.interactively)
+            if let node, !text.isEmpty { commentForm(node) }
         }
         .background(Color.canvas.ignoresSafeArea())
         .accessibilityAddTraits(.isModal)
         .onAppear { Self.endEditing(); if text.isEmpty { close() } }
+    }
+
+    /// The comment form, under the result: what needs to change, and a button that sends the item back to the AI
+    /// with it. The AI redoes the result; the comment is kept on the item. Not while the AI is already working on it.
+    private func commentForm(_ node: Node) -> some View {
+        let working = JobQueue.shared.latest(for: node.id)?.live ?? false
+        let empty = comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let fill = PanelPalette.orange
+        return VStack(spacing: 0) {
+            Divider()
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(working ? "The AI is working on this\u{2026}" : "Edits needed\u{2026}", text: $comment, axis: .vertical)
+                    .lineLimit(1...5)
+                    .textFieldStyle(.plain)
+                    .font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink).tint(Color.ink)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(PanelPalette.field, in: RoundedRectangle(cornerRadius: 14))
+                    .focused($commenting)
+                    .disabled(working)
+                    .accessibilityLabel("Edits needed")
+                Button { sendEdits(node) } label: {
+                    Image(systemName: NodeRow.sendToAISymbol).font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(PanelPalette.text(on: fill))
+                        .frame(width: 36, height: 36)
+                        .background { Circle().fill(fill) }
+                        .contentShape(Circle())
+                        .opacity(empty || working ? 0.35 : 1)
+                }
+                .buttonStyle(.plain)
+                .disabled(empty || working)
+                .help("Send back to the AI with these edits").accessibilityLabel("Send edits to the AI")
+            }
+            .frame(maxWidth: 720)
+            .padding(.horizontal, 20).padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Color.canvas)
+    }
+
+    /// Records the comment on the item and hands it back to the AI, then returns to the item in the outline, where
+    /// the AI's progress shows.
+    private func sendEdits(_ node: Node) {
+        let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { return }
+        store.requestEdits(node, note: note); store.save()
+        JobQueue.shared.handOff([node.id])
+        comment = ""; commenting = false
+        go(to: node.id)
     }
 
     private func close() { sel.resultID = nil }
