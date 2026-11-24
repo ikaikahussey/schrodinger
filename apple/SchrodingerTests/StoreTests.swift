@@ -242,6 +242,22 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(OutlineView.textMatches(mine, terms: ["#nope"]))
     }
 
+    /// Comments from the result's comment form go on the item, which is the AI's to redo.
+    func testRequestEdits() throws {
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "P")
+        let t = s.create(title: "Draft the letter", parentID: p.id, assignee: .ai); t.artifact = "Dear all"; t.state = .review
+        let sh = s.create(title: "Plan", parentID: p.id, assignee: .shared); sh.artifact = "Plan v1"; sh.aiStatus = .done
+        s.save()
+        s.requestEdits(t, note: "  Make it shorter \n")
+        XCTAssertEqual(t.state, .todo)
+        XCTAssertTrue(t.acceptanceNote.contains("Make it shorter"))
+        XCTAssertTrue(ProjectAgent.aiTurn(t), "the item is the AI's to redo")
+        s.requestEdits(sh, note: "Add parking")
+        XCTAssertEqual(sh.aiStatus, .pending)
+        XCTAssertTrue(sh.acceptanceNote.contains("Add parking"))
+    }
+
     /// The review box lists the items in review, and nothing else.
     func testResultsToReview() throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
