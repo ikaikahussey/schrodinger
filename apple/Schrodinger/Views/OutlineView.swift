@@ -71,6 +71,18 @@ struct OutlineView: View {
             case .week: MarkIndicator.date.symbol
             case .done: TaskState.done.icon
             }
+        }
+        /// What the filter shows, in a few words (the line under its title).
+        var blurb: String {
+            switch self {
+            case .all: "Everything"
+            case .mine: "Items that are yours to do"
+            case .ai: "Items the AI holds"
+            case .review: "Items waiting for your review"
+            case .blocked: "Items that are blocked"
+            case .week: "Items due within seven days"
+            case .done: "Items that are done"
+            }
         } }
 
     private var store: Store { Store(ctx) }
@@ -151,7 +163,7 @@ struct OutlineView: View {
         .sensoryFeedback(.selection, trigger: plucks)   // the list holds still while an item is lifted
         // Always present, fixed height: the outline's top edge does not move when zooming in or out.
         .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) {
-            breadcrumbBar(zoomed); tagBar
+            breadcrumbBar(zoomed); tagBar; filterTitle
             if let h = history {
                 HistoryBar(period: $historyPeriod, summary: h.summary) { withAnimation(.snappy(duration: 0.22)) { historyOn = false } }
                     .transition(.opacity)
@@ -763,6 +775,25 @@ struct OutlineView: View {
             .transition(.opacity)
         }
     }
+    /// The title of the filter that is on, above the outline: its glyph, its name and what it shows. It says what
+    /// the glyph on the filter's button means, and what the list below is limited to.
+    @ViewBuilder private var filterTitle: some View {
+        if filter != .all {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: filter.icon).font(.system(size: 15, weight: .heavy)).foregroundStyle(Color.ink.opacity(0.7))
+                Text(filter.label).font(Appearance.shared.font.font(.title3, weight: .bold)).foregroundStyle(Color.ink)
+                Text(filter.blurb).font(Appearance.shared.font.font(.footnote)).foregroundStyle(Color.ink.opacity(0.55)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, StatusBar.margin).padding(.trailing, 12).padding(.top, 2).padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.canvas)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .transition(.opacity)
+        }
+    }
+
     // MARK: Saved views
 
     private var savedViews: [SavedView] { SavedView.all(in: workspaceFiles) }
