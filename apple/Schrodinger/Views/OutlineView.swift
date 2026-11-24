@@ -48,6 +48,9 @@ struct OutlineView: View {
     @State private var zoomID: UUID? = nil
     /// Where the zoom animation grows from, and which way it runs. Read by the transition when it runs.
     @State private var balloon = ZoomBalloon()
+    /// Every item's searchable text and tags, rebuilt whenever items change (see `body`). Search, filters and the
+    /// counts on the filter buttons read it.
+    @State private var searchIndex = SearchIndex()
     /// The calendar box at the bottom has been pushed off screen (its tab stays, to bring it back).
     @AppStorage("agendaPushed") private var agendaPushed = false
     @AppStorage("reviewPushed") private var reviewPushed = false
@@ -127,6 +130,9 @@ struct OutlineView: View {
     }
 
     var body: some View {
+        // The search index is rebuilt here, before anything reads it, whenever an item's text changed or an item
+        // was added or removed since the last pass. Nothing changed: nothing is rebuilt.
+        let _ = searchIndex.refresh(all)
         let kids = childrenMap
         let roots = kids[nil] ?? []
         let files = Dictionary(grouping: attachments.filter { $0.kind != .item }, by: \.nodeID)
@@ -244,6 +250,8 @@ struct OutlineView: View {
         .task(id: CalendarSync.signature(all) + AppSettings.shared.syncCalendarID) { await CalendarSync.syncAll(container: ctx.container) }
         // Notifications for dated items are rescheduled whenever one of them (or the notification settings) changes.
         .task(id: Reminders.signature(all)) { await Reminders.syncAll(container: ctx.container) }
+        // The system search index (Spotlight) is brought up to date whenever items change.
+        .task(id: SpotlightIndex.signature(all)) { await SpotlightIndex.sync(container: ctx.container) }
         // Zoomed in: a quick swipe right anywhere on the page goes back to the whole outline.
         #if os(iOS)
         .gesture(HorizontalPanGesture(onChanged: { _ in }, onEnded: { t, vx in
@@ -880,22 +888,15 @@ struct OutlineView: View {
     /// Search terms: lowercase words; a leading # means "has this tag".
     private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" } }
     private var searching: Bool { !searchTerms.isEmpty }
-    private func searchMatches(_ n: Node) -> Bool { Self.textMatches(n, terms: searchTerms) }
-    /// The item has every term: a word in its text, or (for #tag) among its tags.
-    static func textMatches(_ n: Node, terms: [String]) -> Bool {
-        if terms.isEmpty { return true }
-        let text = (n.title + "\n" + n.notes + "\n" + n.goal).lowercased()
-        let tags = n.tags
-        return terms.allSatisfy { t in t.hasPrefix("#") ? tags.contains(String(t.dropFirst())) : text.contains(t) }
-    }
+    private func searchMatches(_ n: Node) -> Bool { searchIndex.matches(n, terms: searchTerms) }
     /// How many items a filter, tag and search show, under `zoom` (nil = the whole outline). The number on a filter
     /// button or a saved view.
     private func count(_ f: Filter, tag: String? = nil, terms: [String] = [], zoom: UUID?) -> Int {
         let now = Date()
         return all.reduce(0) { c, n in
             if let z = zoom, n.id == z || !isInSubtree(n.id, of: z) { return c }
-            if let t = tag, !n.tags.contains(t) { return c }
-            return f.includes(n, now: now) && Self.textMatches(n, terms: terms) ? c + 1 : c
+            if let t = tag, !searchIndex.tags(n).contains(t) { return c }
+            return f.includes(n, now: now) && searchIndex.matches(n, terms: terms) ? c + 1 : c
         }
     }
     /// The count for a saved view: what it would show. A view whose zoomed item is gone counts the whole outline.
@@ -905,7 +906,7 @@ struct OutlineView: View {
     /// Tags in use across the outline, most used first.
     private var allTags: [String] {
         var count: [String: Int] = [:]
-        for n in all { for t in n.tags { count[t, default: 0] += 1 } }
+        for n in all { for t in searchIndex.tags(n) { count[t, default: 0] += 1 } }
         return count.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
     }
     private func toggleTag(_ tag: String) {
@@ -917,7 +918,7 @@ struct OutlineView: View {
     private func matches(_ n: Node) -> Bool {
         if !searchMatches(n) { return false }
         if n.isProject { return true }
-        if let t = tagFilter, !n.tags.contains(t) { return false }
+        if let t = tagFilter, !searchIndex.tags(n).contains(t) { return false }
         if filter == .all { return tagFilter == nil || n.state != .done }
         return filter.includes(n)
     }
