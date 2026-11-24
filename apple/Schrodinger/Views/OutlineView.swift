@@ -966,6 +966,7 @@ struct OutlineView: View {
                     swipeBack: zoomID != nil,
                     runnable: active ? runnable(n, kids: kids) : [],
                     childrenShown: open,
+                    zoomed: n.id == zoomID,
                     attachments: files[n.id] ?? [],
                     links: links[n.id] ?? [],
                     suggestions: advice[n.id] ?? [])
@@ -1199,8 +1200,11 @@ struct StatusBar: View {
     var indicators: [MarkIndicator] = []
     /// A check box sits in the mark's left end (dated items): the glyphs start after it, and a circle shows no AI glyph.
     var checkable = false
-    /// The item's children are hidden: how many there are, drawn in the mark's right end. 0 = nothing hidden.
+    /// The item's children are hidden, or it is the item zoomed into: how many there are, drawn in the mark's right
+    /// end. 0 = no count.
     var hiddenCount = 0
+    /// The counted children are on screen (the zoomed item's): the count is read out as children, not as hidden.
+    var countShown = false
     /// Side of each square.
     static let h: CGFloat = 16
     static let w: CGFloat = 16
@@ -1265,7 +1269,7 @@ struct StatusBar: View {
                     .foregroundStyle(solid ? Color.canvas : color)
                     .frame(width: Self.w + 2, height: Self.h)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .accessibilityLabel("\(hiddenCount) hidden")
+                    .accessibilityLabel(countShown ? "\(hiddenCount) children" : "\(hiddenCount) hidden")
             }
             // What the item carries: glyphs from the mark's left end (after the check box, if there is one).
             let tick = Self.showsTick(state: state, isProject: isProject, checkable: checkable)
@@ -1332,7 +1336,9 @@ struct DepthBars: View {
     /// The item is open: a ring around its mark. The mark keeps its place and size, so the level still reads.
     var open = false
     /// The item has children that are hidden: how many, shown as a count in the mark's right end. Tap to show them.
+    /// The item zoomed into keeps its count though its children are on screen (`countShown`).
     var hiddenCount = 0
+    var countShown = false
     /// The item has a due date: a check box in the mark's round end. Tap it to check the item off (again: undo).
     var onCheck: (() -> Void)? = nil
     /// The item is past due and not done: its check box is red.
@@ -1344,7 +1350,7 @@ struct DepthBars: View {
     var body: some View {
         // No blink here: the mark's strength carries the status, so it holds still.
         StatusBar(state: node.state, assignee: node.assignee, isProject: node.isProject, color: color, depth: depth, indicators: indicators,
-                  checkable: onCheck != nil, hiddenCount: hiddenCount)
+                  checkable: onCheck != nil, hiddenCount: hiddenCount, countShown: countShown)
             .animation(.snappy(duration: 0.22), value: hiddenCount)
             .overlay(alignment: .leading) { if let onCheck { CheckBox(done: node.state == .done, tint: overdue ? .red : node.state == .todo || node.state == .in_progress || node.state == .done ? .canvas : color, action: onCheck) } }
             .overlay { if open { StatusBar.ownShape.strokeBorder(Color.ink, lineWidth: 1.5).padding(-3) } }
@@ -1440,6 +1446,8 @@ struct NodeRow: View {
     var runnable: [UUID] = []
     /// The item's children are on screen (it is expanded, or it is the item zoomed into).
     var childrenShown = true
+    /// The item is the one zoomed into: its mark keeps the count of its children, though they are on screen.
+    var zoomed = false
     /// The item's photos and links.
     var attachments: [Attachment] = []
     /// The items this one is linked to.
@@ -1497,8 +1505,10 @@ struct NodeRow: View {
                         tick: StatusBar.showsTick(state: node.state, isProject: node.isProject, checkable: checkable)).contains(.itemLink)
     }
     /// Tap on an unselected row selects it (action strip appears); tap on the selected row deselects it (strip hides).
-    /// Children that are hidden now (0 when there are none, or they are on screen).
-    private var hiddenCount: Int { hasChildren && !childrenShown ? max(childCount, 1) : 0 }
+    /// The count in the mark: children that are hidden now, or all of the zoomed item's children (0 when there are
+    /// none, or they are on screen and the item is not the one zoomed into).
+    private var hiddenCount: Int { NodeRow.markCount(children: hasChildren ? max(childCount, 1) : 0, shown: childrenShown, zoomed: zoomed) }
+    nonisolated static func markCount(children: Int, shown: Bool, zoomed: Bool) -> Int { !shown || zoomed ? children : 0 }
     private func toggleSelect() {
         withAnimation(.easeOut(duration: 0.15)) {
             if sel.nodeID == node.id { sel.nodeID = nil; if infoOpen { sel.infoID = nil } } else { sel.nodeID = node.id }
@@ -1647,7 +1657,7 @@ struct NodeRow: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .rowLine, spacing: 0) {
-            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, hiddenCount: hiddenCount,
+            DepthBars(node: node, depth: depth, hasChildren: hasChildren, trail: trail, color: color, open: open, hiddenCount: hiddenCount, countShown: zoomed,
                       onCheck: checkable ? { toggleChecked() } : nil, overdue: overdue, indicators: indicators)
                 .padding(.vertical, 4)   // wider grab area (the circle and the space left of it are a touch target)
                 .contentShape(Rectangle())
