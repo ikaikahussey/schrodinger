@@ -1,5 +1,10 @@
 import SwiftUI
 import SwiftData
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 // The item field: what an open item's row becomes (tap its text or its squares). One rounded block holds the text,
 // the notes, the AI's draft when there is one, and the controls as bare glyphs along the bottom edge.
@@ -181,11 +186,30 @@ struct ItemSheetBody: View {
         if node.isDeleted || node.modelContext == nil { EmptyView() } else { content }
     }
 
+    @State private var copied = false
+
     @ViewBuilder private var content: some View {
         if let a = node.artifact, !a.isEmpty {
+            let file = ResultFile(title: node.title, markdown: a)
             VStack(alignment: .leading, spacing: 4) {
-                Text(node.state == .review ? "RESULT · NEEDS YOU" : "RESULT")
-                    .font(PanelPalette.label(.caption2)).foregroundStyle(Color.ink.opacity(0.55))
+                HStack(spacing: 2) {
+                    Text(node.state == .review ? "RESULT · NEEDS YOU" : "RESULT")
+                        .font(PanelPalette.label(.caption2)).foregroundStyle(Color.ink.opacity(0.55))
+                    Spacer(minLength: 8)
+                    // The result, out of the app: copied, opened in the Mac's Markdown app, or sent to any app that takes a file or text.
+                    FieldIcon(systemImage: copied ? "checkmark" : "doc.on.doc", on: copied, width: 34) { copy(a) }
+                        .help("Copy").accessibilityLabel("Copy result")
+                    #if os(macOS)
+                    FieldIcon(systemImage: "arrow.up.forward.app", width: 34) { if let u = try? file.write() { NSWorkspace.shared.open(u) } }
+                        .help("Open in another app").accessibilityLabel("Open result in another app")
+                    #endif
+                    ShareLink(item: file, preview: SharePreview(ResultFile.filename(for: node.title))) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.5))
+                            .frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help("Share or open in another app").accessibilityLabel("Share result")
+                }
                 ScrollView {
                     Text(a).font(.system(.callout, design: .monospaced)).foregroundStyle(Color.ink)
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -193,5 +217,16 @@ struct ItemSheetBody: View {
                 .frame(maxHeight: 260)
             }
         }
+    }
+
+    private func copy(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+        copied = true
+        Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
     }
 }

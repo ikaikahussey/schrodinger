@@ -630,4 +630,14 @@ final class DueLabelTests: XCTestCase {
         XCTAssertEqual(at(2026, 11, 22).dueLabel(now: now, calendar: cal), "Today")
         XCTAssertEqual(at(2026, 11, 23).dueLabel(now: now, calendar: cal), "Tomorrow")
     }
+
+    func testResultFileNameAndContents() throws {
+        XCTAssertEqual(ResultFile.filename(for: "Draft: memo to A/B\nteam"), "Draft memo to A B team.md")
+        XCTAssertEqual(ResultFile.filename(for: "  "), "Result.md")
+        XCTAssertEqual(ResultFile.filename(for: "..hidden"), "hidden.md")
+        XCTAssertEqual(ResultFile.filename(for: String(repeating: "x", count: 200)).count, 83)
+        let url = try ResultFile(title: "Plan", markdown: "# Plan\n\n- one").write()
+        XCTAssertEqual(url.lastPathComponent, "Plan.md")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Plan\n\n- one")
+    }
 }

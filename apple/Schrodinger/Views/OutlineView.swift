@@ -2005,6 +2005,10 @@ struct NodeRow: View {
     @ViewBuilder private var menu: some View {
         // This item and everything under it, as text: to Notes, Messages, Mail…
         ShareLink(item: OutlineText(rootID: node.id), preview: SharePreview(node.title.isEmpty ? "Item" : node.title)) { Label("Share…", systemImage: "square.and.arrow.up") }
+        // The AI's result on its own, as a Markdown file or text, for any other app.
+        if let a = node.artifact, !a.isEmpty {
+            ShareLink(item: ResultFile(title: node.title, markdown: a), preview: SharePreview(ResultFile.filename(for: node.title))) { Label("Share result…", systemImage: "doc.text") }
+        }
         Divider()
         if !node.isProject {
             Section("Responsible") {
