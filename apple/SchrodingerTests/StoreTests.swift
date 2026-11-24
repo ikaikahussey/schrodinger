@@ -788,6 +788,23 @@ final class StoreTests: XCTestCase {
 
 /// The glyphs in an item's mark (date, notes, links, photos): which ones an item has, and which fit.
 final class MarkIndicatorTests: XCTestCase {
+    /// The count in a mark is exact up to 999, then in thousands; never more than three characters.
+    @MainActor func testMarkCountTextAndWidth() {
+        XCTAssertEqual(StatusBar.countText(7), "7")
+        XCTAssertEqual(StatusBar.countText(99), "99")
+        XCTAssertEqual(StatusBar.countText(100), "100")
+        XCTAssertEqual(StatusBar.countText(999), "999")
+        XCTAssertEqual(StatusBar.countText(1000), "1k")
+        XCTAssertEqual(StatusBar.countText(1499), "1k")
+        XCTAssertEqual(StatusBar.countText(1500), "2k")
+        XCTAssertEqual(StatusBar.countText(250_000), "99k")
+        XCTAssertEqual(StatusBar.countWidth(0), 0)
+        XCTAssertEqual(StatusBar.countWidth(42), StatusBar.w)
+        XCTAssertGreaterThan(StatusBar.countWidth(420), StatusBar.w)
+        // A check box (one cell) and the widest count fit in the mark.
+        XCTAssertLessThanOrEqual(StatusBar.w + StatusBar.countWidth(999) + 2, StatusBar.length)
+    }
+
     func testPresentListsWhatTheItemHasInOrder() {
         XCTAssertEqual(MarkIndicator.present(hasDate: false, hasNotes: false, webLinks: 0, itemLinks: 0, photos: 0, checkable: false), [])
         XCTAssertEqual(MarkIndicator.present(hasDate: true, hasNotes: true, webLinks: 2, itemLinks: 1, photos: 3, checkable: false),

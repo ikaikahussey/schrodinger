@@ -1238,10 +1238,18 @@ struct StatusBar: View {
     static func showsAIGlyph(assignee: Assignee, isProject: Bool) -> Bool {
         !isProject && assignee.squareGlyph != nil
     }
+    /// The count as drawn in the mark, at most three characters: exact up to 999, then thousands ("1k" to "99k").
+    static func countText(_ n: Int) -> String {
+        if n < 1000 { return "\(max(n, 0))" }
+        return "\(min((n + 500) / 1000, 99))k"
+    }
+    /// The room the count takes in the mark's right end: one cell for one or two characters, wider for three.
+    /// 0 when there is no count. A check box (one cell) and a three-character count still fit in the mark.
+    static func countWidth(_ n: Int) -> CGFloat { n <= 0 ? 0 : countText(n).count <= 2 ? w : w + 6 }
     /// The indicators that fit in the mark, in drawing order. A hidden-children count takes the right end.
     /// `tick`: the done tick is drawn too, and takes one glyph's room.
     static func shown(_ indicators: [MarkIndicator], assignee: Assignee, isProject: Bool, checkable: Bool, hiddenCount: Int = 0, tick: Bool = false) -> [MarkIndicator] {
-        MarkIndicator.fitting(indicators, width: Double(length - (hiddenCount > 0 ? w : 0)) - (tick ? MarkIndicator.pitch : 0), cell: Double(w), checkable: checkable,
+        MarkIndicator.fitting(indicators, width: Double(length - countWidth(hiddenCount)) - (tick ? MarkIndicator.pitch : 0), cell: Double(w), checkable: checkable,
                               aiGlyph: showsAIGlyph(assignee: assignee, isProject: isProject))
     }
 
@@ -1266,16 +1274,17 @@ struct StatusBar: View {
                         .font(.system(size: assignee == .ai ? 9.5 : 8, weight: .heavy))
                         .foregroundStyle(solid ? Color.canvas : color)
                         .frame(width: Self.w, height: Self.h)
-                        .padding(.trailing, hiddenCount > 0 ? Self.w : 0)
+                        .padding(.trailing, Self.countWidth(hiddenCount))
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             // Children hidden: how many, in the mark's right end.
             if hiddenCount > 0 {
-                Text(hiddenCount > 99 ? "99" : "\(hiddenCount)")
+                Text(Self.countText(hiddenCount))
                     .font(.system(size: 9, weight: .heavy, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.8)
                     .foregroundStyle(solid ? Color.canvas : color)
-                    .frame(width: Self.w + 2, height: Self.h)
+                    .frame(width: Self.countWidth(hiddenCount) + 2, height: Self.h)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .accessibilityLabel(countShown ? "\(hiddenCount) items below" : "\(hiddenCount) hidden")
             }
