@@ -37,9 +37,9 @@ protocol LanguageModelProvider: Sendable {
 }
 
 enum ProviderKind: String, CaseIterable, Identifiable, Codable {
-    case apple, local, claude, mock
+    case apple, local, claude
     var id: String { rawValue }
-    var label: String { switch self { case .apple: "Apple Intelligence (on device)"; case .local: "Local model (on this Mac)"; case .claude: "Claude (Anthropic API)"; case .mock: "Mock (offline)" } }
+    var label: String { switch self { case .apple: "Apple Intelligence (on device)"; case .local: "Local model (on this Mac)"; case .claude: "Claude (Anthropic API)" } }
     /// The providers offered on this device. A local model server is a Mac thing.
     static var offered: [ProviderKind] {
         #if os(macOS)

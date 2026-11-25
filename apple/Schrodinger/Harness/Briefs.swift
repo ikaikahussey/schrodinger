@@ -150,8 +150,8 @@ enum SuggestBrief {
     }
 }
 
-/// Work done in the app's own process, for models that are called that way (Apple Intelligence on device, the
-/// offline mock). It runs only while the app is open.
+/// Work done in the app's own process, for models that are called that way (Apple Intelligence on device, a
+/// local model server). It runs only while the app is open.
 @MainActor
 enum InProcessAgent {
     /// Drafts the item with the model's own tool loop. The draft goes to the owner for review.
@@ -165,7 +165,6 @@ enum InProcessAgent {
     }
 
     static func suggest(container: ModelContainer, provider: any LanguageModelProvider) async throws -> [[String: Any]] {
-        if provider is MockProvider { return [] }
         // The on-device model reads a few thousand characters: a short outline, and the answer as plain JSON.
         guard let brief = await SuggestBrief.make(container: container, budget: 3_000) else { return [] }
         let ask = brief.prompt + "\n\nReturn ONLY a JSON array, at most \(SuggestBrief.limit) entries, each {\"parent_id\",\"title\",\"assignee\":\"human\"|\"ai\"|\"shared\",\"reason\"}. Return [] if nothing is missing."

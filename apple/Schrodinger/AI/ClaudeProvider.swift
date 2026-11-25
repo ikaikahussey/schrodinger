@@ -8,6 +8,7 @@ struct ClaudeProvider: LanguageModelProvider {
     private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 
     private func post(_ body: [String: Any]) async throws -> [String: Any] {
+        guard !apiKey.isEmpty else { throw ProviderError.noAPIKey }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -59,17 +60,47 @@ struct ClaudeProvider: LanguageModelProvider {
     }
 }
 
-/// Deterministic offline provider that exercises the same tool loop.
-struct MockProvider: LanguageModelProvider {
-    let name = "Mock"
-    func complete(system: String, prompt: String) async throws -> String { "[]" }
-    func draft(_ req: DraftRequest) async throws -> DraftResult {
-        var log: [String] = []
-        if let ctx = req.tools.first(where: { $0.name == "project_context" }) { _ = try? await ctx.call([:]); log.append("project_context → ok") }
-        if let w = req.tools.first(where: { $0.name == "write_file" }) { _ = try? await w.call(["path": "notes/mock.md", "content": "# Notes\n\(req.prompt.prefix(200))"]); log.append("write_file → ok") }
-        log.append("finish")
-        let title = req.prompt.split(separator: "\n").first.map(String.init) ?? "task"
-        let notes = req.prompt.contains("Prior review notes") ? "\n\n## Revisions addressing review notes\n" + (req.prompt.components(separatedBy: "Prior review notes from the owner (address these):\n").last?.components(separatedBy: "\n\n").first ?? "") : ""
-        return DraftResult(artifact: "# Draft: \(title.replacingOccurrences(of: "Task: ", with: ""))\n\n## Content\n1. Scope the work.\n2. Identify inputs and owners.\n3. Produce the deliverable.\(notes)\n\n## Needs from you\n- Confirm scope.\n\n_(mock draft — choose a model in Settings for real output)_", log: log)
+/// A Claude model the owner can choose in Settings.
+struct ClaudeModel: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+}
+
+/// The Claude models offered in Settings: the list the key can use, asked of the Anthropic Models API, and a
+/// built-in list shown until that answer arrives or when it can't be had.
+enum ClaudeModels {
+    static let defaultID = "claude-sonnet-5-5"
+    static let builtIn = [
+        ClaudeModel(id: "claude-fable-5-2", name: "Claude Fable 5.2"),
+        ClaudeModel(id: "claude-opus-5-5", name: "Claude Opus 5.5"),
+        ClaudeModel(id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5"),
+        ClaudeModel(id: "claude-haiku-5-5", name: "Claude Haiku 5.5"),
+    ]
+    static let endpoint = URL(string: "https://api.anthropic.com/v1/models?limit=1000")!
+
+    /// The models in a Models API reply, in the order given (newest first). Deprecated and retired ones are left out.
+    static func parse(_ json: [String: Any]) -> [ClaudeModel] {
+        (json["data"] as? [[String: Any]] ?? []).compactMap { m in
+            guard let id = m["id"] as? String, !id.isEmpty else { return nil }
+            if let life = m["lifecycle"] as? String, life != "active" { return nil }
+            let name = (m["display_name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            return ClaudeModel(id: id, name: name.isEmpty ? id : name)
+        }
+    }
+
+    /// The models this key can use.
+    static func fetch(apiKey: String) async throws -> [ClaudeModel] {
+        guard !apiKey.isEmpty else { throw ProviderError.noAPIKey }
+        var req = URLRequest(url: endpoint)
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.timeoutInterval = 20
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard (200..<300).contains(code) else {
+            throw ProviderError.http(code, ClaudeRequest.errorMessage(json) ?? String(data: data, encoding: .utf8) ?? "")
+        }
+        return parse(json)
     }
 }

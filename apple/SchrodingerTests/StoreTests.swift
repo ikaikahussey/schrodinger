@@ -159,10 +159,9 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(s.history(since: Date().addingTimeInterval(60), changesOnly: true).isEmpty)
     }
 
-    /// A handed-off item, with a model that runs in the app (the mock): the draft comes back for review; a shared
+    /// A handed-off item, with a model that runs in the app (a test double): the draft comes back for review; a shared
     /// item becomes the owner's turn; review notes go into the redo.
-    func testInProcessHandoffWithMockProvider() async throws {
-        AppSettings.shared.provider = .mock
+    func testInProcessHandoffWithTestProvider() async throws {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P"); p.goal = "ship"
         let ai = s.create(title: "first", parentID: p.id, assignee: .ai)
@@ -170,19 +169,19 @@ final class StoreTests: XCTestCase {
         let hum = s.create(title: "human thing", parentID: p.id, assignee: .human)
         s.save()
         XCTAssertTrue(ProjectAgent.aiTurn(ai)); XCTAssertTrue(ProjectAgent.aiTurn(sh)); XCTAssertFalse(ProjectAgent.aiTurn(hum))
-        let r = try await InProcessAgent.handoff(nodeID: ai.id, container: c, provider: MockProvider())
+        let r = try await InProcessAgent.handoff(nodeID: ai.id, container: c, provider: TestProvider())
         XCTAssertFalse(r.done, "an in-app draft goes to the owner for review")
         XCTAssertEqual(s.applyHandoff(r, to: ai), .needsYou)
         XCTAssertEqual(ai.state, .review)
         XCTAssertFalse(ProjectAgent.aiTurn(ai), "nothing left to hand off on a drafted item")
         XCTAssertEqual(hum.state, .unset)
-        let r2 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: MockProvider())
+        let r2 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: TestProvider())
         XCTAssertEqual(s.applyHandoff(r2, to: sh), .yourTurn)
         XCTAssertEqual(sh.state, .in_progress); XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.isYourTurn)
         XCTAssertTrue(s.byTag(assignee: .human).contains { $0.tag == "#meeting" && $0.tasks.contains { $0.0.id == sh.id } })
         // reject with note → redo includes the note
         try s.reject(ai, note: "make it shorter")
-        let r3 = try await InProcessAgent.handoff(nodeID: ai.id, container: c, provider: MockProvider())
+        let r3 = try await InProcessAgent.handoff(nodeID: ai.id, container: c, provider: TestProvider())
         s.applyHandoff(r3, to: ai)
         XCTAssertTrue(ai.artifact?.contains("make it shorter") ?? false)
         try s.approve(ai)
@@ -190,11 +189,11 @@ final class StoreTests: XCTestCase {
         // send shared back → the AI's part is pending again
         try s.sendBackToAI(sh, note: "add parking")
         XCTAssertEqual(sh.aiStatus, .pending)
-        let r4 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: MockProvider())
+        let r4 = try await InProcessAgent.handoff(nodeID: sh.id, container: c, provider: TestProvider())
         s.applyHandoff(r4, to: sh)
         XCTAssertEqual(sh.aiStatus, .done); XCTAssertTrue(sh.artifact?.contains("add parking") ?? false)
         // Opening Digest writes the digest.
-        try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).writeDigest()
+        try await ProjectAgent(container: c, projectID: p.id, provider: TestProvider()).writeDigest()
         XCTAssertFalse(s.digests(for: p.id).isEmpty)
     }
 
@@ -205,7 +204,7 @@ final class StoreTests: XCTestCase {
         let old = s.create(title: "Untouched for a month", parentID: p.id)
         old.lastActivityAt = Date().addingTimeInterval(-30 * 86400)
         s.save()
-        try await ProjectAgent(container: c, projectID: p.id, provider: MockProvider()).writeDigest()
+        try await ProjectAgent(container: c, projectID: p.id, provider: TestProvider()).writeDigest()
         XCTAssertTrue(s.inbox().isEmpty)
         XCTAssertEqual(s.children(of: p.id).count, 1)
         // Notices filed by an earlier version are closed at launch; suggestions asked for on an item are kept.
@@ -645,13 +644,14 @@ final class StoreTests: XCTestCase {
         let c = try makeContainer(); let s = Store(c.mainContext)
         let p = s.create(title: "P")
         let t = s.create(title: "Book the studio and order film", parentID: p.id, assignee: .human)
-        let added = try await ItemAdvisor.advise(nodeID: t.id, container: c, provider: MockProvider())
+        let split2 = #"[{"type":"decompose","summary":"This reads as 2 steps. Split it?","payload":{"subtasks":[{"title":"Book the studio"},{"title":"order film"}]}}]"#
+        let added = try await ItemAdvisor.advise(nodeID: t.id, container: c, provider: TestProvider(reply: split2))
         XCTAssertGreaterThan(added, 0)
         let split = try XCTUnwrap(s.inbox().first { $0.type == .decompose && $0.nodeID == t.id })
         try s.accept(split)
         XCTAssertEqual(s.children(of: t.id).map(\.title), ["Book the studio", "order film"])
         // Asking again raises nothing that was already raised.
-        let again = try await ItemAdvisor.advise(nodeID: t.id, container: c, provider: MockProvider())
+        let again = try await ItemAdvisor.advise(nodeID: t.id, container: c, provider: TestProvider(reply: split2))
         XCTAssertEqual(again, 0)
         // Model output is checked before it is filed; accepting applies it.
         let (type, summary, payload) = try XCTUnwrap(ItemAdvisor.validated(["type": "retitle", "summary": "Clearer", "payload": ["title": "Book studio"]], for: t))
@@ -899,5 +899,40 @@ final class DueLabelTests: XCTestCase {
         XCTAssertEqual(Markdown.blocks("`<b>` stays"), [.paragraph("`<b>` stays")])
         XCTAssertEqual(Markdown.blocks("```\n<b>x</b>\n```"), [.code("<b>x</b>")])
         XCTAssertEqual(String(Markdown.inline("a **b** `c`").characters), "a b c")
+    }
+}
+
+/// A stand-in for a model, for tests: drafts with the same tool loop, and answers `complete` with a fixed reply.
+struct TestProvider: LanguageModelProvider {
+    let name = "Test"
+    var reply = "[]"
+    func complete(system: String, prompt: String) async throws -> String { reply }
+    func draft(_ req: DraftRequest) async throws -> DraftResult {
+        var log: [String] = []
+        if let ctx = req.tools.first(where: { $0.name == "project_context" }) { _ = try? await ctx.call([:]); log.append("project_context → ok") }
+        if let w = req.tools.first(where: { $0.name == "write_file" }) { _ = try? await w.call(["path": "notes/test.md", "content": "# Notes\n\(req.prompt.prefix(200))"]); log.append("write_file → ok") }
+        log.append("finish")
+        let title = req.prompt.split(separator: "\n").first.map(String.init) ?? "task"
+        let notes = req.prompt.contains("Prior review notes") ? "\n\n## Revisions addressing review notes\n" + (req.prompt.components(separatedBy: "Prior review notes from the owner (address these):\n").last?.components(separatedBy: "\n\n").first ?? "") : ""
+        return DraftResult(artifact: "# Draft: \(title.replacingOccurrences(of: "Task: ", with: ""))\n\n## Content\n1. Scope the work.\(notes)\n\n## Needs from you\n- Confirm scope.", log: log)
+    }
+}
+
+final class ClaudeModelsTests: XCTestCase {
+    func testParseKeepsActiveModelsInOrder() {
+        let json: [String: Any] = ["data": [
+            ["id": "claude-opus-5-5", "display_name": "Claude Opus 5.5", "lifecycle": "active"],
+            ["id": "claude-opus-4-1", "display_name": "Claude Opus 4.1", "lifecycle": "deprecated"],
+            ["id": "claude-haiku-5-5", "display_name": "", "lifecycle": "active"],
+            ["id": "claude-sonnet-5-5", "display_name": "Claude Sonnet 5.5"],
+            ["display_name": "no id"],
+        ]]
+        XCTAssertEqual(ClaudeModels.parse(json), [
+            ClaudeModel(id: "claude-opus-5-5", name: "Claude Opus 5.5"),
+            ClaudeModel(id: "claude-haiku-5-5", name: "claude-haiku-5-5"),
+            ClaudeModel(id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5"),
+        ])
+        XCTAssertTrue(ClaudeModels.parse([:]).isEmpty)
+        XCTAssertTrue(ClaudeModels.builtIn.contains { $0.id == ClaudeModels.defaultID })
     }
 }
