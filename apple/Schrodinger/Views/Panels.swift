@@ -163,7 +163,7 @@ struct DigestView: View {
             }
         }.navigationTitle("Digest")
         // Written when this panel is opened (no model call); nothing writes it in the background.
-        .task { for p in projects { try? await ProjectAgent(container: ctx.container, projectID: p.id, provider: MockProvider()).writeDigest() } }
+        .task { for p in projects { try? await ProjectAgent(container: ctx.container, projectID: p.id, provider: AppSettings.shared.makeProvider()).writeDigest() } }
     }
 }
 
@@ -189,7 +189,7 @@ struct SettingsView: View {
                 Text(av.available ? "Apple Intelligence is available on this device." : "Apple Intelligence unavailable: \(av.reason)").font(.caption).foregroundStyle(.secondary)
                 if settings.provider == .claude {
                     SecureField("Anthropic API key", text: $key).onChange(of: key) { _, v in settings.anthropicKey = v }
-                    TextField("Model", text: $settings.claudeModel)
+                    ClaudeModelSettings(key: key)
                     Text("The key is kept in the Keychain and, with iCloud Keychain on, is shared with your other devices: enter it once. An item handed to Claude is one request that finishes even with the app closed. Web search in hand-offs needs to be enabled for your organization in the Anthropic Console.").font(.caption).foregroundStyle(.secondary)
                 } else if settings.provider == .apple {
                     Text("Apple Intelligence works on handed-off items only while the app is open.").font(.caption).foregroundStyle(.secondary)
@@ -212,6 +212,38 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .frame(minWidth: 420)
+    }
+}
+
+/// The Claude model to use: the models the key can use, asked of Anthropic, or the built-in list until then.
+struct ClaudeModelSettings: View {
+    let key: String
+    @State private var settings = AppSettings.shared
+    @State private var models = ClaudeModels.builtIn
+    @State private var status = ""
+    var body: some View {
+        Picker("Model", selection: $settings.claudeModel) {
+            if !models.contains(where: { $0.id == settings.claudeModel }) { Text(settings.claudeModel).tag(settings.claudeModel) }
+            ForEach(models) { Text($0.name).tag($0.id) }
+        }
+        // Asked again when the key changes, once typing has paused.
+        .task(id: key) { await load() }
+        if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+    }
+    private func load() async {
+        guard !key.isEmpty else { models = ClaudeModels.builtIn; status = ""; return }
+        try? await Task.sleep(for: .milliseconds(600))
+        if Task.isCancelled { return }
+        do {
+            let found = try await ClaudeModels.fetch(apiKey: key)
+            if Task.isCancelled { return }
+            models = found.isEmpty ? ClaudeModels.builtIn : found
+            status = ""
+        } catch {
+            if Task.isCancelled { return }
+            models = ClaudeModels.builtIn
+            status = "Could not load the model list: \(error.localizedDescription)"
+        }
     }
 }
 

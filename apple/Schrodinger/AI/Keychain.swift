@@ -84,10 +84,11 @@ final class AppSettings {
     }
 
     private init() {
-        // No provider chosen on this device yet: a Claude key that arrived from another device (iCloud Keychain) selects Claude.
+        // No provider chosen on this device yet: a Claude key that arrived from another device (iCloud Keychain) selects
+        // Claude; otherwise Apple Intelligence where the device has it, and Claude (which asks for a key) where not.
         provider = ProviderKind(rawValue: d.string(forKey: "provider") ?? "")
-            ?? (!(Keychain.get("anthropic_api_key") ?? "").isEmpty ? .claude : AppleIntelligenceProvider.availability.available ? .apple : .mock)
-        claudeModel = d.string(forKey: "claudeModel") ?? "claude-sonnet-4-5"
+            ?? (!(Keychain.get("anthropic_api_key") ?? "").isEmpty ? .claude : AppleIntelligenceProvider.availability.available ? .apple : .claude)
+        claudeModel = d.string(forKey: "claudeModel") ?? ClaudeModels.defaultID
         localBaseURL = d.string(forKey: "localBaseURL") ?? LocalProvider.defaultBaseURL
         localModel = d.string(forKey: "localModel") ?? ""
         maxTasksPerRun = d.object(forKey: "maxTasksPerRun") as? Int ?? 3
@@ -102,8 +103,7 @@ final class AppSettings {
         switch provider {
         case .apple: AppleIntelligenceProvider()
         case .local: LocalProvider(baseURL: localBaseURL, model: localModel)
-        case .claude: anthropicKey.isEmpty ? MockProvider() : ClaudeProvider(apiKey: anthropicKey, model: claudeModel)
-        case .mock: MockProvider()
+        case .claude: ClaudeProvider(apiKey: anthropicKey, model: claudeModel)
         }
     }
 }

@@ -9,7 +9,7 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable { case handoff, suggest }
     enum Status: String, Codable, Sendable { case queued, working, needsYou, done, failed }
     /// `background`: one request carried by the system, which finishes with the app closed (Claude).
-    /// `inProcess`: run by the app itself while it is open (Apple Intelligence, the offline mock).
+    /// `inProcess`: run by the app itself while it is open (Apple Intelligence, a local model).
     enum Route: String, Codable, Sendable { case background, inProcess }
 
     var id = UUID()

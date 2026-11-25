@@ -13,12 +13,7 @@ enum ItemAdvisor {
         let s = Store(container.mainContext)
         guard let n = s.node(nodeID) else { return 0 }
         let project = s.project(of: n)
-        let raw: [[String: Any]]
-        if provider is MockProvider {
-            raw = offline(n, children: s.children(of: n.id))
-        } else {
-            raw = parse(try await provider.complete(system: system(project), prompt: prompt(n, store: s)))
-        }
+        let raw = parse(try await provider.complete(system: system(project), prompt: prompt(n, store: s)))
         // The item may have been deleted while the model was working.
         guard let node = s.node(nodeID), !node.isDeleted else { return 0 }
         var added = 0
@@ -93,22 +88,5 @@ enum ItemAdvisor {
         case .new_task, .stale, .blocked_chain, .no_path:
             return nil
         }
-    }
-
-    /// With no model chosen: a few rule-based remarks, so the field still answers.
-    static func offline(_ n: Node, children: [Node]) -> [[String: Any]] {
-        var out: [[String: Any]] = []
-        let parts = n.title.components(separatedBy: " and ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if children.isEmpty && parts.count > 1 {
-            out.append(["type": "decompose", "summary": "This reads as \(parts.count) steps. Split it?", "payload": ["subtasks": parts.map { ["title": $0] }]])
-        }
-        if n.title.count > 70 {
-            out.append(["type": "feedback", "summary": "The text is long. A short title with the detail in the notes is easier to scan."])
-        }
-        if children.isEmpty && (n.isProject ? n.goal : n.notes).isEmpty {
-            out.append(["type": "feedback", "summary": "No notes yet. What does done look like for this?"])
-        }
-        out.append(["type": "feedback", "summary": "These are built-in checks. Choose a model in Settings for real suggestions."])
-        return out
     }
 }
