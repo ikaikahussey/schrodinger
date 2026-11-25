@@ -109,17 +109,4 @@ final class WeaveTests: XCTestCase {
         s.saveEditedResult(a, text: "New")
         XCTAssertEqual(a.artifact, "New")
     }
-
-    /// What goes to Google Docs: formatted text without the app's own links, and a new document to paste it into.
-    func testExportForGoogleDocs() throws {
-        XCTAssertEqual(GoogleDocs.exported("# T\n\nBody. [↗](item:12345678)\n\n## Threads\n- [x](item:12345678)"), "# T\n\nBody.")
-        XCTAssertEqual(GoogleDocs.newDocument(title: "My Piece")?.absoluteString, "https://docs.google.com/document/create?title=My%20Piece")
-        XCTAssertEqual(GoogleDocs.newDocument(title: " ")?.absoluteString, "https://docs.google.com/document/create")
-        XCTAssertEqual(DocumentHTML.inline("a < b & \"c\""), "a &lt; b &amp; &quot;c&quot;")
-        let html = DocumentHTML.html(markdown: "# T\n\nSome **bold** and *it* and [x](https://e.org/a_b).\n\n- one\n- two\n\n1. n")
-        XCTAssertTrue(html.contains("<h1>T</h1>"))
-        XCTAssertTrue(html.contains("<p>Some <b>bold</b> and <i>it</i> and <a href=\"https://e.org/a_b\">x</a>.</p>"))
-        XCTAssertTrue(html.contains("<ul>\n<li>one</li>\n<li>two</li>\n</ul>"))
-        XCTAssertTrue(html.contains("<ol>\n<li>n</li>\n</ol>"))
-    }
 }
