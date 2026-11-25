@@ -2,11 +2,12 @@ import Foundation
 import SwiftData
 import Observation
 
-/// One piece of work given to the AI: an item handed off, or a pass over the outline to recommend tasks.
+/// One piece of work given to the AI: an item handed off, an item woven into one piece from the items under it, or a
+/// pass over the outline to recommend tasks.
 /// Jobs belong to the device that started them (the request in flight is this device's), so they are kept in a file
 /// here and not in the synced store. What a job produces is written to the outline, which does sync.
 struct AgentJob: Codable, Identifiable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case handoff, suggest }
+    enum Kind: String, Codable, Sendable { case handoff, suggest, weave }
     enum Status: String, Codable, Sendable { case queued, working, needsYou, done, failed }
     /// `background`: one request carried by the system, which finishes with the app closed (Claude).
     /// `inProcess`: run by the app itself while it is open (Apple Intelligence, a local model).
@@ -39,14 +40,18 @@ struct AgentJob: Codable, Identifiable, Equatable, Sendable {
         switch status {
         case .queued: "Waiting for the AI: another item is ahead of this one"
         case .working:
-            route == .background
+            kind == .weave
+                ? (route == .background ? "Weaving the items under this into one piece" : "Weaving the items under this into one piece. Keep the app open.")
+                : route == .background
                 ? (continuations > 0 ? "The AI is working on this (a long one, still going)" : "The AI is working on this")
                 : "The AI is working on this. Keep the app open."
         case .needsYou: summary.isEmpty ? AgentJob.needsYouMark : "\(AgentJob.needsYouMark) \(summary)"
         case .done: summary.isEmpty ? "Done by the AI" : "AI: \(summary)"
-        case .failed: error.isEmpty ? "The hand-off failed" : "The hand-off failed: \(error)"
+        case .failed: error.isEmpty ? failedLead : "\(failedLead): \(error)"
         }
     }
+    /// What went wrong, in three words.
+    var failedLead: String { kind == .weave ? "The weave failed" : "The hand-off failed" }
 }
 
 /// The AI's work queue. Nothing enters it unless the owner asks. Handing an item off makes a job and starts it at once; jobs run side by side and do not
@@ -114,8 +119,20 @@ final class JobQueue {
         trim(); persist(); pump()
     }
 
+    /// Weaves an item and everything under it into one piece of writing, which is put on the item as its result.
+    /// Only for an item that has items under it. The item's status and holder are left as they are.
+    func weave(_ id: UUID) {
+        resume()
+        let s = Store(container.mainContext)
+        guard let n = s.node(id), !n.isDeleted, !isLive(id), !s.children(of: id).isEmpty else { return }
+        jobs.removeAll { $0.nodeID == id && $0.status == .failed }
+        jobs.insert(AgentJob(kind: .weave, nodeID: id, title: n.title), at: 0)
+        trim(); persist(); pump()
+        Task { await ResultNotifier.prepare() }
+    }
+
     /// Runs a failed item again.
-    func retry(_ nodeID: UUID) { handOff([nodeID]) }
+    func retry(_ nodeID: UUID) { if latest(for: nodeID)?.kind == .weave { weave(nodeID) } else { handOff([nodeID]) } }
     /// Forgets the item's failed job (its warning goes away).
     func dismissFailure(_ nodeID: UUID) { jobs.removeAll { $0.nodeID == nodeID && $0.status == .failed }; persist() }
     func markSeen(_ nodeID: UUID) { if unseen.remove(nodeID) != nil { persist() } }
@@ -183,6 +200,9 @@ final class JobQueue {
         case .suggest:
             guard let brief = await SuggestBrief.make(container: container) else { finish(id, .done, summary: "Nothing in the outline yet."); return }
             post(id, body: ClaudeRequest.suggestBody(model: model, system: brief.system, prompt: brief.prompt))
+        case .weave:
+            guard let nodeID = job.nodeID, let brief = WeaveBrief.make(nodeID: nodeID, container: container) else { fail(id, "There is nothing under the item to weave."); return }
+            post(id, body: ClaudeRequest.weaveBody(model: model, system: brief.system, prompt: brief.prompt))
         }
     }
 
@@ -204,6 +224,11 @@ final class JobQueue {
             if status == 400 || status == 403, let body = storedBody(jobID), ClaudeRequest.hasServerTools(body) {
                 post(jobID, body: ClaudeRequest.withoutServerTools(body)); return
             }
+            // The chosen model writes less at a time than a weave asks for: ask for what it can give.
+            if status == 400, job.kind == .weave, var body = storedBody(jobID), (body["max_tokens"] as? Int ?? 0) > ClaudeRequest.weaveFallbackTokens {
+                body["max_tokens"] = ClaudeRequest.weaveFallbackTokens
+                post(jobID, body: body); return
+            }
             fail(jobID, ClaudeRequest.errorMessage(json) ?? "The model service answered with an error (\(status)).")
             return
         }
@@ -214,8 +239,11 @@ final class JobQueue {
             else { fail(jobID, "The model answered in a form the app does not read.") }
         case .text(let text):
             // Answered without handing in through the tool: the text is the result, for the owner to look over.
-            if job.kind == .handoff { complete(jobID, HandoffResult(summary: "Result ready for you to review.", markdown: text, done: false)) }
-            else { recommended(jobID, SuggestBrief.parse(text)) }
+            switch job.kind {
+            case .handoff: complete(jobID, HandoffResult(summary: "Result ready for you to review.", markdown: text, done: false))
+            case .weave: woven(jobID, text, cut: json["stop_reason"] as? String == "max_tokens")
+            case .suggest: recommended(jobID, SuggestBrief.parse(text))
+            }
         case .paused(let content):
             guard job.continuations < 6, let body = storedBody(jobID) else { fail(jobID, "The work took too long to finish."); return }
             if let i = jobs.firstIndex(where: { $0.id == jobID }) { jobs[i].continuations += 1 }
@@ -239,6 +267,12 @@ final class JobQueue {
             case .suggest:
                 let items = try await InProcessAgent.suggest(container: container, provider: provider)
                 recommended(id, items)
+            case .weave:
+                // A model on the device reads far less than Claude: it gets as many threads as fit.
+                let budget = AppSettings.shared.provider == .apple ? 5_000 : 24_000
+                guard let nodeID = job.nodeID, let brief = WeaveBrief.make(nodeID: nodeID, container: container, budget: budget) else { fail(id, "There is nothing under the item to weave."); return }
+                let text = try await provider.complete(system: brief.system, prompt: brief.prompt)
+                woven(id, text)
             }
         } catch {
             fail(id, error.localizedDescription)
@@ -266,6 +300,23 @@ final class JobQueue {
         Task { await ResultNotifier.post(title: heading, body: line, nodeID: nodeID) }
     }
 
+    /// Puts a woven piece on its item and tells the owner. `cut`: the model ran out of room before the end.
+    private func woven(_ id: UUID, _ text: String, cut: Bool = false) {
+        guard let job = job(id), job.live, let nodeID = job.nodeID else { return }
+        let s = Store(container.mainContext)
+        guard let n = s.node(nodeID), !n.isDeleted else { finish(id, .done, summary: "The item was deleted before the piece came back."); return }
+        guard let piece = s.applyWeave(text, to: n) else { fail(id, "The model returned nothing."); return }
+        s.save()
+        unseen.insert(nodeID)
+        let threads = s.descendants(of: nodeID).count
+        let words = WeaveLinks.withoutThreadList(piece).split(whereSeparator: { $0.isWhitespace }).count
+        var line = "Woven from \(threads) \(threads == 1 ? "item" : "items"): \(words) words."
+        if cut { line += " It was cut off at the model's length limit." }
+        finish(id, .done, summary: line)
+        let title = n.title.isEmpty ? "(untitled)" : n.title
+        Task { await ResultNotifier.post(title: "Woven: \(title)", body: line, nodeID: nodeID) }
+    }
+
     private func recommended(_ id: UUID, _ items: [[String: Any]]) {
         let s = Store(container.mainContext)
         let added = SuggestBrief.file(items, store: s)
@@ -289,7 +340,7 @@ final class JobQueue {
         let job = jobs[i]
         restoreItem(job)
         removeBody(id); persist()
-        if job.kind == .handoff, let nodeID = job.nodeID {
+        if job.kind != .suggest, let nodeID = job.nodeID {
             Task { await ResultNotifier.post(title: "Could not finish: \(job.title)", body: message, nodeID: nodeID) }
         }
     }

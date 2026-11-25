@@ -1566,7 +1566,7 @@ struct NodeRow: View {
         if working {
             ProgressView().controlSize(.small).frame(width: 28, height: 22).accessibilityLabel("The AI is working on this")
         } else if let failed = jobs.failure(for: node.id) {
-            rowGlyph("exclamationmark.triangle.fill", label: "The hand-off failed", help: "The hand-off failed: tap for details") { runFailure = failed.error }
+            rowGlyph("exclamationmark.triangle.fill", label: failed.failedLead, help: failed.failedLead + ": tap for details") { runFailure = failed.error }
         } else if jobs.unseen.contains(node.id) {
             rowGlyph("sparkles.rectangle.stack.fill", label: "New result", help: "The AI's result is in: tap to open") { commit(); openItem() }
         } else if !runnable.isEmpty {
@@ -1577,7 +1577,7 @@ struct NodeRow: View {
     /// The hand-off whose status the row shows: one under way, one that failed, a result not opened yet, and, while
     /// the item is open, the last one.
     private var rowJob: AgentJob? {
-        guard let job = jobs.latest(for: node.id), job.kind == .handoff else { return nil }
+        guard let job = jobs.latest(for: node.id), job.kind != .suggest else { return nil }
         return job.live || job.status == .failed || jobs.unseen.contains(node.id) || open ? job : nil
     }
     /// The AI's status on this item as a line of text in the row, with what can be done about it: Stop while it
@@ -1633,6 +1633,35 @@ struct NodeRow: View {
         commit(); commitNote(convertLists: false)
         if node.assignee == .human || node.assignee == .unassigned { store.update(node) { $0.assignee = .ai }; store.save() }
         jobs.handOff([node.id])
+    }
+    /// Weave: the item and everything under it, made into one piece of writing by the AI. The piece comes back onto
+    /// this item as its result, with links to the items it was woven from.
+    private func weave() {
+        commit(); commitNote(convertLists: false)
+        jobs.weave(node.id)
+    }
+    /// The Weave button in the item's field, on an item that has items under it: the glyph and the word, or the
+    /// glyph alone where the row has no room for the word.
+    private var weaveButton: some View {
+        let glyph = Image(systemName: WeaveBrief.symbol).font(.system(size: 15, weight: .medium))
+        return Button { weave() } label: {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) {
+                    glyph
+                    Text("Weave").font(Appearance.shared.font.font(.caption).weight(.semibold)).lineLimit(1).fixedSize()
+                }
+                .padding(.horizontal, 8)
+                glyph.frame(width: ItemField.compact)
+            }
+            .foregroundStyle(Color.ink.opacity(0.9))
+            .frame(height: 22)
+            .background { Capsule().fill(PanelPalette.field).padding(.vertical, -5) }
+            .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+        .help(working ? "The AI is working on this" : "Weave this and the items under it into one piece")
+        .accessibilityLabel("Weave").accessibilityHint("Makes one piece of writing from this item and the items under it")
     }
     /// A tap on the item, on its text or on its squares, opens it: the item field and the children are shown.
     private func openItem() {
@@ -2031,6 +2060,7 @@ struct NodeRow: View {
             FieldIcon(systemImage: "plus", on: true, width: ItemField.compact) { commit(); onKey(.enter) }
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
+            if hasChildren { weaveButton.disabled(empty || working).opacity(empty || working ? 0.35 : 1) }
             if node.state == .review {
                 // The AI's result is waiting: approve it (the item is done), or have it redone (answers and
                 // corrections typed in the notes go along).
@@ -2142,6 +2172,9 @@ struct NodeRow: View {
         if let a = node.artifact, !a.isEmpty {
             Button { sel.resultID = node.id } label: { Label("Read result", systemImage: "arrow.up.left.and.arrow.down.right") }
             ShareLink(item: ResultFile(title: node.title, markdown: a), preview: SharePreview(ResultFile.filename(for: node.title))) { Label("Share result…", systemImage: "doc.text") }
+        }
+        if hasChildren {
+            Button { weave() } label: { Label("Weave into one piece", systemImage: WeaveBrief.symbol) }.disabled(working)
         }
         Divider()
         if !node.isProject {

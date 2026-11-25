@@ -66,6 +66,13 @@ struct ContentView: View {
             }
         .environment(sel)
         .font(Appearance.shared.font.font(.body))
+        // A link in a woven piece that leads to an item (item:…) opens that item in the outline. Other links open as usual.
+        .environment(\.openURL, OpenURLAction { url in
+            guard WeaveLinks.ref(in: url) != nil else { return .systemAction }
+            let ids = Store(AppData.container.mainContext).allNodes().map(\.id)
+            if let id = WeaveLinks.target(of: url, among: ids) { sel.resultID = nil; sel.open(id) }
+            return .handled
+        })
         // A tapped notification opens its item.
         .onChange(of: router.openID, initial: true) { _, id in if let id { sel.open(id); router.openID = nil } }
         #if canImport(CoreSpotlight)

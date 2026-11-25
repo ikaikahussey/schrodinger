@@ -18,6 +18,10 @@ struct ResultViewer: View {
     /// The edits the owner wants, as typed in the comment form.
     @State private var comment = ""
     @FocusState private var commenting: Bool
+    /// The text is being edited in place: `draft` is what is typed, saved to the item with Save.
+    @State private var editing = false
+    @State private var draft = ""
+    @FocusState private var writing: Bool
 
     var body: some View {
         let node = store.node(nodeID)
@@ -25,14 +29,26 @@ struct ResultViewer: View {
         VStack(spacing: 0) {
             bar(node, text: text)
             Divider()
-            ScrollView {
-                MarkdownView(blocks: Markdown.blocks(text))
-                    .frame(maxWidth: 720, alignment: .leading)
-                    .padding(.horizontal, 20).padding(.vertical, 18)
-                    .frame(maxWidth: .infinity)
+            if editing {
+                // The text itself (its Markdown), typed into directly.
+                TextEditor(text: $draft)
+                    .font(Appearance.shared.font.font(.body)).foregroundStyle(Color.ink).tint(Color.ink)
+                    .scrollContentBackground(.hidden)
+                    .focused($writing)
+                    .frame(maxWidth: 720)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("Text of the result")
+            } else {
+                ScrollView {
+                    MarkdownView(blocks: Markdown.blocks(text))
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .padding(.horizontal, 20).padding(.vertical, 18)
+                        .frame(maxWidth: .infinity)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                if let node, !text.isEmpty { commentForm(node) }
             }
-            .scrollDismissesKeyboard(.interactively)
-            if let node, !text.isEmpty { commentForm(node) }
         }
         .background(Color.canvas.ignoresSafeArea())
         .accessibilityAddTraits(.isModal)
@@ -81,12 +97,27 @@ struct ResultViewer: View {
     private func sendEdits(_ node: Node) {
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !note.isEmpty else { return }
-        store.requestEdits(node, note: note); store.save()
-        JobQueue.shared.handOff([node.id])
+        if JobQueue.shared.latest(for: node.id)?.kind == .weave {
+            // A woven piece: woven again with the comment. The item's status and holder stay as they are.
+            store.noteOnWeave(node, note: note); store.save()
+            JobQueue.shared.weave(node.id)
+        } else {
+            store.requestEdits(node, note: note); store.save()
+            JobQueue.shared.handOff([node.id])
+        }
         comment = ""; commenting = false
         go(to: node.id)
     }
 
+    /// Edit: the text becomes a field to type in. A woven piece's list of threads is left out of it and kept as it is.
+    private func beginEdit(_ text: String) {
+        draft = WeaveLinks.withoutThreadList(text)
+        editing = true; writing = true
+    }
+    private func saveEdit(_ node: Node) {
+        store.saveEditedResult(node, text: draft); store.save()
+        editing = false; writing = false
+    }
     private func close() { sel.resultID = nil }
     /// Back to the outline, at one item: the outline shows it and opens its field.
     private func go(to id: UUID) { sel.resultID = nil; sel.open(id) }
@@ -115,19 +146,35 @@ struct ResultViewer: View {
                 }
             }
             .defaultScrollAnchor(.trailing)
-            if !text.isEmpty {
-                ShareLink(item: ResultFile(title: node?.title ?? "", markdown: text), preview: SharePreview(ResultFile.filename(for: node?.title ?? ""))) {
-                    Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.6))
+            if editing {
+                Button("Cancel") { editing = false; writing = false }
+                    .keyboardShortcut(.cancelAction)
+                    .foregroundStyle(Color.ink.opacity(0.6)).padding(.horizontal, 6).frame(height: 34)
+                Button("Save") { if let node { saveEdit(node) } }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .fontWeight(.semibold).foregroundStyle(Color.ink).padding(.horizontal, 6).frame(height: 34)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Save the text (\u{2318}S)")
+            } else {
+                if !text.isEmpty {
+                    Button { beginEdit(text) } label: {
+                        Image(systemName: "pencil").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.6))
+                            .frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .help("Edit the text").accessibilityLabel("Edit the text")
+                    ShareLink(item: ResultFile(title: node?.title ?? "", markdown: text), preview: SharePreview(ResultFile.filename(for: node?.title ?? ""))) {
+                        Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.6))
+                            .frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .help("Share or open in another app").accessibilityLabel("Share result")
+                }
+                Button { if let node { go(to: node.id) } else { close() } } label: {
+                    Image(systemName: "xmark").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.6))
                         .frame(width: 34, height: 34).contentShape(Rectangle())
                 }
-                .help("Share or open in another app").accessibilityLabel("Share result")
+                .keyboardShortcut(.cancelAction)
+                .help("Close (Esc)").accessibilityLabel("Close result")
             }
-            Button { if let node { go(to: node.id) } else { close() } } label: {
-                Image(systemName: "xmark").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.ink.opacity(0.6))
-                    .frame(width: 34, height: 34).contentShape(Rectangle())
-            }
-            .keyboardShortcut(.cancelAction)
-            .help("Close (Esc)").accessibilityLabel("Close result")
         }
         .buttonStyle(.plain)
         .padding(.leading, StatusBar.margin).padding(.trailing, 8).padding(.vertical, 6)
