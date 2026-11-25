@@ -81,8 +81,14 @@ struct ResultViewer: View {
     private func sendEdits(_ node: Node) {
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !note.isEmpty else { return }
-        store.requestEdits(node, note: note); store.save()
-        JobQueue.shared.handOff([node.id])
+        if JobQueue.shared.latest(for: node.id)?.kind == .weave {
+            // A woven piece: woven again with the comment. The item's status and holder stay as they are.
+            store.noteOnWeave(node, note: note); store.save()
+            JobQueue.shared.weave(node.id)
+        } else {
+            store.requestEdits(node, note: note); store.save()
+            JobQueue.shared.handOff([node.id])
+        }
         comment = ""; commenting = false
         go(to: node.id)
     }

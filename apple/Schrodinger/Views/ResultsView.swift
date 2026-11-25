@@ -44,7 +44,7 @@ struct ResultsView: View {
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
-        .onTapGesture { if let id = job.nodeID, job.kind == .handoff { queue.markSeen(id); sel.open(id) } }
+        .onTapGesture { if let id = job.nodeID, job.kind != .suggest { queue.markSeen(id); sel.open(id) } }
     }
 
     @ViewBuilder private func icon(_ job: AgentJob) -> some View {

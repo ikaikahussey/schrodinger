@@ -34,6 +34,16 @@ enum ClaudeRequest {
                 "messages": [["role": "user", "content": prompt]]]
     }
 
+    /// What a weave asks the model to be able to write, and what it asks for when the model refuses that much.
+    static let weaveTokens = 16_000
+    static let weaveFallbackTokens = 8_000
+
+    /// A weave: the threads go in, the piece comes back as the reply's text. No tools: the piece is made only from
+    /// what is in the outline, and a reply cut off at the length limit is still a piece.
+    static func weaveBody(model: String, system: String, prompt: String) -> [String: Any] {
+        ["model": model, "max_tokens": weaveTokens, "system": system, "messages": [["role": "user", "content": prompt]]]
+    }
+
     static func suggestBody(model: String, system: String, prompt: String) -> [String: Any] {
         let item: [String: Any] = [
             "type": "object",
