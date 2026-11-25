@@ -124,6 +124,12 @@ enum WeaveLinks {
         return String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The list of threads at a piece's end, from its heading on (nil when it has none).
+    static func threadListPart(of text: String) -> String? {
+        guard let r = text.range(of: "\n" + listHeading + "\n", options: .backwards) else { return nil }
+        return String(text[r.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Removes links to items that are not among `valid` (an id the model got wrong), keeping the text around them.
     static func pruned(_ text: String, valid: Set<String>) -> String {
         guard let re = try? NSRegularExpression(pattern: "\\s?\\[([^\\]\\n]*)\\]\\(item:([0-9A-Fa-f-]+)\\)") else { return text }
@@ -182,6 +188,17 @@ extension Store {
         let piece = list.isEmpty ? body : body + "\n\n" + list
         update(n, actor: .ai, detail: "woven from \(threads.count) \(threads.count == 1 ? "item" : "items")") { $0.artifact = piece }
         return piece
+    }
+
+    /// The owner's own edit of a result's text (typed in the result viewer). A woven piece keeps its list of
+    /// threads, which is not part of the text being edited. Recorded in the item's activity, so it can be undone.
+    func saveEditedResult(_ n: Node, text: String) {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        let list = n.artifact.flatMap { WeaveLinks.threadListPart(of: $0) }
+        let piece = list.map { body + "\n\n" + $0 } ?? body
+        guard piece != n.artifact else { return }
+        update(n, detail: "result edited") { $0.artifact = piece }
     }
 
     /// The owner's comments on a woven piece: kept on the item, for the next weave to address. Nothing else changes.
