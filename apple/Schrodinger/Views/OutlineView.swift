@@ -804,6 +804,22 @@ struct OutlineView: View {
                         .padding(.horizontal, 12)
                     }
                 }
+                // Something is selected (a filter, a tag, a saved view): one button turns all of it off.
+                if filtering || !active.isEmpty || views.contains(where: isCurrent) {
+                    Button { clearSelections() } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .heavy))
+                            Text("CLEAR ALL").font(PanelPalette.label(.caption)).lineLimit(1)
+                        }
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 9).frame(height: 24)
+                        .background(PanelPalette.field)
+                        .contentShape(Rectangle())
+                    }
+                    .padding(.horizontal, 12)
+                    .accessibilityLabel("Clear all filters and tags")
+                    .transition(.opacity)
+                }
             }
             .buttonStyle(.plain)
             .padding(.bottom, 6)
@@ -911,6 +927,11 @@ struct OutlineView: View {
         var count: [String: Int] = [:]
         for n in all { for t in searchIndex.tags(n) { count[t, default: 0] += 1 } }
         return count.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
+    }
+    /// Turn off everything picked under the search field: the filter, the tag filter, the search (its #tags and
+    /// words, so no saved view stays selected). The zoom and the search field's focus are left as they are.
+    private func clearSelections() {
+        withAnimation(.snappy(duration: 0.25)) { filter = .all; tagFilter = nil; search = "" }
     }
     private func toggleTag(_ tag: String) {
         var terms = search.split(whereSeparator: { $0.isWhitespace }).map(String.init)
