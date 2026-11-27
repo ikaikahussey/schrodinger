@@ -1712,6 +1712,11 @@ struct NodeRow: View {
         withAnimation(.snappy(duration: 0.2)) { store.update(node) { $0.state = $0.state == .done ? .todo : .done } }
         store.save()
     }
+    /// A finished item back to to-do, with or without a date: the strikethrough, the tick and the dimming go.
+    private func markNotDone() {
+        withAnimation(.snappy(duration: 0.2)) { store.update(node, detail: "marked not done") { $0.state = .todo } }
+        store.save()
+    }
     private func toggleChildren() { store.update(node) { $0.collapsed.toggle() }; store.save() }
 
     /// SwiftData traps when a deleted model's attributes are read, and a row can be re-rendered once more after its node
@@ -2083,6 +2088,9 @@ struct NodeRow: View {
                 .disabled(empty)
                 .help("New item below").accessibilityLabel("New item below")
             if hasChildren { weaveButton.disabled(empty || working).opacity(empty || working ? 0.35 : 1) }
+            if node.state == .done && !node.isProject {
+                FieldIcon(systemImage: "arrow.uturn.backward", width: ItemField.compact) { markNotDone() }.help("Mark as not done").accessibilityLabel("Mark as not done")
+            }
             if node.state == .review {
                 // The AI's result is waiting: approve it (the item is done), or have it redone (answers and
                 // corrections typed in the notes go along).
@@ -2197,6 +2205,9 @@ struct NodeRow: View {
         }
         if hasChildren {
             Button { weave() } label: { Label("Weave into one piece", systemImage: WeaveBrief.symbol) }.disabled(working)
+        }
+        if node.state == .done && !node.isProject {
+            Button { markNotDone() } label: { Label("Mark as Not Done", systemImage: "arrow.uturn.backward") }
         }
         Divider()
         if !node.isProject {
