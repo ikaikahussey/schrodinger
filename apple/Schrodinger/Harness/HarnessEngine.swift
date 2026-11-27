@@ -61,7 +61,7 @@ struct ProjectAgent {
     func draft(project: Node, task: Node) async throws -> DraftResult {
         let tools = AgentTools.make(container: container, projectID: projectID, taskID: task.id)
         var lines = ["Task: \(task.title)"]
-        if !task.tags.isEmpty { lines.append("Tags: " + task.tags.sorted().map { "#" + $0 }.joined(separator: " ")) }
+        if !task.tags.isEmpty { lines.append("Tags: " + task.tags.sorted().map(Tags.label).joined(separator: " ")) }
         if let d = task.due { lines.append("Due: \(d.dayString)") }
         if !task.notes.isEmpty { lines.append("Notes:\n\(task.notes)") }
         if !task.acceptanceNote.isEmpty { lines.append("Prior review notes from the owner (address these):\n\(task.acceptanceNote)") }

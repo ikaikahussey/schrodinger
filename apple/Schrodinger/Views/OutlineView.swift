@@ -663,7 +663,7 @@ struct OutlineView: View {
     }
 
     /// Search, the header's first block, flush with the left edge. The logo sits at its start (tap it to leave a
-    /// zoom). Type words to match text; tap a tag button (or type #tag) to match tags. No color: a neutral fill.
+    /// zoom). Type words to match text; tap a tag button (or type #tag or @person) to match tags. No color: a neutral fill.
     private static let searchHeight: CGFloat = 44
     /// Leading inset + logo (30) + spacing (8) + spacing (8) + glyph (24 + 8) + trailing inset (2), rounded up.
     private static let searchMinWidth: CGFloat = (StatusBar.margin - 30 * 10 / 64 + 30 + 8 + 8 + 32 + 2).rounded(.up)
@@ -726,7 +726,7 @@ struct OutlineView: View {
         let tags = allTags
         let views = savedViews
         if searchFocused || searching || filtering {
-            let active = Set(searchTerms.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()) })
+            let active = Set(searchTerms.compactMap { Tags.tag(term: $0) })
             VStack(alignment: .leading, spacing: 6) {
                 // What to show. One at a time; the one that is on is checked, and tapping it shows everything again.
                 // The counts are for what is in view (the zoomed item, or the whole outline).
@@ -793,7 +793,7 @@ struct OutlineView: View {
                                     if !filtered || active.contains(t) { toggleTag(t) }
                                 } label: {
                                     // A selected tag also gets a check: in a two-color scheme the fill alone may not differ.
-                                    Text((on ? "\u{2713} #" : "#") + t.uppercased())
+                                    Text((on ? "\u{2713} " : "") + Tags.label(t).uppercased())
                                         .font(PanelPalette.label(.caption)).foregroundStyle(PanelPalette.text(on: fill))
                                         .padding(.horizontal, 9).frame(height: 24)
                                         .background { fill.panelBlink(40 + t.count) }
@@ -901,8 +901,8 @@ struct OutlineView: View {
     /// Done: put the keyboard away and close the open item.
     private func endEdit() { editRequest = nil; focused = nil; sel.infoID = nil; sel.nodeID = nil }
 
-    /// Search terms: lowercase words; a leading # means "has this tag".
-    private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" } }
+    /// Search terms: lowercase words; a leading # or @ means "has this tag" (@ for a person).
+    private var searchTerms: [String] { search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" && $0 != "@" } }
     private var searching: Bool { !searchTerms.isEmpty }
     private func searchMatches(_ n: Node) -> Bool { searchIndex.matches(n, terms: searchTerms) }
     /// The item has every term: a word in its text, or (for #tag) among its tags. Reads the item directly; the
@@ -935,7 +935,8 @@ struct OutlineView: View {
     }
     private func toggleTag(_ tag: String) {
         var terms = search.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        if let i = terms.firstIndex(where: { $0.lowercased() == "#" + tag }) { terms.remove(at: i) } else { terms.append("#" + tag) }
+        let term = Tags.label(tag)
+        if let i = terms.firstIndex(where: { $0.lowercased() == term }) { terms.remove(at: i) } else { terms.append(term) }
         withAnimation(.snappy(duration: 0.25)) { search = terms.joined(separator: " ") }
     }
 
@@ -2022,7 +2023,7 @@ struct NodeRow: View {
     private var summary: String {
         if node.isProject { return "Project" }
         var parts = [node.state.label, node.assignee.label]
-        parts += node.tags.sorted().map { "#" + $0 }
+        parts += node.tags.sorted().map(Tags.label)
         if node.isYourTurn { parts.append("your turn") }
         return parts.joined(separator: " · ")
     }
@@ -2282,7 +2283,7 @@ struct NodeRow: View {
             t.removeSubrange(r)
         }
         // Tags that act: a status (#done #doing #blocked #todo) is applied and removed from the text. Any other #tag
-        // stays in the text: it is the item's tag, searchable and filterable.
+        // stays in the text: it is the item's tag, searchable and filterable. So does any other @name: a person tag.
         for tag in Tags.hashtags(in: t) {
             guard let st = Tags.status[tag] else { continue }
             state = st

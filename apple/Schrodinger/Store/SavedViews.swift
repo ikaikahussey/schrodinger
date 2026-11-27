@@ -48,9 +48,9 @@ struct SavedView: Codable, Equatable, Identifiable, Sendable {
         return (try? e.encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
-    /// Search text as the outline reads it: lowercase words (a lone "#" is not a term).
+    /// Search text as the outline reads it: lowercase words (a lone "#" or "@" is not a term).
     static func terms(_ search: String) -> [String] {
-        search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" }
+        search.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0 != "#" && $0 != "@" }
     }
     /// Nothing to save: no search, no filter, no tag, not zoomed.
     static func isPlain(search: String, filter: String, tag: String?, zoomID: UUID?) -> Bool {
@@ -65,7 +65,7 @@ struct SavedView: Codable, Equatable, Identifiable, Sendable {
         var parts: [String] = []
         if let z = zoomTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !z.isEmpty { parts.append(z) }
         if let f = filterLabel, !f.isEmpty { parts.append(f) }
-        if let t = tag, !t.isEmpty { parts.append("#" + t) }
+        if let t = tag, !t.isEmpty { parts.append(Tags.label(t)) }
         let s = search.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         if !s.isEmpty { parts.append(s) }
         return parts.joined(separator: " \u{00B7} ")
