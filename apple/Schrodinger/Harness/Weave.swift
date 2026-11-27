@@ -8,8 +8,8 @@ import SwiftData
 /// Passages in the piece link back to the items they came from (`item:` links, see `WeaveLinks`).
 @MainActor
 enum WeaveBrief {
-    /// The glyph for weaving: crossed threads.
-    static let symbol = "line.3.crossed.swirl.circle"
+    /// The glyph for weaving: separate lines joining into one.
+    static let symbol = "arrow.triangle.merge"
     /// Characters of one thread's result that go to the model.
     static let perThread = 12_000
 

@@ -1662,28 +1662,12 @@ struct NodeRow: View {
         commit(); commitNote(convertLists: false)
         jobs.weave(node.id)
     }
-    /// The Weave button in the item's field, on an item that has items under it: the glyph and the word, or the
-    /// glyph alone where the row has no room for the word.
+    /// The Weave button in the item's field, on an item that has items under it: the glyph alone, like the other
+    /// controls. What it does is in its tooltip (hover on the Mac and with an iPad pointer) and its VoiceOver hint.
     private var weaveButton: some View {
-        let glyph = Image(systemName: WeaveBrief.symbol).font(.system(size: 15, weight: .medium))
-        return Button { weave() } label: {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 4) {
-                    glyph
-                    Text("Weave").font(Appearance.shared.font.font(.caption).weight(.semibold)).lineLimit(1).fixedSize()
-                }
-                .padding(.horizontal, 8)
-                glyph.frame(width: ItemField.compact)
-            }
-            .foregroundStyle(Color.ink.opacity(0.9))
-            .frame(height: 22)
-            .background { Capsule().fill(PanelPalette.field).padding(.vertical, -5) }
-            .contentShape(Rectangle().inset(by: -6))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-        .help(working ? "The AI is working on this" : "Weave this and the items under it into one piece")
-        .accessibilityLabel("Weave").accessibilityHint("Makes one piece of writing from this item and the items under it")
+        FieldIcon(systemImage: WeaveBrief.symbol, on: true, width: ItemField.compact) { weave() }
+            .help(working ? "The AI is working on this" : "Weave this and the items under it into one piece")
+            .accessibilityLabel("Weave").accessibilityHint("Makes one piece of writing from this item and the items under it")
     }
     /// A tap on the item, on its text or on its squares, opens it: the item field and the children are shown.
     private func openItem() {
