@@ -14,12 +14,12 @@ import UniformTypeIdentifiers
         let tags: Set<String>
         init(title: String, notes: String, goal: String) {
             text = (title + "\n" + notes + "\n" + goal).lowercased()
-            tags = Set(Tags.hashtags(in: title) + Tags.hashtags(in: notes) + Tags.hashtags(in: goal))
+            tags = Tags.all(in: title, notes, goal)
         }
         init(_ n: Node) { self.init(title: n.title, notes: n.notes, goal: n.goal) }
-        /// The item has every term: a word in its text, or (for #tag) among its tags. Terms are lowercase.
+        /// The item has every term: a word in its text, or (for #tag and @person) among its tags. Terms are lowercase.
         func matches(_ terms: [String]) -> Bool {
-            terms.allSatisfy { t in t.hasPrefix("#") ? tags.contains(String(t.dropFirst())) : text.contains(t) }
+            terms.allSatisfy { t in Tags.tag(term: t).map { tags.contains($0) } ?? text.contains(t) }
         }
     }
 

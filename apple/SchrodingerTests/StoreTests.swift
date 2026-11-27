@@ -417,6 +417,33 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(t.tags, ["urgent", "legal", "write"])
     }
 
+    func testPeopleAreTagged() throws {
+        XCTAssertEqual(Tags.people(in: "Ask @Keoni and @sam-r, cc @keoni."), ["keoni", "sam-r", "keoni"])
+        XCTAssertEqual(Tags.people(in: "mail bob@example.com or @ nobody"), [], "an email address is not a person tag")
+        XCTAssertEqual(Tags.people(in: "@ai drafts, @me signs, @both @none"), [], "holder words are not people")
+        XCTAssertEqual(Tags.people(in: "@a, (@b) @c@d"), ["a", "b", "c"])
+        XCTAssertEqual(Tags.label("call"), "#call"); XCTAssertEqual(Tags.label("@keoni"), "@keoni")
+        XCTAssertEqual(Tags.tag(term: "#call"), "call"); XCTAssertEqual(Tags.tag(term: "@keoni"), "@keoni"); XCTAssertNil(Tags.tag(term: "keoni"))
+        let c = try makeContainer(); let s = Store(c.mainContext)
+        let p = s.create(title: "Campaign"); p.goal = "with @Malia"
+        let t = s.create(title: "Call @Keoni #call", parentID: p.id); t.notes = "loop in @sam"
+        let u = s.create(title: "Email keoni@example.com", parentID: p.id)
+        XCTAssertEqual(p.tags, ["@malia"])
+        XCTAssertEqual(t.tags, ["call", "@keoni", "@sam"])
+        XCTAssertEqual(t.people, ["keoni", "sam"])
+        XCTAssertEqual(u.tags, [])
+        // Searched and filtered like any tag.
+        let idx = SearchIndex(); idx.refresh(s.allNodes())
+        XCTAssertEqual(idx.tags(t), ["call", "@keoni", "@sam"])
+        XCTAssertTrue(idx.matches(t, terms: ["@keoni", "#call"]))
+        XCTAssertFalse(idx.matches(t, terms: ["@malia"]))
+        XCTAssertFalse(idx.matches(u, terms: ["@keoni"]), "the word alone is not the tag")
+        XCTAssertTrue(idx.matches(u, terms: ["keoni"]))
+        XCTAssertTrue(s.byTag().contains { $0.tag == "@keoni" && $0.tasks.contains { $0.0.id == t.id } })
+        XCTAssertEqual(SavedView.terms(" @ @Keoni "), ["@keoni"])
+        XCTAssertEqual(SavedView.suggestedName(search: "", filterLabel: nil, tag: "@keoni", zoomTitle: nil), "@keoni")
+    }
+
     func testAttachments() throws {
         XCTAssertEqual(Attachment.normalizedURL(" example.com/page ")?.absoluteString, "https://example.com/page")
         XCTAssertEqual(Attachment.normalizedURL("http://www.capitol.hawaii.gov/x?y=1")?.absoluteString, "http://www.capitol.hawaii.gov/x?y=1")

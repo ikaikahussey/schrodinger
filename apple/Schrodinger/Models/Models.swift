@@ -28,8 +28,45 @@ enum ProjectStatus: String, Codable, CaseIterable, Identifiable {
 
 enum AIStatus: String, Codable { case pending, done }
 
-/// Hashtags typed into an item's text. A tag is `#` followed by letters, digits, `_` or `-`; tags are lowercased.
+/// Tags typed into an item's text, lowercased. A hashtag is `#` followed by letters, digits, `_` or `-`. A person
+/// tag is `@` followed by the same (`@keoni`): it marks the item as pertaining to that person and is otherwise an
+/// ordinary tag, searchable and filterable. In a set of tags a hashtag is kept by its name ("call") and a person
+/// with the `@` ("@keoni"); `label` gives either as it is typed.
 enum Tags {
+    /// `@` words that set who holds an item (see the item's title field); they are not people.
+    static let holders: Set<String> = ["ai", "me", "human", "both", "shared", "none"]
+    /// People tagged in a text, without the `@`. An `@` right after a letter or digit (an email address) is not a tag.
+    static func people(in text: String) -> [String] {
+        var out: [String] = []
+        var cur: String? = nil
+        var prev: Character? = nil
+        for ch in text {
+            if ch == "@" {
+                if let c = cur, !c.isEmpty { out.append(c) }
+                cur = (prev.map { $0.isLetter || $0.isNumber } ?? false) ? nil : ""
+            } else if let c = cur {
+                if ch.isLetter || ch.isNumber || ch == "_" || ch == "-" { cur = c + String(ch) }
+                else { if !c.isEmpty { out.append(c) }; cur = nil }
+            }
+            prev = ch
+        }
+        if let c = cur, !c.isEmpty { out.append(c) }
+        return out.map { $0.lowercased() }.filter { !holders.contains($0) }
+    }
+    /// Every tag in the texts: hashtags by name, people with their `@`.
+    static func all(in texts: String...) -> Set<String> {
+        var out: Set<String> = []
+        for t in texts { out.formUnion(hashtags(in: t)); out.formUnion(people(in: t).map { "@" + $0 }) }
+        return out
+    }
+    /// A tag as it is typed: "#call", "@keoni".
+    static func label(_ tag: String) -> String { tag.hasPrefix("@") ? tag : "#" + tag }
+    /// A search term that names a tag ("#call", "@keoni"): the tag as kept in a set of tags. nil for a plain word.
+    static func tag(term: String) -> String? {
+        if term.hasPrefix("#") { return String(term.dropFirst()) }
+        if term.hasPrefix("@") { return term }
+        return nil
+    }
     static func hashtags(in text: String) -> [String] {
         var out: [String] = []
         var cur: String? = nil
@@ -95,8 +132,10 @@ final class Node {
     var state: TaskState { get { TaskState(rawValue: stateRaw) ?? .unset } set { stateRaw = newValue.rawValue } }
     var aiStatus: AIStatus { get { AIStatus(rawValue: aiStatusRaw) ?? .pending } set { aiStatusRaw = newValue.rawValue } }
     /// Shared task whose AI part is done and which the human still has to finish.
-    /// Every tag on the item: hashtags in its title and notes (and, for a project, its goal).
-    var tags: Set<String> { Set(Tags.hashtags(in: title) + Tags.hashtags(in: notes) + Tags.hashtags(in: goal)) }
+    /// Every tag on the item: hashtags and @people in its title and notes (and, for a project, its goal).
+    var tags: Set<String> { Tags.all(in: title, notes, goal) }
+    /// The people tagged on the item, without the `@`.
+    var people: Set<String> { Set(tags.filter { $0.hasPrefix("@") }.map { String($0.dropFirst()) }) }
     var isYourTurn: Bool { assignee == .shared && aiStatus == .done && state != .done }
 }
 

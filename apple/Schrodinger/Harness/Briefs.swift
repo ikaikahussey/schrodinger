@@ -44,7 +44,7 @@ enum HandoffBrief {
         if !path.isEmpty { lines.append("Where it sits in the outline: " + path.joined(separator: " > ")) }
         if !task.notes.isEmpty { lines.append("Notes on the task:\n\(task.notes)") }
         if let d = task.due { lines.append("Due: \(d.dayString)") }
-        if !task.tags.isEmpty { lines.append("Tags: " + task.tags.sorted().map { "#" + $0 }.joined(separator: " ")) }
+        if !task.tags.isEmpty { lines.append("Tags: " + task.tags.sorted().map(Tags.label).joined(separator: " ")) }
         let links = s.attachments(for: task.id).filter { $0.kind == .link }.map(\.urlString)
         if !links.isEmpty { lines.append("Links on the task:\n" + links.map { "- \($0)" }.joined(separator: "\n")) }
         let kids = s.children(of: task.id)

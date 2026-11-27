@@ -415,7 +415,7 @@ struct Store {
             let made = create(title: pl["title"] as? String ?? "", parentID: parent, assignee: Assignee(rawValue: pl["assignee"] as? String ?? "ai"), due: due, actor: .ai)
             // Tags the proposal carries ("tags", or the older "mode") go in the new item's notes.
             let tags = ((pl["tags"] as? [String]) ?? []) + [pl["mode"] as? String].compactMap { $0 }
-            if !tags.isEmpty { made.notes = tags.map { "#" + $0 }.joined(separator: " ") }
+            if !tags.isEmpty { made.notes = tags.map(Tags.label).joined(separator: " ") }
         case .decompose:
             for t in pl["subtasks"] as? [[String: Any]] ?? [] {
                 create(title: t["title"] as? String ?? "", parentID: p.nodeID, assignee: Assignee(rawValue: t["assignee"] as? String ?? "ai"), actor: .ai)
@@ -489,7 +489,7 @@ struct Store {
         let order = groups.keys.filter { !$0.isEmpty }.sorted() + (groups[""] == nil ? [] : [""])
         return order.map { tag in
             let sorted = groups[tag]!.sorted { ($0.0.due ?? .distantFuture, $0.1.position, $0.0.position) < ($1.0.due ?? .distantFuture, $1.1.position, $1.0.position) }
-            return (tag: tag.isEmpty ? "untagged" : "#" + tag, tasks: sorted.map { ($0.0, project: $0.1) })
+            return (tag: tag.isEmpty ? "untagged" : Tags.label(tag), tasks: sorted.map { ($0.0, project: $0.1) })
         }
     }
 
